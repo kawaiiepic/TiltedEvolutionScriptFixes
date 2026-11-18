@@ -66,6 +66,7 @@ jobs:
             unzip -Z1 "${client[0]}" > client-entries.txt
             grep -Fxq 'SkyrimTogetherReborn/SkyrimTogether.exe' client-entries.txt
             grep -Fxq 'SkyrimTogetherReborn/SkyrimTogetherServer.exe' client-entries.txt
+            grep -Fxq 'SKSE/Plugins/STCheckpointBridge.dll' client-entries.txt
             unzip -tq "${symbols[0]}"
             cp "${client[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix.zip"
             cp "${symbols[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix-debug-symbols.zip"
@@ -95,6 +96,6 @@ jobs:
           fi
           gh release create "$PREVIEW_TAG" publish/* \
             --target "$GITHUB_SHA" \
-            --title "Skyrim Together Shared Campaign Preview (${GITHUB_SHA:0:7})" \
+            --title "Skyrim Together Server-Owned Characters Preview (${GITHUB_SHA:0:7})" \
             --prerelease \
-            --notes "Experimental shared campaign build from commit $GITHUB_SHA. Windows archives include the client and Windows dedicated server. Linux server ZIP and tar.gz archives are provided for amd64 and arm64. Use matching builds on every client and server; select the client for your Skyrim runtime (latest or 1.6.1170). Back up character saves and server journals. Native gameplay has not been validated end to end."
+            --notes "Experimental server-owned characters build from commit $GITHUB_SHA. Includes main-menu connection, character slots, server checkpoint storage and native save/load automation enabled by default. Windows archives include the client, bundled SKSE checkpoint bridge and Windows dedicated server. Linux server ZIP and tar.gz archives are provided for amd64 and arm64. Install matching builds on all clients and servers; select your Skyrim runtime (1.7.104 or 1.6.1170). SKSE is required for native automation. Existing server INIs explicitly setting bRequireServerSaves=false must be changed to true. Native engine calls are source-backed but not binary-verified or tested in game. Use a fresh test campaign and back up existing saves and journals. Native menu replacement and save-on-disconnect remain pending."
