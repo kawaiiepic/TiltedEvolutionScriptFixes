@@ -1,0 +1,6 @@
+target("STCheckpointBridge")
+    set_kind("shared")
+    set_group("Client")
+    set_basename("STCheckpointBridge")
+    add_files("CheckpointBridge.cpp")
+    add_headerfiles("CheckpointBridgeAPI.h")

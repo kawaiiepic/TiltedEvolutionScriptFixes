@@ -8,9 +8,10 @@ struct NotifyCharacterSave;
 namespace CharacterCheckpoints
 {
 // Main-game-thread only. File transport is separate from native save/load
-// invocation; never call an unverified save-manager address.
-// Internal driver contract, NOT a Skyrim ABI. A future verified engine
-// adapter registers once at initialization, before any lobby session.
+// invocation; native calls are available only through the experimental
+// opt-in source-backed driver or a future binary-verified implementation.
+// Internal driver contract, NOT a Skyrim ABI. The native adapter registers
+// once before activating a checkpoint lobby session.
 // Every callback runs on the existing game thread. The adapter owns its
 // native request lifetime and must copy the filename before returning.
 // Success means the matching named load finished (including game/VM

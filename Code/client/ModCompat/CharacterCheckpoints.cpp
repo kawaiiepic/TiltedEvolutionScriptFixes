@@ -1,5 +1,6 @@
 #include <TiltedOnlinePCH.h>
 #include "CharacterCheckpoints.h"
+#include "NativeCheckpointDriver.h"
 
 #include <Messages/CharacterSave.h>
 #include <Services/TransportService.h>
@@ -324,6 +325,7 @@ void Begin(bool aRequired) noexcept
 {
     AbandonNative();
     s = {};
+    if (aRequired) NativeCheckpointDriver::TryRegister();
     s.Required = aRequired;
     s.NativeEnabled = aRequired && s_driver.RequestLoad != nullptr;
     Change(aRequired ? Phase::Choose : Phase::Disabled, aRequired ? "Choose a character slot." : "");
@@ -436,6 +438,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
 
 void Tick(TransportService& aTransport) noexcept
 {
+    if (s.Required && s.NativeEnabled) NativeCheckpointDriver::CheckForUnexpectedLoad();
     if (!s.Required || (!aTransport.IsInLobby() && !aTransport.IsOnline())) return;
     try
     {
