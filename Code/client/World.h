@@ -23,6 +23,7 @@ struct World : entt::registry
     void Update() noexcept;
     // The VM can be inactive while the title screen is running.
     static void PumpMainMenu() noexcept;
+    static void SetMenuWindowThread(uint32_t aThreadId) noexcept;
 
     RunnerService& GetRunner() noexcept;
     TransportService& GetTransport() noexcept;
@@ -58,9 +59,10 @@ private:
     ServerSettings m_serverSettings{};
 
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
-    uint32_t m_gameThreadId{};
+    std::atomic<uint32_t> m_gameThreadId{};
     std::atomic<uint64_t> m_lastRegularUpdate{};
     uint64_t m_lastMenuUpdate{};
     std::atomic_flag m_updating = ATOMIC_FLAG_INIT;
     bool m_loggedMenuPump{};
+    std::atomic_bool m_loggedWrongMenuThread{};
 };

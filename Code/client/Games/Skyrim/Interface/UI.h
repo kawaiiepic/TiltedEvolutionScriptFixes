@@ -42,6 +42,7 @@ public:
     static bool ShouldUnpauseMenus();
 
     bool GetMenuOpen(const BSFixedString& acName) const;
+    bool IsMainMenuOpen();
     bool IsUnpausedMenuOpen() const;
     void CloseAllMenus();
     void DebugLogAllMenus();

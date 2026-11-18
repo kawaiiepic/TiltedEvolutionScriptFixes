@@ -19,6 +19,8 @@ int TP_MAKE_THISCALL(HookVMUpdate, GameVM, float a2)
 {
     if (apThis->inactive == 0)
         g_appInstance->Update();
+    else
+        World::PumpMainMenu();
 
     return TiltedPhoques::ThisCall(VMUpdate, apThis, a2);
 }

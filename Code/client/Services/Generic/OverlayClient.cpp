@@ -54,7 +54,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         if (eventName == "uiReady")
         {
             spdlog::info("Skyrim Together frontend uiReady received");
-            World::Get().GetRunner().Queue([]() { World::Get().GetOverlayService().OnBrowserReady(); });
+            World::Get().GetOverlayService().SignalBrowserReady();
         }
         else if (eventName == "connect")
             ProcessConnectMessage(eventArgs);

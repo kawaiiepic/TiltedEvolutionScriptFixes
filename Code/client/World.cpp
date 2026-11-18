@@ -82,6 +82,7 @@ void World::Update() noexcept
 
     const auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
 
+    GetOverlayService().ProcessBrowserReady();
     m_dispatcher.trigger(PreUpdateEvent(cDeltaSeconds));
 
     // Force run this before so we get the tasks scheduled to run
@@ -95,30 +96,45 @@ void World::PumpMainMenu() noexcept
         Get().UpdateMainMenu();
 }
 
+void World::SetMenuWindowThread(uint32_t aThreadId) noexcept
+{
+    if (aThreadId && entt::locator<World>::has_value())
+        Get().m_gameThreadId.store(aThreadId, std::memory_order_release);
+}
+
 void World::UpdateMainMenu() noexcept
 {
     // Use only the game thread. A window/engine callback may be nested
     // inside the normal VM update, so serialize the two paths.
-    if (GetCurrentThreadId() != m_gameThreadId) return;
+    const uint32_t thread = m_gameThreadId.load(std::memory_order_acquire);
+    if (GetCurrentThreadId() != thread)
+    {
+        if (!m_loggedWrongMenuThread.exchange(true))
+            spdlog::info("Main-menu pump skipped on thread {}; window owner is {}", GetCurrentThreadId(), thread);
+        return;
+    }
     const uint64_t now = GetTickCount64();
     if (now - m_lastRegularUpdate.load(std::memory_order_relaxed) < 100 ||
         now - m_lastMenuUpdate < 30) return;
     if (m_updating.test_and_set(std::memory_order_acquire)) return;
     const UpdateGuard guard{m_updating};
     auto& overlay = GetOverlayService();
-    if (!overlay.GetOverlayApp() || m_transport.IsOnline()) return;
-    const auto* ui = UI::Get();
-    if (!ui || (!ui->GetMenuOpen("Main Menu") && !overlay.GetMainMenu())) return;
-
+    if (!overlay.GetOverlayApp()) return;
     m_lastMenuUpdate = now;
-    const auto frame = std::chrono::high_resolution_clock::now();
-    const double delta = std::chrono::duration<double>(frame - m_lastFrameTime).count();
-    m_lastFrameTime = frame;
     if (!m_loggedMenuPump)
     {
         m_loggedMenuPump = true;
-        spdlog::info("Skyrim Together pre-game lobby pump running without Papyrus VM updates");
+        spdlog::info("Skyrim Together pre-game pump reached game window thread {}", GetCurrentThreadId());
     }
+    // Apply the browser handshake even before the native menu is registered.
+    overlay.ProcessBrowserReady();
+    if (m_transport.IsOnline()) return;
+    auto* ui = UI::Get();
+    if (!ui || (!ui->IsMainMenuOpen() && !overlay.GetMainMenu())) return;
+
+    const auto frame = std::chrono::high_resolution_clock::now();
+    const double delta = std::chrono::duration<double>(frame - m_lastFrameTime).count();
+    m_lastFrameTime = frame;
     // Only pump queued work, lobby/checkpoint packets and menu UI.
     // Gameplay PreUpdateEvent/UpdateEvent subscribers require a loaded world.
     m_runner.OnUpdate(UpdateEvent(delta));

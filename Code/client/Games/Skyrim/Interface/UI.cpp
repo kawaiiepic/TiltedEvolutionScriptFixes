@@ -25,6 +25,14 @@ bool UI::GetMenuOpen(const BSFixedString& acName) const
     return TiltedPhoques::ThisCall(s_isMenuOpen.Get(), this, acName);
 }
 
+bool UI::IsMainMenuOpen()
+{
+    if (GetMenuOpen("Main Menu")) return true;
+    // Require an on-stack instance rather than a merely allocated movie.
+    auto* menu = FindMenuByName("Main Menu");
+    return menu && (menu->uiMenuFlags & IMenu::kOnStack);
+}
+
 void UI::CloseAllMenus()
 {
     TP_THIS_FUNCTION(TUI_CloseAll, void, const UI);

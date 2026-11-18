@@ -23,6 +23,12 @@ static UINT_PTR s_menuPumpTimer = 0;
 
 static constexpr char kTogetherWindowName[]{"Skyrim Together"};
 
+void CALLBACK MenuPumpTimer(HWND aWindow, UINT, UINT_PTR aId, DWORD)
+{
+    if (aWindow == s_menuPumpWindow && aId == s_menuPumpTimer)
+        World::PumpMainMenu();
+}
+
 } // namespace
 RendererWindow* GetMainWindow()
 {
@@ -84,9 +90,13 @@ void Hook_Renderer_Init(Renderer* self, BSGraphics::RendererInitOSData* aOSData,
     // uses the existing window procedure rather than a render/worker thread.
     if (s_menuPumpTimer && s_menuPumpWindow)
         KillTimer(s_menuPumpWindow, s_menuPumpTimer);
-    s_menuPumpWindow = g_RenderWindow->hWnd;
+    s_menuPumpWindow = g_sRs->GetWindow();
+    if (!s_menuPumpWindow) s_menuPumpWindow = g_RenderWindow->hWnd;
+    const DWORD windowThread = s_menuPumpWindow ? GetWindowThreadProcessId(s_menuPumpWindow, nullptr) : 0;
+    World::SetMenuWindowThread(windowThread);
+    spdlog::info("Skyrim Together window owner thread: {} (renderer init thread {})", windowThread, GetCurrentThreadId());
     s_menuPumpTimer = s_menuPumpWindow
-        ? SetTimer(s_menuPumpWindow, reinterpret_cast<UINT_PTR>(&s_menuPumpTimer), 50, nullptr)
+        ? SetTimer(s_menuPumpWindow, reinterpret_cast<UINT_PTR>(&s_menuPumpTimer), 50, &MenuPumpTimer)
         : 0;
     if (s_menuPumpTimer)
         spdlog::info("Skyrim Together main-menu window timer installed");
@@ -100,7 +110,11 @@ void (*StopTimer)(int) = nullptr;
 void Hook_StopTimer(int type)
 {
     if (g_sRs)
+    {
+        // Existing title-screen render hook: pump only on the window owner.
+        World::PumpMainMenu();
         g_sRs->OnRender();
+    }
 
     StopTimer(type);
 }

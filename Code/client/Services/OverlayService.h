@@ -3,6 +3,7 @@
 #include <include/internal/cef_ptr.h>
 #include <vector>
 #include <chrono>
+#include <atomic>
 
 namespace TiltedPhoques
 {
@@ -60,6 +61,8 @@ struct OverlayService
     [[nodiscard]] bool GetMainMenu() const noexcept { return m_mainMenu; }
     void RefreshMenuPresentation() noexcept;
     void UpdateMainMenu() noexcept;
+    void SignalBrowserReady() noexcept;
+    void ProcessBrowserReady() noexcept;
     void OnBrowserReady() noexcept;
     bool IsBrowserReady() const noexcept { return m_browserReady; }
 
@@ -112,6 +115,8 @@ private:
     bool m_inGame = false;
     bool m_mainMenu = false;
     bool m_browserReady = false;
+    std::atomic_bool m_browserReadySignal{false};
+    bool m_menuFallbackOpened = false;
     bool m_menuOpenRequested = false;
     bool m_browserWaitLogged = false;
     std::chrono::steady_clock::time_point m_mainMenuSince{};
