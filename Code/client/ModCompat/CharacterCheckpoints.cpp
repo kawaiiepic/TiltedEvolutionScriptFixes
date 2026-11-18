@@ -328,7 +328,7 @@ void Begin(bool aRequired) noexcept
     if (aRequired) NativeCheckpointDriver::TryRegister();
     s.Required = aRequired;
     s.NativeEnabled = aRequired && s_driver.RequestLoad != nullptr;
-    Change(aRequired ? Phase::Choose : Phase::Disabled, aRequired ? "Choose a character slot." : "");
+    Change(aRequired ? Phase::Choose : Phase::Disabled, aRequired ? (s.NativeEnabled ? "Choose a character slot." : "Choose a character slot. Native automation unavailable; manual save/load required.") : "");
 }
 void Reset() noexcept
 {

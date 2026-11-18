@@ -9,7 +9,7 @@ namespace CharacterCheckpoints
 {
 // Main-game-thread only. File transport is separate from native save/load
 // invocation; native calls are available only through the experimental
-// opt-in source-backed driver or a future binary-verified implementation.
+// source-backed driver or a future binary-verified implementation.
 // Internal driver contract, NOT a Skyrim ABI. The native adapter registers
 // once before activating a checkpoint lobby session.
 // Every callback runs on the existing game thread. The adapter owns its

@@ -153,14 +153,20 @@ void Abandon(uint64_t aToken) noexcept
 bool TryRegister() noexcept
 {
     if (s_registered) return true;
-    wchar_t optIn[4]{};
-    if (GetEnvironmentVariableW(L"ST_EXPERIMENTAL_NATIVE_SAVES", optIn, 4) != 1 || optIn[0] != L'1')
+    // Native checkpoint automation is automatic for checkpoint servers.
+    // Keep an escape hatch for diagnosing runtime/mod compatibility.
+    wchar_t disable[4]{};
+    if (GetEnvironmentVariableW(L"ST_DISABLE_NATIVE_SAVES", disable, 4) == 1 && disable[0] == L'1')
         return false;
     const auto& db = VersionDb::Get();
     if (db.GetLoadedVersionString() != "1.6.1170.0" && db.GetLoadedVersionString() != "1.7.104.0")
         return false;
     const HMODULE bridge = GetModuleHandleW(L"STCheckpointBridge.dll");
-    if (!bridge) return false;
+    if (!bridge)
+    {
+        spdlog::warn("Native checkpoint bridge unavailable; using manual checkpoint loading and saving");
+        return false;
+    }
     const auto get = reinterpret_cast<Bridge::GetApi>(GetProcAddress(bridge, "STCheckpointGetApi"));
     if (!get) return false;
     const auto* api = get(Bridge::Version);

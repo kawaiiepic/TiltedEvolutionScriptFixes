@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     config = directory / "config"
     config.mkdir()
     (config / "STServer.ini").write_text(
-        f"[GameServer]\nuPort={port}\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\n"
+        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\n"
     )
     (directory / "shared-quest-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x8AC\n'

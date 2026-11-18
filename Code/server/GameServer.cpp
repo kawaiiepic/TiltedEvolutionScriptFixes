@@ -27,7 +27,7 @@ constexpr size_t kMaxServerNameLength = 128u;
 // -- Cvars --
 Console::Setting uServerPort{"GameServer:uPort", "Which port to host the server on", 10578u};
 Console::Setting uMaxPlayerCount{"GameServer:uMaxPlayerCount", "Maximum number of players allowed on the server (going over the default of 8 is not recommended)", 8u};
-Console::Setting bRequireServerSaves{"GameServer:bRequireServerSaves", "Require experimental server-owned checkpoint protocol (native client save integration not yet available)", false, Console::SettingsFlags::kLocked};
+Console::Setting bRequireServerSaves{"GameServer:bRequireServerSaves", "Require server-owned character checkpoints before entering the world", true, Console::SettingsFlags::kLocked};
 Console::Setting bPremiumTickrate{"GameServer:bPremiumMode", "Server tick rate: 60 updates per second if true, 30 if false", true};
 
 Console::StringSetting sServerName{"GameServer:sServerName", "Name that shows up in the server list", "Dedicated Together Server"};
