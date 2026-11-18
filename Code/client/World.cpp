@@ -73,16 +73,28 @@ struct UpdateGuard
 
 void World::Update() noexcept
 {
-    m_lastRegularUpdate.store(GetTickCount64(), std::memory_order_relaxed);
     if (m_updating.test_and_set(std::memory_order_acquire)) return;
     const UpdateGuard guard{m_updating};
+    m_lastRegularUpdate.store(GetTickCount64(), std::memory_order_relaxed);
     const auto cNow = std::chrono::high_resolution_clock::now();
     const auto cDelta = cNow - m_lastFrameTime;
     m_lastFrameTime = cNow;
 
     const auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
 
-    GetOverlayService().ProcessBrowserReady();
+    auto& overlay = GetOverlayService();
+    overlay.ProcessBrowserReady();
+    if (!m_hasLoadedCharacter)
+    {
+        m_hasLoadedCharacter = m_transport.CanEnterWorld();
+        if (!m_hasLoadedCharacter)
+        {
+            m_runner.OnUpdate(UpdateEvent(cDeltaSeconds));
+            m_transport.Poll();
+            overlay.UpdateMainMenu();
+            return;
+        }
+    }
     m_dispatcher.trigger(PreUpdateEvent(cDeltaSeconds));
 
     // Force run this before so we get the tasks scheduled to run
@@ -113,14 +125,10 @@ void World::UpdateMainMenu() noexcept
             spdlog::info("Main-menu pump skipped on thread {}; window owner is {}", GetCurrentThreadId(), thread);
         return;
     }
-    const uint64_t now = GetTickCount64();
-    if (now - m_lastRegularUpdate.load(std::memory_order_relaxed) < 100 ||
-        now - m_lastMenuUpdate < 30) return;
     if (m_updating.test_and_set(std::memory_order_acquire)) return;
     const UpdateGuard guard{m_updating};
     auto& overlay = GetOverlayService();
     if (!overlay.GetOverlayApp()) return;
-    m_lastMenuUpdate = now;
     if (!m_loggedMenuPump)
     {
         m_loggedMenuPump = true;
@@ -128,7 +136,10 @@ void World::UpdateMainMenu() noexcept
     }
     // Apply the browser handshake even before the native menu is registered.
     overlay.ProcessBrowserReady();
-    if (m_transport.IsOnline()) return;
+    const uint64_t now = GetTickCount64();
+    if (now - m_lastRegularUpdate.load(std::memory_order_relaxed) < 100 ||
+        now - m_lastMenuUpdate < 30 || m_transport.IsOnline()) return;
+    m_lastMenuUpdate = now;
     auto* ui = UI::Get();
     if (!ui || (!ui->IsMainMenuOpen() && !overlay.GetMainMenu())) return;
 

@@ -44,8 +44,14 @@ void WakeMainMenuPump() noexcept
 {
     const HWND window = s_menuPumpWindow.load(std::memory_order_acquire);
     const UINT message = MenuPumpMessage();
-    if (window && message)
-        PostMessageW(window, message, 0, 0);
+    if (!window || !message) return;
+    if (!PostMessageW(window, message, 0, 0))
+    {
+        const DWORD error = GetLastError();
+        static std::atomic_bool s_loggedPostFailure{false};
+        if (!s_loggedPostFailure.exchange(true))
+            spdlog::warn("Could not post the Skyrim Together menu wake-up (Windows error {})", error);
+    }
 }
 
 RendererWindow* GetMainWindow()

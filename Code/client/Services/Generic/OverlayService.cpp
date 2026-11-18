@@ -387,7 +387,6 @@ void OverlayService::UpdateMainMenu() noexcept
     {
         m_mainMenu = mainMenu;
         m_menuOpenRequested = false;
-        m_menuFallbackOpened = false;
         m_browserWaitLogged = false;
         m_mainMenuSince = std::chrono::steady_clock::now();
         spdlog::info("Skyrim Together main menu: {}", m_mainMenu);
@@ -415,29 +414,13 @@ void OverlayService::UpdateMainMenu() noexcept
         {
             const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
             if (m_menuOpenRequested && InputService::SetOverlayActive(*this, true))
-            {
                 m_menuOpenRequested = false;
-                m_menuFallbackOpened = true;
-            }
-            // Never trap the player in a title menu with no way to connect.
-            if (!m_menuFallbackOpened && !MainMenuBridge::IsReady() && !m_active &&
-                !m_transport.IsOnline() && !m_transport.IsInLobby() &&
-                window && GetForegroundWindow() == window &&
-                std::chrono::steady_clock::now() - m_mainMenuSince >= std::chrono::seconds(5))
-            {
-                if (InputService::SetOverlayActive(*this, true))
-                {
-                    m_menuFallbackOpened = true;
-                    spdlog::warn("Native Play handshake unavailable; opened connection screen as a one-time fallback");
-                }
-            }
-            if (m_active) m_menuFallbackOpened = true;
             InputService::PollMainMenuHotkey(*this, window);
         }
         else if (!m_browserWaitLogged && std::chrono::steady_clock::now() - m_mainMenuSince >= std::chrono::seconds(5))
         {
             m_browserWaitLogged = true;
-            spdlog::warn("Main menu is open but the frontend has not sent uiReady; check logs/cef_debug.log and the packaged UI/TPProcess.exe");
+            spdlog::warn("Main menu is open but frontend readiness was not applied; compare uiReady receipt and frontend-ready logs");
         }
     }
     else

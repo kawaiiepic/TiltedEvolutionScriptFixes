@@ -63,6 +63,7 @@ private:
     std::atomic<uint64_t> m_lastRegularUpdate{};
     uint64_t m_lastMenuUpdate{};
     std::atomic_flag m_updating = ATOMIC_FLAG_INIT;
+    bool m_hasLoadedCharacter{};
     bool m_loggedMenuPump{};
     std::atomic_bool m_loggedWrongMenuThread{};
 };
