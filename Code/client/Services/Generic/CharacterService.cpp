@@ -745,25 +745,30 @@ void CharacterService::OnActionEvent(const ActionEvent& acActionEvent) const noe
 
 void CharacterService::OnFactionsChanges(const NotifyFactionsChanges& acEvent) const noexcept
 {
-    auto view = m_world.view<RemoteComponent, FormIdComponent, CacheComponent>();
-
-    for (const auto& [id, factions] : acEvent.Changes)
+    for (const auto& [id, change] : acEvent.Changes)
     {
-        const auto itor = std::find_if(std::begin(view), std::end(view), [id = id, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == id; });
+        const auto entity = Utils::FindEntityByServerId(id);
+        if (!entity)
+            continue;
 
-        if (itor != std::end(view))
+        const auto* pRemote = m_world.try_get<RemoteComponent>(*entity);
+        if (!pRemote || pRemote->OwnershipEpoch != change.OwnershipEpoch)
+            continue;
+
+        if (auto* pWaiting = m_world.try_get<WaitingFor3D>(*entity))
         {
-            auto& formIdComponent = view.get<FormIdComponent>(*itor);
-
-            auto* const pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
-            if (!pActor)
-                return;
-
-            auto& cacheComponent = view.get<CacheComponent>(*itor);
-            cacheComponent.FactionsContent = factions;
-
-            pActor->SetFactions(cacheComponent.FactionsContent);
+            pWaiting->SpawnRequest.FactionsContent = change.Content;
+            continue;
         }
+
+        const auto* pFormId = m_world.try_get<FormIdComponent>(*entity);
+        auto* pActor = pFormId ? Cast<Actor>(TESForm::GetById(pFormId->Id)) : nullptr;
+        if (!pActor)
+            continue;
+
+        if (auto* pCache = m_world.try_get<CacheComponent>(*entity))
+            pCache->FactionsContent = change.Content;
+        pActor->SetFactions(change.Content);
     }
 }
 
@@ -811,7 +816,10 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
     // Preserve the accepted epoch's pick for actors that still need to be created.
     if (auto* pWaitingFor3D = m_world.try_get<WaitingFor3D>(cEntity))
+    {
         pWaitingFor3D->SpawnRequest.LeveledNpcPickId = acMessage.LeveledNpcPickId;
+        pWaitingFor3D->SpawnRequest.FactionsContent = acMessage.FactionsContent;
+    }
 
     if (isLocalOwner)
     {
@@ -842,6 +850,8 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
         ReconcileActorData(cEntity, pActor, acMessage.OwnershipEpoch, acMessage.CurrentActorData, true, true);
         ApplyLeveledNpcPick(pActor, acMessage.LeveledNpcPickId);
+        if (pActor->GetFactions() != acMessage.FactionsContent)
+            pActor->SetFactions(acMessage.FactionsContent);
 
         DeleteRemoteEntityComponents(cEntity);
         CacheSystem::Setup(m_world, cEntity, pActor);
@@ -881,7 +891,13 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
     ReconcileActorData(cEntity, pActor, acMessage.OwnershipEpoch, acMessage.CurrentActorData, pActor && pActor->GetNiNode(), false);
     if (pActor)
+    {
         ApplyLeveledNpcPick(pActor, acMessage.LeveledNpcPickId);
+        if (pActor->GetFactions() != acMessage.FactionsContent)
+            pActor->SetFactions(acMessage.FactionsContent);
+        if (auto* pCache = m_world.try_get<CacheComponent>(cEntity))
+            pCache->FactionsContent = acMessage.FactionsContent;
+    }
 
     spdlog::info("Actor {:X} is now owned by player {:X} at epoch {}", acMessage.ServerId, acMessage.OwnerPlayerId, acMessage.OwnershipEpoch);
 }
@@ -2053,7 +2069,12 @@ void CharacterService::RunFactionsUpdates() const noexcept
         cacheComponent.FactionsContent = factions;
 
         // If not send the current factions and replace the cached factions
-        message.Changes[localComponent.Id] = factions;
+        message.Changes[localComponent.Id] = {localComponent.OwnershipEpoch, std::move(factions)};
+        if (message.Changes.size() == UINT8_MAX)
+        {
+            m_transport.Send(message);
+            message.Changes.clear();
+        }
     }
 
     if (!message.Changes.empty())

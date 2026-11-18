@@ -604,6 +604,38 @@ TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
     }
 }
 
+TEST_CASE("Faction snapshots keep their ownership epoch", "[encoding.factions]")
+{
+    Faction faction;
+    faction.Id = GameId(3, 0x812);
+    faction.Rank = 4;
+
+    RequestFactionsChanges request;
+    request.Changes[7].OwnershipEpoch = 42;
+    request.Changes[7].Content.ExtraFactions.push_back(faction);
+    Buffer requestBuffer(4096);
+    Buffer::Writer requestWriter(&requestBuffer);
+    request.Serialize(requestWriter);
+    Buffer::Reader requestReader(&requestBuffer);
+    auto receivedRequest = ClientMessageFactory{}.Extract(requestReader);
+    REQUIRE(receivedRequest);
+    REQUIRE(*CastUnique<RequestFactionsChanges>(std::move(receivedRequest)) == request);
+
+    NotifyOwnershipTransfer transfer;
+    transfer.ServerId = 7;
+    transfer.OwnershipEpoch = 43;
+    transfer.FactionsContent = request.Changes[7].Content;
+    transfer.FactionsContent.NpcFactions.resize(512, faction);
+    Buffer transferBuffer(8192);
+    Buffer::Writer transferWriter(&transferBuffer);
+    transfer.Serialize(transferWriter);
+    Buffer::Reader transferReader(&transferBuffer);
+    auto receivedTransfer = ServerMessageFactory{}.Extract(transferReader);
+    REQUIRE(receivedTransfer);
+    transfer.FactionsContent.NpcFactions.pop_back();
+    REQUIRE(*CastUnique<NotifyOwnershipTransfer>(std::move(receivedTransfer)) == transfer);
+}
+
 TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
 {
     SECTION("Native observer snapshot")

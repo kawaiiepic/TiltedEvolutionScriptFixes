@@ -480,15 +480,15 @@ void CharacterService::OnFactionsChanges(const PacketEvent<RequestFactionsChange
 
     auto& message = acMessage.Packet;
 
-    for (auto& [id, factions] : message.Changes)
+    for (auto& [id, change] : message.Changes)
     {
         auto it = view.find(static_cast<entt::entity>(id));
 
-        if (it == std::end(view) || view.get<OwnerComponent>(*it).GetOwner() != acMessage.pPlayer)
+        if (it == std::end(view) || !view.get<OwnerComponent>(*it).IsCurrentOwner(acMessage.pPlayer, change.OwnershipEpoch))
             continue;
 
         auto& characterComponent = view.get<CharacterComponent>(*it);
-        characterComponent.FactionsContent = factions;
+        characterComponent.FactionsContent = change.Content;
         characterComponent.SetDirtyFactions(true);
     }
 }
@@ -924,7 +924,9 @@ bool CharacterService::TransferOwnership(Player* apPlayer, const entt::entity aE
     notify.OwnerPlayerId = apPlayer->GetId();
     notify.OwnershipEpoch = newEpoch;
     notify.CurrentActorData = BuildActorData(aEntity);
-    notify.LeveledNpcPickId = view.get<CharacterComponent>(*it).LeveledNpcPickId.Id;
+    const auto& character = view.get<CharacterComponent>(*it);
+    notify.LeveledNpcPickId = character.LeveledNpcPickId.Id;
+    notify.FactionsContent = character.FactionsContent;
 
     ownerComponent.SetOwner(apPlayer);
     ownerComponent.OwnershipEpoch = newEpoch;
@@ -1046,7 +1048,7 @@ void CharacterService::ProcessFactionsChanges() const noexcept
             auto& message = messages[pPlayer];
             auto& change = message.Changes[World::ToInteger(entity)];
 
-            change = characterComponent.FactionsContent;
+            change = {ownerComponent.OwnershipEpoch, characterComponent.FactionsContent};
         }
 
         characterComponent.SetDirtyFactions(false);
