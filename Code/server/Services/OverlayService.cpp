@@ -111,6 +111,20 @@ bool OverlayService::IsDialogueActorInRange(uint32_t aActorId, const Player& acP
     return true;
 }
 
+uint32_t OverlayService::GetPublicDialogueOwner(const GameId& acReference) const noexcept
+{
+    for (const auto& [actorId, session] : m_dialogueSessions)
+    {
+        if (session.Private)
+            continue;
+        const auto* pForm = m_world.try_get<FormIdComponent>(static_cast<entt::entity>(actorId));
+        const auto* pOwner = m_world.GetPlayerManager().GetById(session.Owner);
+        if (pForm && pForm->Id == acReference && pOwner && IsDialogueActorInRange(actorId, *pOwner))
+            return session.Owner;
+    }
+    return 0;
+}
+
 bool OverlayService::CanRelayDialogue(const Player& acPlayer, uint32_t aActorId, uint32_t aToken) const noexcept
 {
     const auto session = m_dialogueSessions.find(aActorId);

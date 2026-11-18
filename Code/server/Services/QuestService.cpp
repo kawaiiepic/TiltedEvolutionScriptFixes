@@ -2,6 +2,7 @@
 #include <Components.h>
 #include <World.h>
 #include <Services/QuestService.h>
+#include <Services/OverlayService.h>
 #include <Events/PlayerJoinEvent.h>
 #include <Events/PlayerLeaveEvent.h>
 #include <Events/UpdateEvent.h>
@@ -232,6 +233,33 @@ void QuestService::BroadcastScene(const NotifySceneState& acState) noexcept
         SendScene(acState, *pPlayer);
 }
 
+bool QuestService::PreferDialogueOwner(SharedScene& aScene) noexcept
+{
+    uint32_t candidate = 0;
+    const auto& overlay = m_world.ctx().at<OverlayService>();
+    for (const auto& alias : aScene.Canonical.State.ReferenceAliases)
+    {
+        const uint32_t cOwner = overlay.GetPublicDialogueOwner(alias.Reference);
+        if (!cOwner)
+            continue;
+        if (candidate && candidate != cOwner)
+            return false;
+        const auto observer = aScene.Observers.find(cOwner);
+        if (observer == aScene.Observers.end() ||
+            std::chrono::steady_clock::now() - observer->second.LastSeen > kSceneObserverTimeout)
+            continue;
+        const auto& aliases = observer->second.State.ReferenceAliases;
+        if (std::find(aliases.begin(), aliases.end(), alias) != aliases.end())
+            candidate = cOwner;
+    }
+    if (!candidate || candidate == aScene.Canonical.Owner)
+        return false;
+
+    aScene.Canonical.Owner = candidate;
+    aScene.Canonical.State = aScene.Observers.find(candidate)->second.State;
+    return true;
+}
+
 void QuestService::RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept
 {
     if (!aScene.Observers.erase(aPlayerId) || aScene.Ended || aScene.Canonical.Owner != aPlayerId)
@@ -248,6 +276,11 @@ void QuestService::RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, 
 
     if (!aFinished && !aScene.Observers.empty())
     {
+        if (PreferDialogueOwner(aScene))
+        {
+            BroadcastScene(aScene.Canonical);
+            return;
+        }
         // Transfer only to a client actually observing the same native scene.
         // Prefer the observer furthest along, while preserving the generation.
         auto best = aScene.Observers.begin();
@@ -339,14 +372,15 @@ void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) n
     scene.Observers[pPlayer->GetId()] = {state, now};
     // Once the owner finishes, lagging followers cannot open a new instance
     // until the observers have all stopped or disconnected.
-    if (scene.Ended || scene.Canonical.Owner != pPlayer->GetId())
+    if (scene.Ended)
         return;
 
-    if (scene.Canonical.State != state)
-    {
+    const bool cUpdated = scene.Canonical.Owner == pPlayer->GetId() && scene.Canonical.State != state;
+    if (cUpdated)
         scene.Canonical.State = state;
+
+    if (PreferDialogueOwner(scene) || cUpdated)
         BroadcastScene(scene.Canonical);
-    }
 }
 
 void QuestService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept

@@ -59,6 +59,7 @@ private:
     void OnSceneState(const PacketEvent<RequestSceneState>& acEvent) noexcept;
     void OnSceneTick(const UpdateEvent&) noexcept;
     void RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept;
+    bool PreferDialogueOwner(SharedScene& aScene) noexcept;
     void BroadcastScene(const NotifySceneState& acState) noexcept;
     static void SendScene(const NotifySceneState& acState, const Player& acPlayer) noexcept;
 
