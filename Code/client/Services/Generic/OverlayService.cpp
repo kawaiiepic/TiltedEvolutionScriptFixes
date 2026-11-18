@@ -490,6 +490,11 @@ void OverlayService::ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint3
     }
 }
 
+uint32_t OverlayService::GetDialogueGrant(uint32_t aActorId) const noexcept
+{
+    return m_dialogueGranted && m_dialogueCanChoose && m_dialogueActorId == aActorId ? m_dialogueToken : 0;
+}
+
 bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 {
     if (!m_transport.IsOnline())

@@ -25,6 +25,7 @@ class OverlayService
 {
 public:
     OverlayService(World& aWorld, entt::dispatcher& aDispatcher);
+    bool CanRelayDialogue(const Player& acPlayer, uint32_t aActorId, uint32_t aToken) const noexcept;
 
 protected:
     /**

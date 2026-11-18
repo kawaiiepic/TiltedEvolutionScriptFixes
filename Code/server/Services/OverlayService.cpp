@@ -111,6 +111,27 @@ bool OverlayService::IsDialogueActorInRange(uint32_t aActorId, const Player& acP
     return true;
 }
 
+bool OverlayService::CanRelayDialogue(const Player& acPlayer, uint32_t aActorId, uint32_t aToken) const noexcept
+{
+    const auto session = m_dialogueSessions.find(aActorId);
+    if (aToken)
+    {
+        if (session == m_dialogueSessions.end() || session->second.Private ||
+            session->second.Owner != acPlayer.GetId() || !IsDialogueActorInRange(aActorId, acPlayer))
+            return false;
+
+        const auto participant = session->second.Participants.find(acPlayer.GetId());
+        return participant != session->second.Participants.end() && participant->second == aToken;
+    }
+
+    // An unrelated actor can still speak during a private conversation.
+    if (session != m_dialogueSessions.end() && session->second.Private)
+        return false;
+
+    const auto* pOwner = m_world.try_get<OwnerComponent>(static_cast<entt::entity>(aActorId));
+    return pOwner && pOwner->GetOwner() == &acPlayer;
+}
+
 void OverlayService::InvalidateOptions(DialogueSession& aSession) noexcept
 {
     aSession.Options.clear();

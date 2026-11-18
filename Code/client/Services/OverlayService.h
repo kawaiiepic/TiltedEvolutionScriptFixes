@@ -65,6 +65,7 @@ struct OverlayService
     void SendSystemMessage(const std::string& acMessage);
 
     // Called by the existing native dialogue-choice detour. False means suggest/block only.
+    uint32_t GetDialogueGrant(uint32_t aActorId) const noexcept;
     bool CanSelectDialogue(const char* apText) noexcept;
     void ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept;
 

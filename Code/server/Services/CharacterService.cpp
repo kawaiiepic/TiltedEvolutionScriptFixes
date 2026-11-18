@@ -1,4 +1,5 @@
 #include <Services/CharacterService.h>
+#include <Services/OverlayService.h>
 #include <Components.h>
 #include <GameServer.h>
 #include <World.h>
@@ -591,6 +592,9 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
 {
     auto& message = acMessage.Packet;
 
+    if (!m_world.ctx().at<OverlayService>().CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
+        return;
+
     NotifyDialogue notify{};
     notify.ServerId = message.ServerId;
     notify.SoundFilename = message.SoundFilename;
@@ -605,6 +609,9 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
 void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
+
+    if (!m_world.ctx().at<OverlayService>().CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
+        return;
 
     NotifySubtitle notify{};
     notify.ServerId = message.ServerId;

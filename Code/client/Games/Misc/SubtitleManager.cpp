@@ -45,6 +45,7 @@ void TP_MAKE_THISCALL(HookShowSubtitle, SubtitleManager, TESObjectREFR* apSpeake
         BGSScene* pScene = isPlayerDialogue ? nullptr : pActor->GetCurrentScene();
 
         SubtitleEvent event(apSpeaker->formID, apSubtitleText);
+        event.PlayerDialogue = isPlayerDialogue;
         if (pScene && pScene->isPlaying)
         {
             event.SceneID = pScene->formID;

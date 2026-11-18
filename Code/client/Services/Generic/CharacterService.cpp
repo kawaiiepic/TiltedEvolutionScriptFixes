@@ -4,6 +4,7 @@
 #include <Services/PartyService.h>
 
 #include <Services/CharacterService.h>
+#include <Services/OverlayService.h>
 #include <Services/QuestService.h>
 #include <Services/TransportService.h>
 
@@ -1170,6 +1171,12 @@ void CharacterService::OnDialogueEvent(const DialogueEvent& acEvent) noexcept
 
     DialogueRequest request{};
     request.ServerId = serverIdRes.value();
+    if (acEvent.PlayerDialogue)
+    {
+        request.DialogueToken = m_world.GetOverlayService().GetDialogueGrant(request.ServerId);
+        if (!request.DialogueToken)
+            return;
+    }
     request.SoundFilename = acEvent.VoiceFile;
     if (acEvent.SceneID && m_world.GetModSystem().GetServerModId(acEvent.SceneID, request.SceneId))
         request.ScenePhase = acEvent.ScenePhase;
@@ -1217,6 +1224,12 @@ void CharacterService::OnSubtitleEvent(const SubtitleEvent& acEvent) noexcept
 
     SubtitleRequest request{};
     request.ServerId = serverIdRes.value();
+    if (acEvent.PlayerDialogue)
+    {
+        request.DialogueToken = m_world.GetOverlayService().GetDialogueGrant(request.ServerId);
+        if (!request.DialogueToken)
+            return;
+    }
     request.Text = acEvent.Text;
     request.TopicFormId = acEvent.TopicFormID;
     if (acEvent.SceneID && m_world.GetModSystem().GetServerModId(acEvent.SceneID, request.SceneId))
