@@ -573,6 +573,19 @@ void GameServer::OnUpdate()
 
     dispatcher.trigger(UpdateEvent{cDeltaSeconds});
 
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = m_lobbySessions.begin(); it != m_lobbySessions.end();)
+    {
+        if (it->second.Expires > now)
+        {
+            ++it;
+            continue;
+        }
+        const auto connection = it->first;
+        it = m_lobbySessions.erase(it);
+        Kick(connection);
+    }
+
     if (m_requestStop)
         Close();
 }
@@ -601,16 +614,16 @@ void GameServer::OnConnection(const ConnectionId_t aHandle)
 
 void GameServer::OnDisconnection(const ConnectionId_t aConnectionId, EDisconnectReason aReason)
 {
+    m_lobbySessions.erase(aConnectionId);
     m_adminSessions.erase(aConnectionId);
 
     auto* pPlayer = m_pWorld->GetPlayerManager().GetByConnectionId(aConnectionId);
 
     spdlog::info("Connection ended {:x} - '{}' disconnected", aConnectionId, (pPlayer != NULL ? pPlayer->GetUsername().c_str() : "NULL"));
 
-    m_pWorld->GetScriptService().HandlePlayerQuit(aConnectionId, aReason);
-
     if (pPlayer)
     {
+        m_pWorld->GetScriptService().HandlePlayerQuit(aConnectionId, aReason);
         if (const auto& cell = pPlayer->GetCellComponent())
         {
             const auto oldCell = cell.Cell;
@@ -787,208 +800,270 @@ static String PrettyPrintModList(const Vector<Mods::Entry>& acMods)
     return text;
 }
 
-bool GameServer::ValidateAuthParams(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest)
-{
-    return false;
-}
-
 void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest)
 {
-    const auto info = GetConnectionInfo(aConnectionId);
-
-    char remoteAddress[48]{};
-    info.m_addrRemote.ToString(remoteAddress, 48, false);
-
-    AuthenticationResponse serverResponse;
-    serverResponse.Version = BUILD_PROTOCOL;
-
-    using RT = AuthenticationResponse::ResponseType;
-    auto sendKick = [&](const RT type)
+    if (acRequest->Phase == AuthenticationRequest::EnterWorld)
     {
-        serverResponse.Type = type;
-        Send(aConnectionId, serverResponse);
-        // the previous message is a lingering kick, it still gets delivered.
+        HandleWorldEntry(aConnectionId, acRequest);
+        return;
+    }
+
+    AuthenticationResponse response{};
+    response.Version = BUILD_PROTOCOL;
+    using RT = AuthenticationResponse::ResponseType;
+    auto reject = [&](RT aType)
+    {
+        response.Type = aType;
+        Send(aConnectionId, response);
         Kick(aConnectionId);
     };
-#if 1
-    // to make our testing life a bit easier.
+
     if (acRequest->Version != BUILD_PROTOCOL)
     {
-        spdlog::info("New player {:x} '{}' tried to connect with client {} - Version mismatch", aConnectionId, remoteAddress, acRequest->Version.c_str());
+        reject(RT::kWrongVersion);
+        return;
+    }
+    if (acRequest->Phase != AuthenticationRequest::Login ||
+        m_lobbySessions.contains(aConnectionId) ||
+        m_pWorld->GetPlayerManager().GetByConnectionId(aConnectionId))
+    {
+        reject(RT::kInvalidEntry);
+        return;
+    }
+    if (m_pWorld->GetPlayerManager().Count() + m_lobbySessions.size() >= uMaxPlayerCount.value_as<uint32_t>())
+    {
+        reject(RT::kServerFull);
+        return;
+    }
+    if ((!bAllowSKSE && acRequest->SKSEActive) || (!bAllowMO2 && acRequest->MO2Active))
+    {
+        response.SKSEActive = acRequest->SKSEActive;
+        response.MO2Active = acRequest->MO2Active;
+        reject(RT::kClientModsDisallowed);
+        return;
+    }
+
+    const bool admin = acRequest->Token == sAdminPassword.value() && !sAdminPassword.empty();
+    if (acRequest->Token != sPassword.value() && !admin)
+    {
+        reject(RT::kWrongPassword);
+        return;
+    }
+
+    // No Player, quest subscription, admin session, or actor exists in the
+    // lobby. A reserved connection is not a world participant.
+    m_lobbySessions.emplace(aConnectionId, LobbySession{admin, acRequest->SKSEActive, acRequest->MO2Active,
+        acRequest->DiscordId, std::chrono::steady_clock::now() + std::chrono::minutes(30)});
+    response.Type = RT::kLobbyAccepted;
+    Send(aConnectionId, response);
+    spdlog::info("Connection {:x} authenticated to character lobby", aConnectionId);
+}
+
+void GameServer::HandleWorldEntry(const ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest)
+{
+    AuthenticationResponse serverResponse{};
+    serverResponse.Version = BUILD_PROTOCOL;
+    using RT = AuthenticationResponse::ResponseType;
+    auto sendKick = [&](RT aType)
+    {
+        serverResponse.Type = aType;
+        Send(aConnectionId, serverResponse);
+        Kick(aConnectionId);
+    };
+
+    const auto it = m_lobbySessions.find(aConnectionId);
+    if (acRequest->Version != BUILD_PROTOCOL)
+    {
         sendKick(RT::kWrongVersion);
         return;
     }
-#endif
-
+    if (it == m_lobbySessions.end() || m_pWorld->GetPlayerManager().GetByConnectionId(aConnectionId) ||
+        it->second.Expires <= std::chrono::steady_clock::now() ||
+        acRequest->Username.empty() || acRequest->Username.size() > 128 || !acRequest->CellId ||
+        acRequest->UserMods.ModList.empty())
+    {
+        sendKick(RT::kInvalidEntry);
+        return;
+    }
+    const LobbySession lobby = it->second;
+    m_lobbySessions.erase(it);
+    if ((!bAllowSKSE && (lobby.SKSE || acRequest->SKSEActive)) || (!bAllowMO2 && (lobby.MO2 || acRequest->MO2Active)))
+    {
+        serverResponse.SKSEActive = lobby.SKSE || acRequest->SKSEActive;
+        serverResponse.MO2Active = lobby.MO2 || acRequest->MO2Active;
+        sendKick(RT::kClientModsDisallowed);
+        return;
+    }
     if (m_pWorld->GetPlayerManager().Count() >= uMaxPlayerCount.value_as<uint32_t>())
     {
         sendKick(RT::kServerFull);
         return;
     }
+    const auto info = GetConnectionInfo(aConnectionId);
+    char remoteAddress[48]{};
+    info.m_addrRemote.ToString(remoteAddress, 48, false);
 
-    bool skseProblem = !bAllowSKSE && acRequest->SKSEActive;
-    bool mo2Problem = !bAllowMO2 && acRequest->MO2Active;
+    Mods& responseList = serverResponse.UserMods;
+    auto& modsComponent = m_pWorld->ctx().at<ModsComponent>();
 
-    if (skseProblem || mo2Problem)
+    if (IsMoPoActive())
     {
-        TiltedPhoques::String response;
-        if (skseProblem)
-            response += "SKSE ";
-        if (mo2Problem)
-            response += "MO2 ";
+        // mods that exist on the client, but not on the server
+        // modscomponent contains a list filled in by the recordcollection
+        Mods modsToRemove;
 
-        spdlog::info("New player {:x} '{}' tried to connect, but {}{} disallowed - Kicked.", aConnectionId, remoteAddress, response.c_str(), skseProblem && mo2Problem ? "are" : "is");
+        const auto& userMods = acRequest->UserMods.ModList;
+        for (const Mods::Entry& mod : userMods)
+        {
+            // if the client has more mods than the server..
+            if (!modsComponent.IsInstalled(mod.Filename))
+            {
+                modsToRemove.ModList.push_back(mod);
+            }
+        }
 
-        serverResponse.SKSEActive = acRequest->SKSEActive;
-        serverResponse.MO2Active = acRequest->MO2Active;
-        sendKick(RT::kClientModsDisallowed);
+        // TODO(Vince): if you have a better to do this than two for loops
+        // let me know!
+        // Also, for the future, lets think about a mode that allows more than the server installed mods
+        // but requires essential mods?
+
+        // mods that may exist on the server, but not on the client
+        for (const auto& entry : modsComponent.GetServerMods())
+        {
+            const auto it = std::find_if(userMods.begin(), userMods.end(), [&](const Mods::Entry& it) { return it.Filename == entry.first; });
+
+            if (it == userMods.end())
+            {
+                Mods::Entry removeEntry;
+                removeEntry.Filename = entry.first;
+                removeEntry.Id = 0;
+                modsToRemove.ModList.push_back(removeEntry);
+            }
+        }
+
+        if (modsToRemove.ModList.size() > 0)
+        {
+            String text = PrettyPrintModList(modsToRemove.ModList);
+            // "ModPolicy: refusing connection {:x} because essential mods are missing: {}"
+            // for future reference ^
+            spdlog::info("ModPolicy: refusing connection {:x} because the following mods are installed on the client: {}", aConnectionId, text.c_str());
+
+            serverResponse.UserMods.ModList = std::move(modsToRemove.ModList);
+            sendKick(RT::kModsMismatch);
+            return;
+        }
+    }
+
+    // Note: to lower traffic we only send the mod ids the user can fix in order as other ids will lead to a
+    // null form id anyway
+    Vector<String> playerMods;
+    Vector<uint16_t> playerModsIds;
+
+    for (auto& mod : acRequest->UserMods.ModList)
+    {
+        const uint32_t id = mod.IsLite ? modsComponent.AddLite(mod.Filename) : modsComponent.AddStandard(mod.Filename);
+
+        Mods::Entry entry;
+        entry.Filename = mod.Filename;
+        entry.Id = static_cast<uint16_t>(id);
+        entry.IsLite = mod.IsLite;
+
+        playerMods.push_back(mod.Filename);
+        playerModsIds.push_back(entry.Id);
+        responseList.ModList.push_back(entry);
+    }
+
+
+    // Authentication is the one place the server has not yet assigned
+    // plugin IDs. The entry location uses local plugin index (bit 16 for
+    // light plugins), resolved against this exact request's plugin table.
+    const auto resolve = [&](const GameId& acLocal, GameId& aServer)
+    {
+        if (!acLocal)
+        {
+            aServer = {};
+            return true;
+        }
+        const auto& userMods = acRequest->UserMods.ModList;
+        for (size_t i = 0; i < userMods.size(); ++i)
+        {
+            const auto& mod = userMods[i];
+            const uint32_t localId = mod.Id | (mod.IsLite ? 0x10000u : 0u);
+            if (localId == acLocal.ModId && acLocal.BaseId && acLocal.BaseId <= (mod.IsLite ? 0xFFFu : 0xFFFFFFu))
+            {
+                aServer = GameId(playerModsIds[i], acLocal.BaseId);
+                return true;
+            }
+        }
+        return false;
+    };
+    GameId worldSpace{}, cell{};
+    if (!resolve(acRequest->WorldSpaceId, worldSpace) || !resolve(acRequest->CellId, cell))
+    {
+        sendKick(RT::kInvalidEntry);
+        return;
+    }
+    if (lobby.Admin)
+        m_adminSessions.insert(aConnectionId);
+
+    Player* pPlayer = m_pWorld->GetPlayerManager().Create(aConnectionId);
+    pPlayer->SetEndpoint(remoteAddress);
+    pPlayer->SetDiscordId(lobby.DiscordId);
+    pPlayer->SetUsername(acRequest->Username);
+    pPlayer->SetMods(playerMods);
+    pPlayer->SetModIds(playerModsIds);
+    pPlayer->SetLevel(acRequest->Level);
+
+    // this event is shit, needs to be fixed, i know
+    auto [canceled, reason] = m_pWorld->GetScriptService().HandlePlayerJoin(aConnectionId);
+    if (canceled)
+    {
+        spdlog::info("New player {:x} has a been rejected because \"{}\".", aConnectionId, reason.c_str());
+        m_adminSessions.erase(aConnectionId);
+        m_pWorld->GetPlayerManager().Remove(pPlayer);
+        Kick(aConnectionId);
         return;
     }
 
-    bool adminPasswordUsed = acRequest->Token == sAdminPassword.value() && !sAdminPassword.empty();
+    serverResponse.PlayerId = pPlayer->GetId();
 
-    // check if the proper server password was supplied.
-    if (acRequest->Token == sPassword.value() || adminPasswordUsed)
+    auto modList = PrettyPrintModList(acRequest->UserMods.ModList);
+    spdlog::info("New player '{}' [{:x}] connected with {} mods\n\t: {}", pPlayer->GetUsername().c_str(), aConnectionId, acRequest->UserMods.ModList.size(), modList.c_str());
+
+    serverResponse.Settings = GetSettings();
+
+    serverResponse.Type = AuthenticationResponse::ResponseType::kAccepted;
+    Send(aConnectionId, serverResponse);
+
+    uint32_t startId = 0;
+    auto initStringCache = StringCache::Get().Serialize(startId);
+
+    pPlayer->SetStringCacheId(startId);
+
+    Send(aConnectionId, initStringCache);
+
+    for (auto* pOtherPlayer : m_pWorld->GetPlayerManager())
     {
-        if (adminPasswordUsed)
-        {
-            m_adminSessions.insert(aConnectionId);
-            spdlog::warn("New admin session for {:x} '{}'", aConnectionId, remoteAddress);
-        }
+        if (pOtherPlayer == pPlayer)
+            continue;
 
-        Mods& responseList = serverResponse.UserMods;
-        auto& modsComponent = m_pWorld->ctx().at<ModsComponent>();
+        NotifyPlayerJoined notify{};
+        notify.PlayerId = pOtherPlayer->GetId();
+        notify.Username = pOtherPlayer->GetUsername();
 
-        if (IsMoPoActive())
-        {
-            // mods that exist on the client, but not on the server
-            // modscomponent contains a list filled in by the recordcollection
-            Mods modsToRemove;
+        auto& cellComponent = pOtherPlayer->GetCellComponent();
+        notify.WorldSpaceId = cellComponent.WorldSpaceId;
+        notify.CellId = cellComponent.Cell;
 
-            const auto& userMods = acRequest->UserMods.ModList;
-            for (const Mods::Entry& mod : userMods)
-            {
-                // if the client has more mods than the server..
-                if (!modsComponent.IsInstalled(mod.Filename))
-                {
-                    modsToRemove.ModList.push_back(mod);
-                }
-            }
+        notify.Level = pOtherPlayer->GetLevel();
 
-            // TODO(Vince): if you have a better to do this than two for loops
-            // let me know!
-            // Also, for the future, lets think about a mode that allows more than the server installed mods
-            // but requires essential mods?
+        spdlog::debug("[GameServer] New notify player {:x} {}", notify.PlayerId, notify.Username.c_str());
 
-            // mods that may exist on the server, but not on the client
-            for (const auto& entry : modsComponent.GetServerMods())
-            {
-                const auto it = std::find_if(userMods.begin(), userMods.end(), [&](const Mods::Entry& it) { return it.Filename == entry.first; });
-
-                if (it == userMods.end())
-                {
-                    Mods::Entry removeEntry;
-                    removeEntry.Filename = entry.first;
-                    removeEntry.Id = 0;
-                    modsToRemove.ModList.push_back(removeEntry);
-                }
-            }
-
-            if (modsToRemove.ModList.size() > 0)
-            {
-                String text = PrettyPrintModList(modsToRemove.ModList);
-                // "ModPolicy: refusing connection {:x} because essential mods are missing: {}"
-                // for future reference ^
-                spdlog::info("ModPolicy: refusing connection {:x} because the following mods are installed on the client: {}", aConnectionId, text.c_str());
-
-                serverResponse.UserMods.ModList = std::move(modsToRemove.ModList);
-                sendKick(RT::kModsMismatch);
-                return;
-            }
-        }
-
-        // Note: to lower traffic we only send the mod ids the user can fix in order as other ids will lead to a
-        // null form id anyway
-        Vector<String> playerMods;
-        Vector<uint16_t> playerModsIds;
-
-        size_t i = 0;
-        for (auto& mod : acRequest->UserMods.ModList)
-        {
-            const uint32_t id = mod.IsLite ? modsComponent.AddLite(mod.Filename) : modsComponent.AddStandard(mod.Filename);
-
-            Mods::Entry entry;
-            entry.Filename = mod.Filename;
-            entry.Id = static_cast<uint16_t>(id);
-            entry.IsLite = mod.IsLite;
-
-            playerMods.push_back(mod.Filename);
-            playerModsIds.push_back(entry.Id);
-            responseList.ModList.push_back(entry);
-        }
-
-        Player* pPlayer = m_pWorld->GetPlayerManager().Create(aConnectionId);
-        pPlayer->SetEndpoint(remoteAddress);
-        pPlayer->SetDiscordId(acRequest->DiscordId);
-        pPlayer->SetUsername(std::move(acRequest->Username));
-        pPlayer->SetMods(playerMods);
-        pPlayer->SetModIds(playerModsIds);
-        pPlayer->SetLevel(acRequest->Level);
-
-        // this event is shit, needs to be fixed, i know
-        auto [canceled, reason] = m_pWorld->GetScriptService().HandlePlayerJoin(aConnectionId);
-        if (canceled)
-        {
-            spdlog::info("New player {:x} has a been rejected because \"{}\".", aConnectionId, reason.c_str());
-            Kick(aConnectionId);
-            m_pWorld->GetPlayerManager().Remove(pPlayer);
-            return;
-        }
-
-        serverResponse.PlayerId = pPlayer->GetId();
-
-        auto modList = PrettyPrintModList(acRequest->UserMods.ModList);
-        spdlog::info("New player '{}' [{:x}] connected with {} mods\n\t: {}", pPlayer->GetUsername().c_str(), aConnectionId, acRequest->UserMods.ModList.size(), modList.c_str());
-
-        serverResponse.Settings = GetSettings();
-
-        serverResponse.Type = AuthenticationResponse::ResponseType::kAccepted;
-        Send(aConnectionId, serverResponse);
-
-        uint32_t startId = 0;
-        auto initStringCache = StringCache::Get().Serialize(startId);
-
-        pPlayer->SetStringCacheId(startId);
-
-        Send(aConnectionId, initStringCache);
-
-        for (auto* pOtherPlayer : m_pWorld->GetPlayerManager())
-        {
-            if (pOtherPlayer == pPlayer)
-                continue;
-
-            NotifyPlayerJoined notify{};
-            notify.PlayerId = pOtherPlayer->GetId();
-            notify.Username = pOtherPlayer->GetUsername();
-
-            auto& cellComponent = pOtherPlayer->GetCellComponent();
-            notify.WorldSpaceId = cellComponent.WorldSpaceId;
-            notify.CellId = cellComponent.Cell;
-
-            notify.Level = pOtherPlayer->GetLevel();
-
-            spdlog::debug("[GameServer] New notify player {:x} {}", notify.PlayerId, notify.Username.c_str());
-
-            Send(pPlayer->GetConnectionId(), notify);
-        }
-
-        m_pWorld->GetDispatcher().trigger(PlayerJoinEvent(pPlayer, acRequest->WorldSpaceId, acRequest->CellId, acRequest->PlayerTime));
+        Send(pPlayer->GetConnectionId(), notify);
     }
-    else
-    {
-        spdlog::info("New player {:x} '{}' has a bad password, kicking.", aConnectionId, remoteAddress);
-        sendKick(RT::kWrongPassword);
-    }
+
+    m_pWorld->GetDispatcher().trigger(PlayerJoinEvent(pPlayer, worldSpace, cell, acRequest->PlayerTime));
+
 }
 
 void GameServer::UpdateSettings()

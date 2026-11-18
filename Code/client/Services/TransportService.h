@@ -33,7 +33,14 @@ struct TransportService : Client
     void OnDisconnected(EDisconnectReason aReason) override;
     void OnUpdate() override;
 
+    // The base transport may be connected while the character lobby is
+    // open. Gameplay must only observe a completed world entry.
     [[nodiscard]] bool IsOnline() const noexcept { return m_connected; }
+    [[nodiscard]] bool IsConnected() const noexcept { return m_connected; }
+    [[nodiscard]] bool IsInLobby() const noexcept { return m_lobbyAuthenticated; }
+    bool CanEnterWorld() const noexcept;
+    bool EnterWorld() noexcept;
+    void BeginConnection(const std::string& acEndpoint, const std::string& acPassword) noexcept;
     void SetServerPassword(const std::string& acPassword) noexcept { m_serverPassword = acPassword; }
     const uint32_t& GetLocalPlayerId() const noexcept { return m_localPlayerId; }
 
@@ -58,9 +65,13 @@ protected:
 private:
     World& m_world;
     entt::dispatcher& m_dispatcher;
-    bool m_connected;
+    bool m_connected{};
+    bool m_connectionPending{};
+    bool m_lobbyAuthenticated{};
+    bool m_enterPending{};
+    bool m_enterAfterLogin{};
     String m_serverPassword{};
-    uint32_t m_localPlayerId;
+    uint32_t m_localPlayerId{};
     double m_lastPollTime{};
 
     entt::scoped_connection m_updateConnection;

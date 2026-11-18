@@ -3,6 +3,8 @@
 #include <Messages/AuthenticationRequest.h>
 #include <Messages/Message.h>
 #include <World.h>
+#include <map>
+#include <chrono>
 
 using TiltedPhoques::ConnectionId_t;
 using TiltedPhoques::Server;
@@ -91,7 +93,7 @@ struct GameServer final : Server
     Player const* GetAdminByUsername(const String& acUsername) noexcept;
 
 protected:
-    bool ValidateAuthParams(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest);
+    void HandleWorldEntry(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest);
     void HandleAuthenticationRequest(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest);
 
     // Implement TiltedPhoques::Server
@@ -115,6 +117,15 @@ private:
     UniquePtr<Resources::ResourceCollection> m_pResources;
     Console::ConsoleRegistry& m_commands;
 
+    struct LobbySession
+    {
+        bool Admin{};
+        bool SKSE{};
+        bool MO2{};
+        uint64_t DiscordId{};
+        std::chrono::steady_clock::time_point Expires;
+    };
+    std::map<ConnectionId_t, LobbySession> m_lobbySessions;
     TiltedPhoques::Set<ConnectionId_t> m_adminSessions;
     TiltedPhoques::Map<ConnectionId_t, entt::entity> m_connectionToEntity;
 

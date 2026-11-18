@@ -5,6 +5,9 @@
 #include <Events/ConnectionErrorEvent.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
+#include <Events/ServerLobbyEvent.h>
+#include <Games/Skyrim/Interface/UI.h>
+#include <PlayerCharacter.h>
 
 #include <Games/References.h>
 #include <Games/TES.h>
@@ -75,7 +78,7 @@ bool TransportService::Send(const ClientMessage& acMessage, const TiltedPhoques:
         ~ScopedReset() { s_allocator.Reset(); }
     } allocatorGuard;
 
-    if (IsConnected())
+    if (Client::IsConnected() && (m_connected || acMessage.GetOpcode() == AuthenticationRequest::Opcode))
     {
         ScopedAllocator _{s_allocator};
 
@@ -107,53 +110,83 @@ void TransportService::OnConsume(const void* apData, uint32_t aSize)
         return;
     }
 
-    m_messageHandlers[pMessage->GetOpcode()](pMessage);
+    if (m_connected || pMessage->GetOpcode() == AuthenticationResponse::Opcode)
+        m_messageHandlers[pMessage->GetOpcode()](pMessage);
+}
+
+bool TransportService::CanEnterWorld() const noexcept
+{
+    auto* pUI = UI::Get();
+    if (!pUI || pUI->GetMenuOpen("Main Menu") || pUI->GetMenuOpen("Loading Menu") || pUI->GetMenuOpen("RaceSex Menu"))
+        return false;
+    auto* pPlayer = PlayerCharacter::Get();
+    auto* pTime = TimeData::Get();
+    return pPlayer && pPlayer->parentCell && pPlayer->GetNiNode() && pPlayer->baseForm &&
+        ModManager::Get() && pTime && pTime->TimeScale && pTime->GameHour &&
+        pTime->GameYear && pTime->GameMonth && pTime->GameDay;
+}
+
+void TransportService::BeginConnection(const std::string& acEndpoint, const std::string& acPassword) noexcept
+{
+    if (m_connectionPending || m_connected || m_lobbyAuthenticated || m_enterPending || Client::IsConnected())
+        return;
+    m_enterAfterLogin = CanEnterWorld();
+    m_connectionPending = true;
+    SetServerPassword(acPassword);
+    if (!Client::Connect(acEndpoint))
+        OnDisconnected(kLocalProblem);
 }
 
 void TransportService::OnConnected()
 {
     AuthenticationRequest request{};
+    request.Phase = AuthenticationRequest::Login;
     request.Version = BUILD_PROTOCOL;
     request.SKSEActive = IsScriptExtenderLoaded();
-    request.MO2Active = GetModuleHandleW(kMO2DllName);
-
+    request.MO2Active = GetModuleHandleW(kMO2DllName) != nullptr;
     request.Token = m_serverPassword;
-    m_serverPassword = "";
-
-    PlayerCharacter* pPlayer = PlayerCharacter::Get();
-
-    // null if discord is not active
-    // TODO: think about user opt out
+    m_serverPassword.clear();
     request.DiscordId = m_world.ctx().at<DiscordService>().GetUser().id;
+    Send(request);
+}
+
+bool TransportService::EnterWorld() noexcept
+{
+    if (!m_lobbyAuthenticated || m_enterPending || !CanEnterWorld())
+        return false;
+
+    AuthenticationRequest request{};
+    request.Phase = AuthenticationRequest::EnterWorld;
+    request.Version = BUILD_PROTOCOL;
+    request.SKSEActive = IsScriptExtenderLoaded();
+    request.MO2Active = GetModuleHandleW(kMO2DllName) != nullptr;
+    auto* pPlayer = PlayerCharacter::Get();
     auto* pNpc = Cast<TESNPC>(pPlayer->baseForm);
-    if (pNpc)
-    {
-        request.Username = pNpc->fullName.value.AsAscii();
-    }
-    else
-    {
-        request.Username = "Some dragon boi";
-    }
+    if (!pNpc || !pNpc->fullName.value.AsAscii())
+        return false;
+    request.Username = pNpc->fullName.value.AsAscii();
+    if (request.Username.empty() || request.Username.size() > 128)
+        return false;
 
-    auto* const cpModManager = ModManager::Get();
-
-    for (auto* pMod : cpModManager->mods)
+    for (auto* pMod : ModManager::Get()->mods)
     {
-        if (!pMod->IsLoaded())
+        if (!pMod || !pMod->IsLoaded())
             continue;
-
         auto& entry = request.UserMods.ModList.emplace_back();
         entry.Id = pMod->GetId();
         entry.IsLite = pMod->IsLite();
         entry.Filename = pMod->filename;
     }
-
-    auto& modSystem = m_world.GetModSystem();
+    const auto localLocation = [](uint32_t aFormId)
+    {
+        const uint32_t index = aFormId >> 24;
+        if (index == 0xFE)
+            return GameId(0x10000u | ((aFormId >> 12) & 0xFFFu), aFormId & 0xFFFu);
+        return GameId(index, aFormId & 0xFFFFFFu);
+    };
     if (pPlayer->GetWorldSpace())
-        modSystem.GetServerModId(pPlayer->GetWorldSpace()->formID, request.WorldSpaceId);
-
-    modSystem.GetServerModId(pPlayer->parentCell->formID, request.CellId);
-
+        request.WorldSpaceId = localLocation(pPlayer->GetWorldSpace()->formID);
+    request.CellId = localLocation(pPlayer->parentCell->formID);
     request.Level = pPlayer->GetLevel();
 
     auto* pGameTime = TimeData::Get();
@@ -163,16 +196,25 @@ void TransportService::OnConnected()
     request.PlayerTime.Month = pGameTime->GameMonth->f;
     request.PlayerTime.Day = pGameTime->GameDay->f;
 
-    Send(request);
+    m_enterPending = Send(request);
+    return m_enterPending;
 }
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
+    const bool wasInWorld = m_connected;
     m_connected = false;
-
+    m_connectionPending = false;
+    m_lobbyAuthenticated = false;
+    m_enterPending = false;
+    m_enterAfterLogin = false;
+    m_serverPassword.clear();
+    m_localPlayerId = 0;
     spdlog::warn("Disconnected from server {}", aReason);
-
-    m_dispatcher.trigger(DisconnectedEvent());
+    if (wasInWorld)
+        m_dispatcher.trigger(DisconnectedEvent());
+    else
+        m_dispatcher.trigger(ServerLobbyEvent{false});
 }
 
 void TransportService::OnUpdate()
@@ -205,9 +247,27 @@ void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noex
 void TransportService::HandleAuthenticationResponse(const AuthenticationResponse& acMessage) noexcept
 {
     using AR = AuthenticationResponse::ResponseType;
-    if (acMessage.Type == AR::kAccepted)
+    if (acMessage.Type == AR::kLobbyAccepted && m_connectionPending && !m_lobbyAuthenticated)
     {
+        m_connectionPending = false;
+        m_lobbyAuthenticated = true;
+        if (m_enterAfterLogin && EnterWorld())
+            return;
+        m_dispatcher.trigger(ServerLobbyEvent{true});
+        return;
+    }
+    if (acMessage.Type == AR::kAccepted && m_lobbyAuthenticated && m_enterPending)
+    {
+        if (!CanEnterWorld())
+        {
+            Close();
+            return;
+        }
+        m_lobbyAuthenticated = false;
+        m_enterPending = false;
+        m_enterAfterLogin = false;
         m_connected = true;
+        m_localPlayerId = acMessage.PlayerId;
 
         m_world.SetServerSettings(acMessage.Settings);
 

@@ -43,6 +43,7 @@ TEST_CASE("Encoding factory", "[encoding.factory]")
 
         auto pRequest = CastUnique<AuthenticationRequest>(std::move(pMessage));
         REQUIRE(pRequest->Token == request.Token);
+        REQUIRE(pRequest->Phase == AuthenticationRequest::Login);
     }
 
     {
@@ -63,6 +64,24 @@ TEST_CASE("Encoding factory", "[encoding.factory]")
         auto pRequest = CastUnique<PartyAcceptInviteRequest>(std::move(pMessage));
         REQUIRE(pRequest->InviterId == request.InviterId);
     }
+}
+
+TEST_CASE("Character entry is a separate authenticated phase", "[encoding.auth]")
+{
+    AuthenticationRequest entry{};
+    entry.Phase = AuthenticationRequest::EnterWorld;
+    entry.Username = "Test character";
+    entry.CellId = GameId(0x10003u, 0x456u);
+    entry.UserMods.ModList.push_back({"Start.esl", 3, true});
+    Buffer buffer(4096);
+    Buffer::Writer writer(&buffer);
+    entry.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    const ClientMessageFactory factory;
+    auto message = factory.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(*CastUnique<AuthenticationRequest>(std::move(message)) == entry);
+    REQUIRE(entry.Token.empty());
 }
 
 TEST_CASE("Static structures", "[encoding.static]")

@@ -80,10 +80,20 @@ public:
     void OnConnected() override
     {
         std::fprintf(stderr, "transport connected for %s\n", Mode.c_str());
-        AuthenticationRequest request;
+        AuthenticationRequest request{};
+        request.Phase = AuthenticationRequest::Login;
+        request.Version = Version.c_str();
+        Transmit(request);
+    }
+
+    void EnterWorld()
+    {
+        AuthenticationRequest request{};
+        request.Phase = AuthenticationRequest::EnterWorld;
         request.Version = Version.c_str();
         request.Username = Mode.c_str();
-        request.CellId = GameId(0, 0xA21);
+        request.Level = 1;
+        request.CellId = GameId(9, 0xA21);
         if (Mode == "restarted")
             request.UserMods.ModList.push_back({"Added First.esp", 0, false});
         request.UserMods.ModList.push_back({"Skyrim.esm", 9, false});
@@ -105,6 +115,13 @@ public:
             {
                 assert(reply->Type == AuthenticationResponse::ResponseType::kWrongVersion);
                 Done = true;
+                return;
+            }
+            if (reply->Type == AuthenticationResponse::ResponseType::kLobbyAccepted)
+            {
+                assert(!Authed);
+                assert(reply->PlayerId == 0);
+                EnterWorld();
                 return;
             }
             assert(reply->Type == AuthenticationResponse::ResponseType::kAccepted);
