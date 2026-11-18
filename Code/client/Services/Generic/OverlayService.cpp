@@ -347,17 +347,17 @@ void OverlayService::OnChatMessageReceived(const NotifyChatMessageBroadcast& acM
     m_pOverlay->ExecuteAsync("message", pArguments);
 }
 
-void OverlayService::SendDialogueAction(uint8_t aAction, const char* apText) noexcept
+bool OverlayService::SendDialogueAction(uint8_t aAction, const char* apText) noexcept
 {
     if (!m_transport.IsOnline() || !m_dialogueToken)
-        return;
+        return false;
     PlayerDialogueRequest request{};
     request.Action = aAction;
     request.ActorId = m_dialogueActorId;
     request.Token = m_dialogueToken;
     if (apText)
         request.Text = apText;
-    m_transport.Send(request);
+    return m_transport.Send(request);
 }
 
 void OverlayService::CloseDialogueSession() noexcept
@@ -413,7 +413,8 @@ void OverlayService::RefreshDialogueSession() noexcept
         m_dialogueToken = m_nextDialogueToken;
         m_dialogueGranted = false;
         m_dialogueCanChoose = false;
-        SendDialogueAction(PlayerDialogueRequest::Join);
+        if (!SendDialogueAction(PlayerDialogueRequest::Join))
+            CloseDialogueSession();
         return;
     }
 }
@@ -432,12 +433,16 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 
     if (m_dialogueCanChoose)
     {
-        SendDialogueAction(PlayerDialogueRequest::Choose, apText);
-        return true;
+        if (SendDialogueAction(PlayerDialogueRequest::Choose, apText))
+            return true;
+        Utils::ShowHudMessage("Unable to send dialogue choice.");
+        return false;
     }
 
-    SendDialogueAction(PlayerDialogueRequest::Suggest, apText);
-    Utils::ShowHudMessage("Dialogue suggestion sent to the conversation owner.");
+    if (SendDialogueAction(PlayerDialogueRequest::Suggest, apText))
+        Utils::ShowHudMessage("Dialogue suggestion sent to the conversation owner.");
+    else
+        Utils::ShowHudMessage("Unable to send dialogue suggestion.");
     return false;
 }
 
@@ -456,7 +461,10 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
             if (m_dialogueCanChoose)
                 Utils::ShowHudMessage("You control this conversation.");
             else
-                Utils::ShowHudMessage("Select a response to suggest it to the conversation owner.");
+            {
+                const String message = acMessage.Name + " controls this conversation. Choose a response to suggest it.";
+                Utils::ShowHudMessage(message);
+            }
         }
         return;
     }
@@ -467,6 +475,12 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         m_dialogueCanChoose = false;
         Utils::ShowHudMessage("Shared dialogue unavailable. Close and reopen the conversation.");
         return;
+    }
+
+    if (acMessage.Kind == NotifyPlayerDialogue::Suggestion && m_dialogueCanChoose)
+    {
+        const String message = acMessage.Name + " suggests: " + acMessage.Text;
+        Utils::ShowHudMessage(message);
     }
 
     if (!m_pOverlay || (acMessage.Kind != NotifyPlayerDialogue::Choice && acMessage.Kind != NotifyPlayerDialogue::Suggestion))

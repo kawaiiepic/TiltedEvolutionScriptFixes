@@ -88,7 +88,7 @@ protected:
 private:
     void RefreshDialogueSession() noexcept;
     void CloseDialogueSession() noexcept;
-    void SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
+    bool SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
 
