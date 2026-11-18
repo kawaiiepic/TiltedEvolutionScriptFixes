@@ -49,7 +49,6 @@ enum ClientOpcode : unsigned char
     kTeleportRequest,
     kRequestPlayerHealthUpdate,
     kRequestWeatherChange,
-    kRequestCurrentWeather,
     kRequestSetWaypoint,
     kRequestRemoveWaypoint,
     kSetTimeCommandRequest,

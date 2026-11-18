@@ -1,47 +1,80 @@
 #include <Services/WeatherService.h>
 
 #include <Components.h>
-#include <GameServer.h>
 #include <World.h>
-
+#include <Events/UpdateEvent.h>
 #include <Messages/RequestWeatherChange.h>
-#include <Messages/NotifyWeatherChange.h>
-#include <Messages/RequestCurrentWeather.h>
 
 WeatherService::WeatherService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
 {
     m_weatherChangeConnection = aDispatcher.sink<PacketEvent<RequestWeatherChange>>().connect<&WeatherService::OnWeatherChange>(this);
-    m_currentWeatherConnection = aDispatcher.sink<PacketEvent<RequestCurrentWeather>>().connect<&WeatherService::OnRequestCurrentWeather>(this);
+    m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&WeatherService::OnUpdate>(this);
 }
 
-void WeatherService::OnWeatherChange(const PacketEvent<RequestWeatherChange>& acMessage) const noexcept
+void WeatherService::OnUpdate(const UpdateEvent&) noexcept
 {
-    NotifyWeatherChange notify{};
-    notify.Id = acMessage.Packet.Id;
-
-    auto* pParty = m_world.GetPartyService().GetPlayerParty(acMessage.pPlayer);
-    if (!pParty)
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextUpdate)
         return;
+    m_nextUpdate = now + std::chrono::milliseconds(250);
 
-    pParty->CachedWeather = notify.Id;
+    // Weather regions are not exposed by the engine wrapper. An exterior
+    // cell is a conservative boundary that also works in modded worldspaces.
+    std::unordered_map<GameId, NotifyWeatherChange> cells;
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+    {
+        const auto& position = pPlayer->GetCellComponent();
+        if (!pPlayer->GetCharacter() || !position.Cell || position.IsInInteriorCell())
+            continue;
 
-    if (!acMessage.pPlayer->GetCharacter())
-        return;
+        auto& state = cells[position.Cell];
+        if (state.Owner)
+            continue;
+        state.Cell = position.Cell;
+        state.Owner = pPlayer->GetId();
 
-    const auto origin = *acMessage.pPlayer->GetCharacter();
+        if (const auto previous = m_cells.find(position.Cell); previous != m_cells.end())
+        {
+            state.Id = previous->second.Id;
+            const auto* pOwner = m_world.GetPlayerManager().GetById(previous->second.Owner);
+            if (pOwner && pOwner->GetCharacter() && pOwner->GetCellComponent().Cell == position.Cell &&
+                pOwner->GetCellComponent().WorldSpaceId == position.WorldSpaceId)
+                state.Owner = previous->second.Owner;
+        }
+    }
+    m_cells = std::move(cells);
 
-    GameServer::Get()->SendToPartyInRange(notify, acMessage.pPlayer->GetParty(), origin, acMessage.pPlayer);
+    std::unordered_map<uint32_t, NotifyWeatherChange> sent;
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+    {
+        const auto& position = pPlayer->GetCellComponent();
+        if (!pPlayer->GetCharacter() || position.IsInInteriorCell())
+            continue;
+        const auto cell = m_cells.find(position.Cell);
+        if (cell == m_cells.end())
+            continue;
+
+        auto state = cell->second;
+        if (state.Id && !pPlayer->HasModId(state.Id.ModId))
+            state.Id = {};
+        const auto previous = m_lastSent.find(pPlayer->GetId());
+        if (previous == m_lastSent.end() || !(previous->second == state))
+            pPlayer->Send(state);
+        sent.emplace(pPlayer->GetId(), state);
+    }
+    m_lastSent = std::move(sent);
 }
 
-void WeatherService::OnRequestCurrentWeather(const PacketEvent<RequestCurrentWeather>& acMessage) const noexcept
+void WeatherService::OnWeatherChange(const PacketEvent<RequestWeatherChange>& acMessage) noexcept
 {
-    auto* pParty = m_world.GetPartyService().GetPlayerParty(acMessage.pPlayer);
-    if (!pParty)
+    const auto& request = acMessage.Packet;
+    const auto& position = acMessage.pPlayer->GetCellComponent();
+    if (!request.Cell || position.Cell != request.Cell || position.IsInInteriorCell() ||
+        !m_world.ctx().at<ModsComponent>().FindFormKey(request.Id, *acMessage.pPlayer))
         return;
 
-    NotifyWeatherChange notify{};
-    notify.Id = pParty->CachedWeather;
-
-    acMessage.pPlayer->Send(notify);
+    const auto cell = m_cells.find(request.Cell);
+    if (cell != m_cells.end() && cell->second.Owner == acMessage.pPlayer->GetId())
+        cell->second.Id = request.Id;
 }
