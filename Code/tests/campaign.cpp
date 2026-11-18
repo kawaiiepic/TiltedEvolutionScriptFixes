@@ -1,4 +1,5 @@
 #include "../server/Campaign/QuestJournal.h"
+#include "../server/Campaign/QuestPolicies.h"
 
 #include <catch2/catch.hpp>
 #include <chrono>
@@ -113,4 +114,31 @@ TEST_CASE("A failed campaign write never publishes an in-memory event", "[campai
     REQUIRE_FALSE(journal.IsHealthy());
     REQUIRE(journal.ErrorLine() == 1);
     REQUIRE(journal.Records().empty());
+}
+
+TEST_CASE("Campaign policies distinguish plugin names and light FormIDs", "[campaign]")
+{
+    TestJournalFile file;
+    {
+        std::ofstream policies(file.Path);
+        policies << "# per-quest overrides\n"
+                 << "personal standard \"A Mod.esp\" 0x00ABC # opt out\n"
+                 << "shared light \"A Mod.esp\" ABC\n";
+    }
+
+    Campaign::QuestPolicies policies(file.Path);
+    REQUIRE(policies.IsHealthy());
+    REQUIRE(policies.Size() == 2);
+    REQUIRE_FALSE(policies.IsShared({"A Mod.esp", false, 0xABC}, true));
+    REQUIRE(policies.IsShared({"A Mod.esp", true, 0xABC}, false));
+    REQUIRE(policies.IsShared({"Another.esp", false, 0xABC}, true));
+
+    {
+        std::ofstream invalid(file.Path, std::ios::app);
+        invalid << "shared standard \"A Mod.esp\" 0xABC\n";
+    }
+    Campaign::QuestPolicies invalid(file.Path);
+    REQUIRE_FALSE(invalid.IsHealthy());
+    REQUIRE(invalid.ErrorLine() == 4);
+    REQUIRE_FALSE(invalid.IsShared({"Another.esp", false, 0xABC}, true));
 }

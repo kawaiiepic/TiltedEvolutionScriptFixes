@@ -18,6 +18,7 @@
 #include <Messages/NotifySettingsChange.h>
 #include <console/ConsoleRegistry.h>
 #include <resources/ResourceCollection.h>
+#include <Services/QuestService.h>
 
 constexpr size_t kMaxServerNameLength = 128u;
 
@@ -346,6 +347,10 @@ void GameServer::BindServerCommands()
             m_pResources->ForEachManifest([&](const auto& aManifest) { out->info("{} -> {}", aManifest.Name.c_str(), aManifest.Description.c_str()); });
         });
 
+    m_commands.RegisterCommand<>("campaign-status", "Inspect the shared quest journal and player replay progress",
+                                  [this](Console::ArgStack&) { m_pWorld->ctx().at<QuestService>().ShowCampaignStatus(); });
+    m_commands.RegisterCommand<>("campaign-backup", "Copy the shared quest journal to shared-quests.log.backup",
+                                  [this](Console::ArgStack&) { m_pWorld->ctx().at<QuestService>().BackupCampaign(); });
     m_commands.RegisterCommand<>("quit", "Stop the server", [&](Console::ArgStack&) { Kill(); });
 
     m_commands.RegisterCommand<int64_t, int64_t>(

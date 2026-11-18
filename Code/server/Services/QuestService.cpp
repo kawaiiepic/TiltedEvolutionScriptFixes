@@ -16,9 +16,11 @@
 
 namespace
 {
-Console::Setting bEnableMiscQuestSync{"Gameplay:bEnableMiscQuestSync", "(Experimental) Share miscellaneous and hidden quests", false};
+Console::Setting bEnableMiscQuestSync{"Gameplay:bEnableMiscQuestSync", "Share miscellaneous and hidden quests by default", false, Console::SettingsFlags::kLocked};
 
 constexpr const char* kJournalPath = "shared-quests.log";
+constexpr const char* kJournalBackupPath = "shared-quests.log.backup";
+constexpr const char* kPoliciesPath = "shared-quest-policies.conf";
 static_assert(Campaign::QuestEvent::StageUpdate == static_cast<int>(RequestQuestUpdate::StageUpdate) &&
               Campaign::QuestEvent::Started == static_cast<int>(RequestQuestUpdate::Started) &&
               Campaign::QuestEvent::Stopped == static_cast<int>(RequestQuestUpdate::Stopped));
@@ -35,11 +37,15 @@ bool IsSharedType(uint8_t aType) noexcept
 QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
     , m_journal(kJournalPath)
+    , m_policies(kPoliciesPath)
 {
     if (m_journal.IsHealthy())
         spdlog::info("Loaded {} shared quest records", m_journal.Records().size());
     else
         spdlog::error("Quest sync disabled: unable to load {} (error line {}).", kJournalPath, m_journal.ErrorLine());
+    if (!m_policies.IsHealthy())
+        spdlog::error("Quest and scene sync disabled: unable to load {} (error line {}).", kPoliciesPath, m_policies.ErrorLine());
+
     m_sceneConnection = aDispatcher.sink<PacketEvent<RequestSceneState>>().connect<&QuestService::OnSceneState>(this);
     m_sceneTickConnection = aDispatcher.sink<UpdateEvent>().connect<&QuestService::OnSceneTick>(this);
     m_leaveConnection = aDispatcher.sink<PlayerLeaveEvent>().connect<&QuestService::OnPlayerLeave>(this);
@@ -49,9 +55,41 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     m_joinConnection = aDispatcher.sink<PlayerJoinEvent>().connect<&QuestService::OnPlayerJoin>(this);
 }
 
-bool QuestService::ResolveEntry(const RequestQuestUpdate& acRequest, const Player& acPlayer, Campaign::QuestEvent& aEntry) const noexcept
+void QuestService::ShowCampaignStatus() const noexcept
 {
-    if (!acPlayer.HasModId(acRequest.Id.ModId) || acRequest.Id.BaseId == 0)
+    auto pOut = spdlog::get("ConOut");
+    pOut->info("Quest journal {}: {}, {} committed records, error line {}", kJournalPath,
+               m_journal.IsHealthy() ? "healthy" : "unavailable", m_journal.Records().size(), m_journal.ErrorLine());
+    pOut->info("Quest policies {}: {}, {} overrides, error line {}", kPoliciesPath,
+               m_policies.IsHealthy() ? "healthy" : "unavailable", m_policies.Size(), m_policies.ErrorLine());
+    for (const auto& [playerId, sync] : m_questSync)
+    {
+        pOut->info("Player {} replay cursor {}/{}, {} awaiting acknowledgement", playerId, sync.Cursor,
+                   m_journal.Records().size(), sync.Pending.Updates.size());
+    }
+}
+
+void QuestService::BackupCampaign() const noexcept
+{
+    auto pOut = spdlog::get("ConOut");
+    if (!m_journal.IsHealthy() || m_journal.Records().empty())
+    {
+        pOut->warn("A healthy journal with committed records is required for backup.");
+        return;
+    }
+
+    // The console and quest handlers run on the server thread, so appends
+    // cannot interleave with the copy. Preserve any previous backup.
+    std::error_code error;
+    if (std::filesystem::copy_file(kJournalPath, kJournalBackupPath, error))
+        pOut->info("Backed up {} shared quest records to {}.", m_journal.Records().size(), kJournalBackupPath);
+    else
+        pOut->error("Unable to back up {} to {}: {}", kJournalPath, kJournalBackupPath, error.message());
+}
+
+bool QuestService::ResolveQuestKey(const GameId& acId, const Player& acPlayer, Campaign::QuestKey& aKey) const noexcept
+{
+    if (!acPlayer.HasModId(acId.ModId) || acId.BaseId == 0)
         return false;
 
     const auto& mods = m_world.ctx().at<ModsComponent>();
@@ -60,13 +98,12 @@ bool QuestService::ResolveEntry(const RequestQuestUpdate& acRequest, const Playe
         const auto& list = lite ? mods.GetLiteMods() : mods.GetStandardMods();
         for (const auto& [name, mod] : list)
         {
-            if (mod.id != acRequest.Id.ModId)
+            if (mod.id != acId.ModId)
                 continue;
-            if (acRequest.Id.BaseId > (lite ? 0xFFFu : 0xFFFFFFu))
+            if (acId.BaseId > (lite ? 0xFFFu : 0xFFFFFFu))
                 return false;
 
-            aEntry = {{name.c_str(), lite, acRequest.Id.BaseId}, acRequest.Stage,
-                      static_cast<Campaign::QuestEvent::Kind>(acRequest.Status), acRequest.ClientQuestType};
+            aKey = {name.c_str(), lite, acId.BaseId};
             return true;
         }
     }
@@ -76,7 +113,7 @@ bool QuestService::ResolveEntry(const RequestQuestUpdate& acRequest, const Playe
 void QuestService::QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept
 {
     const auto& event = acRecord.Event;
-    if (acRecord.Origin == acPlayer.GetId() || !IsSharedType(event.Type))
+    if (acRecord.Origin == acPlayer.GetId() || !m_policies.IsShared(event.Quest, IsSharedType(event.Type)))
         return;
 
     // Network mod IDs are assigned on connection and can change after a restart.
@@ -139,18 +176,18 @@ void QuestService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
         if (!scene.Ended && acEvent.pPlayer->HasModId(state.State.Id.ModId) && acEvent.pPlayer->HasModId(state.State.Quest.ModId))
             acEvent.pPlayer->Send(state);
     }
-    if (m_journal.IsHealthy())
+    if (m_journal.IsHealthy() && m_policies.IsHealthy())
         m_questSync.try_emplace(acEvent.pPlayer->GetId());
 }
 
 void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessage) noexcept
 {
     const auto& message = acMessage.Packet;
-    if (!IsSharedType(message.ClientQuestType) || message.Status > RequestQuestUpdate::Stopped)
+    if (message.ClientQuestType > 11 || message.Status > RequestQuestUpdate::Stopped)
         return;
 
-    Campaign::QuestEvent entry;
-    if (!ResolveEntry(message, *acMessage.pPlayer, entry))
+    Campaign::QuestEvent entry{{}, message.Stage, static_cast<Campaign::QuestEvent::Kind>(message.Status), message.ClientQuestType};
+    if (!ResolveQuestKey(message.Id, *acMessage.pPlayer, entry.Quest))
         return;
 
     // Preserve the existing per-player active quest log for other services, independently
@@ -171,7 +208,7 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     else
         it->Stage = std::max(it->Stage, message.Stage);
 
-    if (!m_journal.IsHealthy())
+    if (!m_journal.IsHealthy() || !m_policies.IsShared(entry.Quest, IsSharedType(entry.Type)))
         return;
 
     const auto result = m_journal.Append(entry, acMessage.pPlayer->GetId());
@@ -224,6 +261,10 @@ void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) n
     const auto* pPlayer = acEvent.pPlayer;
     if (!state.Id.BaseId || !state.Quest.BaseId ||
         !pPlayer->HasModId(state.Id.ModId) || !pPlayer->HasModId(state.Quest.ModId))
+        return;
+
+    Campaign::QuestKey quest;
+    if (!ResolveQuestKey(state.Quest, *pPlayer, quest) || !m_policies.IsShared(quest, true))
         return;
 
     // Reference aliases share the existing scene owner's snapshot. Validate

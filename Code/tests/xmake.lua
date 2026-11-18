@@ -8,7 +8,7 @@ target("TPTests")
     add_files("*.cpp")
     -- Has no game dependencies, so the client's remote playback timing can be tested here
     add_files("../client/Systems/PlaybackClock.cpp")
-    add_files("../server/Campaign/QuestJournal.cpp")
+    add_files("../server/Campaign/QuestJournal.cpp", "../server/Campaign/QuestPolicies.cpp")
     add_deps("SkyrimEncoding")
     add_packages(
         "tiltedcore",

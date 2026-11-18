@@ -5,7 +5,7 @@
 
 #include <map>
 #include <chrono>
-#include <Campaign/QuestJournal.h>
+#include <Campaign/QuestPolicies.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/NotifySceneState.h>
 
@@ -23,6 +23,8 @@ class QuestService
 {
 public:
     QuestService(World& aWorld, entt::dispatcher& aDispatcher);
+    void ShowCampaignStatus() const noexcept;
+    void BackupCampaign() const noexcept;
 
 private:
     struct QuestSync
@@ -37,7 +39,7 @@ private:
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
     void OnQuestSyncTick(const UpdateEvent&) noexcept;
     void OnQuestSyncAck(const PacketEvent<RequestQuestSyncAck>& acEvent) noexcept;
-    bool ResolveEntry(const RequestQuestUpdate& acRequest, const Player& acPlayer, Campaign::QuestEvent& aEntry) const noexcept;
+    bool ResolveQuestKey(const GameId& acId, const Player& acPlayer, Campaign::QuestKey& aKey) const noexcept;
     void QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept;
 
     struct SceneObserver
@@ -67,6 +69,7 @@ private:
 
     World& m_world;
     Campaign::QuestJournal m_journal;
+    Campaign::QuestPolicies m_policies;
     std::map<uint32_t, QuestSync> m_questSync;
 
     entt::scoped_connection m_questUpdateConnection;
