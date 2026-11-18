@@ -816,7 +816,9 @@ void QuestService::ApplyQuestCompletions() noexcept
             continue;
         }
 
-        if (GetHeldStages(cFormId, pQuest) || !pQuest->IsStageReached(cStage))
+        const bool cPlayingScene = std::any_of(pQuest->scenes.begin(), pQuest->scenes.end(),
+            [](const auto* pScene) { return pScene && pScene->isPlaying; });
+        if (cPlayingScene || GetHeldStages(cFormId, pQuest) || !pQuest->IsStageReached(cStage))
         {
             ++it;
             continue;
