@@ -76,6 +76,18 @@ end)
 
 The event fires after a successful durable append. Reconnect replay and journal recovery do not repeat it.
 
+## Interactive object animations
+
+Scripted `ObjectReference.PlayAnimation` and `PlayAnimationAndWait` now relay accepted named animation events for placed non-actor references. The client replays the start of the animation through the ordinary non-latent `PlayAnimation` path. The original wait event and Papyrus stack belong to the caller. Reliable events retain the object and cell plugin IDs and the sender's clock tick. The observer briefly waits for the object's 3D and plays events in order for that reference. Leaving the cell drops pending events.
+
+Live actor action playback now passes the native target event and target idle to the existing mediator at the actor's playback tick. Action, idle and target references resolve through each player's load order. Furniture playback avoids a second `Activate` call. The animation override suppresses synchronous echoes from replay and nested script wrappers. Historical actor replay leaves furniture target data out so reconnecting cannot restart an old interaction.
+
+The native behavior graph still determines what a named event starts, stops or loops. This implementation carries observed transition events and leaves the graph to run its own transitions. It cannot seek a loop to its current phase or reconstruct an in-progress loop for a late observer. The repo has no verified capture hook for arbitrary graph dispatches, the separate `Debug.SendAnimationEvent` and `PlaySyncedAnimation*SS` Papyrus natives, or Skyrim-only temporary furniture references. Those paths and any Papyrus animations started asynchronously by a behavior-graph callback need runtime traces before broadening coverage. The mod's public description establishes its use of context-aware animation and deferred activation. It does not identify the native bellows path. [Vanilla ObjectReference API](https://github.com/ianpatt/skse64/blob/25b72352adb6543fa6d0bd3795780672b2e238e0/scripts/vanilla/ObjectReference.psc) · [Immersive Interactions by JaySerpa](https://www.nexusmods.com/skyrimspecialedition/mods/47670)
+
+The Linux server at `0eefbb5a` built and passed 210 assertions in 23 cases. The loopback pair verified ordered start, loop and stop event names with their original ticks and modded object reference, rejected an empty name and an out-of-cell request, and observed no sender echo. These checks exercised transport and server filtering. Native client playback remains unverified.
+
+Validate a vanilla forge and a forge with Immersive Interactions using two Skyrim clients on matched builds. Verify the bellows when the actor approaches, enters, stays in the loop, leaves or cancels, and repeats the interaction. Use different compatible light-plugin load orders for a modded furniture reference. Test a cell transition while an event is pending and verify that the remote observer receives only the visual action and never starts crafting or runs a second activation script.
+
 ## Validation checklist
 
 Run `xmake build TPTests` and `xmake run TPTests`. Build the Linux server and Windows client with the matching branch. Build the overlay with the pinned lockfile and pnpm 9. Each replay batch has at most 16 updates and only one batch can be outstanding per player. The server retries an unacknowledged batch after two seconds. Public dialogue panels send on change, and unchanged lock state does not append another disk record.

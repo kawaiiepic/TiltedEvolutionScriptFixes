@@ -133,6 +133,12 @@ end)
         restarted.expect("Loaded 23 shared quest records")
         restarted.expect("CAMPAIGN_SMOKE_RESTORED")
         test_client("restarted")
+        with subprocess.Popen([harness, "animation-receiver", version, f"127.0.0.1:{port}"],
+                              stdout=subprocess.PIPE, text=True) as receiver:
+            assert select.select([receiver.stdout], [], [], 12)[0]
+            assert receiver.stdout.readline().strip() == "OBJECT_ANIMATION_READY"
+            test_client("animation-sender")
+            assert receiver.wait(timeout=8) == 0
         with subprocess.Popen([harness, "stock-owner", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as owner:
             assert select.select([owner.stdout], [], [], 12)[0]

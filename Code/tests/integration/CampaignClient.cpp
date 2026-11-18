@@ -10,10 +10,12 @@
 #include <Packet.hpp>
 #include <steam/isteamnetworkingutils.h>
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <utility>
 
 using namespace TiltedPhoques;
 using namespace std::chrono_literals;
@@ -122,6 +124,29 @@ public:
                 Transmit(cell);
                 AssignLock();
             }
+            if (Mode.starts_with("animation-"))
+            {
+                EnterInteriorCellRequest cell{};
+                cell.CellId = GameId(VanillaMod, 0xA21);
+                Transmit(cell);
+                AssignCharacterRequest character{};
+                character.ReferenceId = GameId(0, 0x14);
+                character.CellId = cell.CellId;
+                Transmit(character);
+            }
+            return;
+        }
+
+        if (message->GetOpcode() == NotifyScriptAnimation::Opcode)
+        {
+            assert(Mode == "animation-receiver");
+            const auto animation = CastUnique<NotifyScriptAnimation>(std::move(message));
+            assert(animation->Id == GameId(QuestMod, 0x912));
+            assert(animation->Cell == GameId(VanillaMod, 0xA21));
+            const auto& [name, tick] = kObjectAnimations.at(AnimationCount++);
+            assert(animation->EventName == name && animation->Tick == tick);
+            if (AnimationCount == kObjectAnimations.size())
+                Done = true;
             return;
         }
 
@@ -195,6 +220,30 @@ public:
             }
             else if (Mode == "write")
                 AssignLock();
+            else if (Mode == "animation-receiver")
+            {
+                std::puts("OBJECT_ANIMATION_READY");
+                std::fflush(stdout);
+            }
+            else if (Mode == "animation-sender")
+            {
+                ScriptAnimationRequest animation{};
+                animation.Id = GameId(QuestMod, 0x912);
+                animation.Cell = GameId(VanillaMod, 0xA21);
+                Transmit(animation); // Missing event name.
+                animation.Cell = GameId(VanillaMod, 0xA22);
+                animation.EventName = "WrongCell";
+                Transmit(animation);
+                animation.Cell = GameId(VanillaMod, 0xA21);
+                for (const auto& [name, tick] : kObjectAnimations)
+                {
+                    animation.EventName = name;
+                    animation.Tick = tick;
+                    Transmit(animation);
+                }
+                OwnerReady = true;
+                ReadyAt = std::chrono::steady_clock::now();
+            }
             return;
         }
         if (message->GetOpcode() == AssignObjectsResponse::Opcode)
@@ -239,7 +288,8 @@ public:
             return;
         }
 
-        if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" || Mode.starts_with("weather"))
+        if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" ||
+            Mode.starts_with("weather") || Mode.starts_with("animation-"))
         {
             if (message->GetOpcode() == NotifyQuestUpdate::Opcode)
             {
@@ -374,6 +424,10 @@ public:
     uint64_t FirstThrough{};
     uint64_t LastThrough{};
     std::vector<SharedQuestUpdate> FirstBatch;
+    size_t AnimationCount{};
+    static constexpr std::array<std::pair<const char*, uint64_t>, 3> kObjectAnimations{{
+        {"ExampleStart", 1000}, {"ExampleLoop", 1040}, {"ExampleStop", 1100}
+    }};
 };
 
 int main(int argc, char** argv)
