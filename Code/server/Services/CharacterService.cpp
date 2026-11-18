@@ -616,8 +616,9 @@ void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceR
 void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
+    const auto& overlay = m_world.ctx().at<OverlayService>();
 
-    if (!m_world.ctx().at<OverlayService>().CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
+    if (!overlay.CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
         return;
 
     NotifyDialogue notify{};
@@ -625,6 +626,12 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
     notify.SoundFilename = message.SoundFilename;
     notify.SceneId = message.SceneId;
     notify.ScenePhase = message.ScenePhase;
+
+    if (message.DialogueToken)
+    {
+        overlay.SendConversationLine(notify, message.ServerId, *acMessage.pPlayer);
+        return;
+    }
 
     const entt::entity cEntity = static_cast<entt::entity>(message.ServerId);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))
@@ -634,8 +641,9 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
 void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
+    const auto& overlay = m_world.ctx().at<OverlayService>();
 
-    if (!m_world.ctx().at<OverlayService>().CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
+    if (!overlay.CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
         return;
 
     NotifySubtitle notify{};
@@ -643,6 +651,12 @@ void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acM
     notify.Text = message.Text;
     notify.SceneId = message.SceneId;
     notify.ScenePhase = message.ScenePhase;
+
+    if (message.DialogueToken)
+    {
+        overlay.SendConversationLine(notify, message.ServerId, *acMessage.pPlayer);
+        return;
+    }
 
     const entt::entity cEntity = static_cast<entt::entity>(message.ServerId);
     if (!GameServer::Get()->SendToPlayersInRange(notify, cEntity, acMessage.GetSender()))

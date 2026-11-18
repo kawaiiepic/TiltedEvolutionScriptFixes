@@ -146,6 +146,15 @@ bool OverlayService::CanRelayDialogue(const Player& acPlayer, uint32_t aActorId,
     return pOwner && pOwner->GetOwner() == &acPlayer;
 }
 
+void OverlayService::SendConversationLine(const ServerMessage& acMessage, uint32_t aActorId, const Player& acSpeaker) const noexcept
+{
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+    {
+        if (pPlayer != &acSpeaker && IsDialogueActorInRange(aActorId, *pPlayer))
+            pPlayer->Send(acMessage);
+    }
+}
+
 void OverlayService::InvalidateOptions(DialogueSession& aSession) noexcept
 {
     aSession.Options.clear();
@@ -498,7 +507,8 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
     {
         if (!cOwner && playerId != state.Owner && playerId != cPlayerId)
             continue;
-        if (const auto* pRecipient = m_world.GetPlayerManager().GetById(playerId))
+        if (const auto* pRecipient = m_world.GetPlayerManager().GetById(playerId);
+            pRecipient && IsDialogueActorInRange(request.ActorId, *pRecipient))
         {
             notify.Token = token;
             pRecipient->Send(notify);
