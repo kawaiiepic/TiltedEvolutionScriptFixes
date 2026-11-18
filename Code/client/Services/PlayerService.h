@@ -9,7 +9,6 @@ struct DisconnectedEvent;
 struct ServerSettings;
 struct GridCellChangeEvent;
 struct CellChangeEvent;
-struct PlayerDialogueEvent;
 struct PlayerLevelEvent;
 struct PartyJoinedEvent;
 struct PartyLeftEvent;
@@ -34,7 +33,6 @@ protected:
     void OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) const noexcept;
     void OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) const noexcept;
     void OnCellChangeEvent(const CellChangeEvent& acEvent) const noexcept;
-    void OnPlayerDialogueEvent(const PlayerDialogueEvent& acEvent) const noexcept;
     void OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept;
     void OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept;
     void OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept;
@@ -81,7 +79,6 @@ private:
     entt::scoped_connection m_notifyRespawnConnection;
     entt::scoped_connection m_gridCellChangeConnection;
     entt::scoped_connection m_cellChangeConnection;
-    entt::scoped_connection m_playerDialogueConnection;
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_partyJoinedConnection;
     entt::scoped_connection m_partyLeftConnection;

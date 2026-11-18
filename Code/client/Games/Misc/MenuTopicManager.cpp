@@ -1,6 +1,7 @@
 #include "MenuTopicManager.h"
 
-#include <Events/PlayerDialogueEvent.h>
+#include <Services/OverlayService.h>
+#include <World.h>
 #include <TESObjectREFR.h>
 
 TP_THIS_FUNCTION(TPlayDialogueOption, bool, MenuTopicManager, int32_t aIndex);
@@ -25,22 +26,26 @@ bool MenuTopicManager::IsPlayerDialogueSpeaker(const TESObjectREFR* apSpeaker) n
 
 bool TP_MAKE_THISCALL(HookPlayDialogueOption, MenuTopicManager, int32_t aIndex)
 {
-    if (apThis->pOptions)
+    if (apThis->menuOpen && World::Get().GetTransport().IsOnline())
     {
-        int i = 0;
         const char* pText = nullptr;
-        for (auto option : *apThis->pOptions)
+        if (apThis->pOptions)
         {
-            if (i == aIndex)
+            int i = 0;
+            for (auto* pOption : *apThis->pOptions)
             {
-                pText = option->text;
-                break;
+                if (i++ == aIndex)
+                {
+                    if (pOption)
+                        pText = pOption->text;
+                    break;
+                }
             }
-            i++;
         }
 
-        if (pText != nullptr)
-            World::Get().GetRunner().Trigger(PlayerDialogueEvent(pText));
+        // Never invoke the native choice routine on a suggest-only client.
+        if (!World::Get().GetOverlayService().CanSelectDialogue(pText))
+            return false;
     }
 
     return TiltedPhoques::ThisCall(RealPlayDialogueOption, apThis, aIndex);

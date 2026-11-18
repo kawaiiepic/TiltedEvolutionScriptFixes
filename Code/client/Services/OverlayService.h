@@ -62,6 +62,9 @@ struct OverlayService
 
     void SendSystemMessage(const std::string& acMessage);
 
+    // Called by the existing native dialogue-choice detour. False means suggest/block only.
+    bool CanSelectDialogue(const char* apText) noexcept;
+
     void SetPlayerHealthPercentage(uint32_t aFormId) const noexcept;
 
 protected:
@@ -83,6 +86,9 @@ protected:
     void OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept;
 
 private:
+    void RefreshDialogueSession() noexcept;
+    void CloseDialogueSession() noexcept;
+    void SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
 
@@ -94,6 +100,13 @@ private:
 
     bool m_active = false;
     bool m_inGame = false;
+
+    uint32_t m_dialogueActorId{};
+    uint32_t m_dialogueToken{};
+    uint32_t m_nextDialogueToken{};
+    uint32_t m_dialogueSpeakerHandle{};
+    bool m_dialogueGranted{};
+    bool m_dialogueCanChoose{};
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
