@@ -4,17 +4,16 @@
 #include <Structs/GameId.h>
 
 #include <map>
-#include <set>
-#include <string>
-#include <tuple>
-#include <vector>
 #include <chrono>
+#include <Campaign/QuestJournal.h>
+#include <Messages/NotifyQuestUpdate.h>
 #include <Messages/NotifySceneState.h>
 
 struct World;
 struct Player;
 struct PlayerJoinEvent;
 struct RequestQuestUpdate;
+struct RequestQuestSyncAck;
 struct RequestSceneState;
 struct PlayerLeaveEvent;
 struct UpdateEvent;
@@ -26,32 +25,20 @@ public:
     QuestService(World& aWorld, entt::dispatcher& aDispatcher);
 
 private:
-    struct JournalEntry
+    struct QuestSync
     {
-        std::string Plugin;
-        bool Lite{};
-        uint32_t BaseId{};
-        uint16_t Stage{};
-        uint8_t Status{};
-        uint8_t Type{};
-    };
-
-    using QuestKey = std::tuple<std::string, bool, uint32_t>;
-    struct QuestState
-    {
-        std::set<uint16_t> Stages;
-        uint16_t HighestStage{};
-        bool Stopped{};
+        size_t Cursor{};
+        NotifyQuestUpdate Pending;
+        std::chrono::steady_clock::time_point RetryAt{};
     };
 
     void OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessage) noexcept;
     void OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept;
-    bool CanRecord(const JournalEntry& acEntry) const noexcept;
-    void Record(const JournalEntry& acEntry) noexcept;
-    void LoadJournal() noexcept;
-    bool Append(const JournalEntry& acEntry) noexcept;
-    void SendEntry(const JournalEntry& acEntry, const Player& acPlayer) const noexcept;
-    bool ResolveEntry(const RequestQuestUpdate& acRequest, const Player& acPlayer, JournalEntry& aEntry) const noexcept;
+    void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
+    void OnQuestSyncTick(const UpdateEvent&) noexcept;
+    void OnQuestSyncAck(const PacketEvent<RequestQuestSyncAck>& acEvent) noexcept;
+    bool ResolveEntry(const RequestQuestUpdate& acRequest, const Player& acPlayer, Campaign::QuestEvent& aEntry) const noexcept;
+    void QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept;
 
     struct SceneObserver
     {
@@ -68,7 +55,6 @@ private:
 
     void OnSceneState(const PacketEvent<RequestSceneState>& acEvent) noexcept;
     void OnSceneTick(const UpdateEvent&) noexcept;
-    void OnScenePlayerLeave(const PlayerLeaveEvent&) noexcept;
     void RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept;
     void BroadcastScene(const NotifySceneState& acState) noexcept;
 
@@ -77,13 +63,14 @@ private:
     std::chrono::steady_clock::time_point m_nextSceneTick{};
     entt::scoped_connection m_sceneConnection;
     entt::scoped_connection m_sceneTickConnection;
-    entt::scoped_connection m_scenePlayerLeaveConnection;
+    entt::scoped_connection m_leaveConnection;
 
     World& m_world;
-    std::vector<JournalEntry> m_journal;
-    std::map<QuestKey, QuestState> m_quests;
-    bool m_journalHealthy{true};
+    Campaign::QuestJournal m_journal;
+    std::map<uint32_t, QuestSync> m_questSync;
 
     entt::scoped_connection m_questUpdateConnection;
     entt::scoped_connection m_joinConnection;
+    entt::scoped_connection m_questSyncTickConnection;
+    entt::scoped_connection m_questSyncAckConnection;
 };

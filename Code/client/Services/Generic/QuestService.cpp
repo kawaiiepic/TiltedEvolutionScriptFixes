@@ -15,6 +15,7 @@
 #include <Events/EventDispatcher.h>
 
 #include <Messages/RequestQuestUpdate.h>
+#include <Messages/RequestQuestSyncAck.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/RequestSceneState.h>
 
@@ -62,6 +63,7 @@ void QuestService::OnConnected(const ConnectedEvent&) noexcept
 {
     m_heldStages.clear();
     m_pendingUpdates.clear();
+    m_receivedThrough = 0;
     m_pendingStops.clear();
     m_localScenes.clear();
     m_sharedScenes.clear();
@@ -80,6 +82,8 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
         const auto update = m_pendingUpdates.front();
         m_pendingUpdates.pop_front();
         ApplyQuestUpdate(update);
+        if (m_pendingUpdates.empty())
+            AcknowledgeQuestUpdates();
     }
 
     // Checked every frame rather than on scene events: an action's done event fires before its fragment runs, and the
@@ -140,6 +144,7 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_heldStages.clear();
     m_pendingUpdates.clear();
+    m_receivedThrough = 0;
     m_pendingStops.clear();
     m_localScenes.clear();
     m_sharedScenes.clear();
@@ -727,13 +732,32 @@ HeldStages* QuestService::GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest
     return &held;
 }
 
-void QuestService::OnQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
+void QuestService::OnQuestUpdate(const NotifyQuestUpdate& acBatch) noexcept
 {
-    if (m_world.GetTransport().IsOnline())
-        m_pendingUpdates.push_back(acUpdate);
+    if (!m_world.GetTransport().IsOnline() || acBatch.Updates.empty() || !acBatch.Through)
+        return;
+    if (acBatch.Through == m_receivedThrough && m_pendingUpdates.empty())
+    {
+        AcknowledgeQuestUpdates();
+        return;
+    }
+    if (acBatch.Through <= m_receivedThrough || !m_pendingUpdates.empty())
+        return;
+
+    m_receivedThrough = acBatch.Through;
+    m_pendingUpdates.assign(acBatch.Updates.begin(), acBatch.Updates.end());
 }
 
-void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
+void QuestService::AcknowledgeQuestUpdates() noexcept
+{
+    // This acknowledges delivery to the local quest service. A reconnect always
+    // replays from the start because the character may have loaded an older save.
+    RequestQuestSyncAck ack{};
+    ack.Through = m_receivedThrough;
+    m_world.GetTransport().Send(ack);
+}
+
+void QuestService::ApplyQuestUpdate(const SharedQuestUpdate& acUpdate) noexcept
 {
     const uint32_t cFormId = m_world.GetModSystem().GetGameId(acUpdate.Id);
     if (!cFormId)
@@ -743,14 +767,14 @@ void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
     if (!pQuest || IsNonSyncableQuest(pQuest))
         return;
 
-    if (acUpdate.Status == NotifyQuestUpdate::Stopped)
+    if (acUpdate.Status == SharedQuestUpdate::Stopped)
     {
         if (!pQuest->IsStopped())
             m_pendingStops[cFormId] = acUpdate.Stage;
         return;
     }
 
-    if (acUpdate.Status != NotifyQuestUpdate::Started && acUpdate.Status != NotifyQuestUpdate::StageUpdate)
+    if (acUpdate.Status != SharedQuestUpdate::Started && acUpdate.Status != SharedQuestUpdate::StageUpdate)
         return;
 
     // Never restart a locally completed quest just to replay an old stage.
@@ -761,7 +785,7 @@ void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
     {
         // A fresh quest can have currentStage == 0 before it is actually running.
         // Use the already-exposed native start routine, without forcing alias filling.
-        if (acUpdate.Status == NotifyQuestUpdate::Started && acUpdate.Stage == 0 &&
+        if (acUpdate.Status == SharedQuestUpdate::Started && acUpdate.Stage == 0 &&
             pQuest->IsStopped() && !pQuest->alreadyRun && !pQuest->IsStageDone(0))
         {
             ScopedQuestOverride override;
@@ -788,7 +812,7 @@ void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
     ScopedQuestOverride override;
     if (pQuest->ScriptSetStage(acUpdate.Stage))
     {
-        if (acUpdate.Status == NotifyQuestUpdate::Started)
+        if (acUpdate.Status == SharedQuestUpdate::Started)
             pQuest->SetActive(true);
         auto& held = m_heldStages[cFormId];
         held.PendingItems.insert(held.PendingItems.end(), pQuest->GetStageItemCount(acUpdate.Stage), acUpdate.Stage);

@@ -646,3 +646,41 @@ TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
         REQUIRE(*CastUnique<NotifySceneState>(std::move(message)) == snapshot);
     }
 }
+
+TEST_CASE("Campaign replay batch and acknowledgement round trip", "[encoding.campaign]")
+{
+    constexpr uint64_t cThrough = (1ull << 40) + 12;
+
+    NotifyQuestUpdate batch;
+    batch.Through = cThrough;
+    batch.Updates = {
+        {GameId(1, 0xABCDEF), 10, SharedQuestUpdate::Started},
+        {GameId(0, 0x123456), 40, SharedQuestUpdate::StageUpdate},
+        {GameId(0, 0x123456), 40, SharedQuestUpdate::Stopped},
+    };
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        batch.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ServerMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == NotifyQuestUpdate::Opcode);
+        const auto decoded = CastUnique<NotifyQuestUpdate>(std::move(message));
+        REQUIRE(decoded->Through == cThrough);
+        REQUIRE(decoded->Updates == batch.Updates);
+    }
+
+    RequestQuestSyncAck ack;
+    ack.Through = cThrough;
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        ack.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ClientMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == RequestQuestSyncAck::Opcode);
+        REQUIRE(CastUnique<RequestQuestSyncAck>(std::move(message))->Through == cThrough);
+    }
+}

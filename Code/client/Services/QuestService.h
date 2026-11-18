@@ -58,7 +58,7 @@ private:
     // The quest's held stages, while it has stages to apply or fragments to wait for. Drops the stages that can't be
     // applied anymore.
     HeldStages* GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest) noexcept;
-    void ApplyQuestUpdate(const NotifyQuestUpdate&) noexcept;
+    void ApplyQuestUpdate(const SharedQuestUpdate&) noexcept;
     void ObserveScene(uint32_t aFormId) noexcept;
     void RefreshSceneStates() noexcept;
     void OnSceneState(const NotifySceneState& acState) noexcept;
@@ -85,7 +85,9 @@ private:
     entt::scoped_connection m_joinedConnection;
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_disconnectedConnection;
-    std::deque<NotifyQuestUpdate> m_pendingUpdates;
+    std::deque<SharedQuestUpdate> m_pendingUpdates;
+    uint64_t m_receivedThrough{};
+    void AcknowledgeQuestUpdates() noexcept;
     Map<uint32_t, uint16_t> m_pendingStops;
     entt::scoped_connection m_questUpdateConnection;
 };
