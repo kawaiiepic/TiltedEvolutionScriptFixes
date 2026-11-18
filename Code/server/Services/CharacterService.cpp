@@ -403,9 +403,11 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
         auto& cellIdComponent = view.get<CellIdComponent>(*itor);
         const auto& characterComponent = view.get<CharacterComponent>(*itor);
         const auto& playerCell = acMessage.pPlayer->GetCellComponent();
-        if (characterComponent.IsPlayer() && playerCell &&
-            (playerCell.Cell != movement.CellId || playerCell.WorldSpaceId != movement.WorldSpaceId))
+        const bool cHasPlayerCell = characterComponent.IsPlayer() && playerCell;
+        if (cHasPlayerCell && (playerCell.WorldSpaceId != movement.WorldSpaceId ||
+            (playerCell.IsInInteriorCell() && playerCell.Cell != movement.CellId)))
             continue;
+        const GameId cCell = cHasPlayerCell ? playerCell.Cell : movement.CellId;
 
         if (message.Tick > movementComponent.Tick)
         {
@@ -415,11 +417,11 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
             movementComponent.Variables = movement.Variables;
             movementComponent.Direction = movement.Direction;
 
-            cellIdComponent.Cell = movement.CellId;
+            cellIdComponent.Cell = cCell;
             cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
             cellIdComponent.CenterCoords = GridCellCoords::CalculateGridCellCoords(movement.Position.x, movement.Position.y);
         }
-        else if (cellIdComponent.Cell != movement.CellId || cellIdComponent.WorldSpaceId != movement.WorldSpaceId)
+        else if (cellIdComponent.Cell != cCell || cellIdComponent.WorldSpaceId != movement.WorldSpaceId)
             continue;
 
         for (auto pPlayer : m_world.GetPlayerManager())

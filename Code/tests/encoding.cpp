@@ -754,3 +754,20 @@ TEST_CASE("Dropping missing stock does not create a negative inventory row", "[e
     REQUIRE(inventory.Entries.size() == 1);
     REQUIRE(inventory.Entries.front().Count == INT32_MAX);
 }
+
+TEST_CASE("Movement packets retain the ownership grant", "[encoding.campaign]")
+{
+    ClientReferencesMoveRequest movement{};
+    movement.Tick = 420;
+    movement.Updates[77].OwnershipEpoch = 32;
+    movement.Updates[77].CellId = GameId(0, 0x501);
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    movement.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == ClientReferencesMoveRequest::Opcode);
+    REQUIRE(*CastUnique<ClientReferencesMoveRequest>(std::move(message)) == movement);
+}
