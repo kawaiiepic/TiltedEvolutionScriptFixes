@@ -2,15 +2,10 @@
 
 #include <Events/ConnectedEvent.h>
 #include <Events/DisconnectedEvent.h>
-#include <Events/PartyLeftEvent.h>
 #include <Events/UpdateEvent.h>
 
 #include <Services/QuestService.h>
-#include <Services/ImguiService.h>
-#include <Services/OverlayService.h>
 #include <Services/TransportService.h>
-
-#include <OverlayApp.hpp>
 
 #include <PlayerCharacter.h>
 #include <Forms/TESQuest.h>
@@ -41,12 +36,11 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     m_joinedConnection = aDispatcher.sink<ConnectedEvent>().connect<&QuestService::OnConnected>(this);
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&QuestService::OnUpdate>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&QuestService::OnDisconnected>(this);
-    m_leftConnection = aDispatcher.sink<PartyLeftEvent>().connect<&QuestService::OnPartyLeft>(this);
     m_questUpdateConnection = aDispatcher.sink<NotifyQuestUpdate>().connect<&QuestService::OnQuestUpdate>(this);
 
     // Game events:
     // Starts, stops and stages are sent from TESQuestStartStopEvent and TESQuestStageEvent, which fire while the quest
-    // changes. Outside a party they only prompt the overlay.
+    // changes. Shared progression is independent of party membership.
     // TESQuestStageItemDoneEvent fires once for each of a stage's log entries, after its fragment has run. That's too
     // late to send on, but it tells when an applied held stage is done.
     // The scene, scene action, phase and dialogue line events are only logged, to follow scenes when debugging held
@@ -64,22 +58,23 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
 
 void QuestService::OnConnected(const ConnectedEvent&) noexcept
 {
-    // TODO: this should be followed with whatever the quest leader selected
-    /*
-    // deselect any active quests
-    auto* pPlayer = PlayerCharacter::Get();
-    for (auto& objective : pPlayer->objectives)
-    {
-        if (auto* pQuest = objective.instance->quest)
-            pQuest->SetActive(false);
-    }
-    */
+    m_heldStages.clear();
+    m_pendingUpdates.clear();
+    m_pendingStops.clear();
 }
 
 void QuestService::OnUpdate(const UpdateEvent&) noexcept
 {
-    if (m_heldStages.empty())
+    if (!m_world.GetTransport().IsOnline())
         return;
+
+    // Apply a bounded amount of history per frame, rather than starting every fragment in a single packet pump.
+    if (!m_pendingUpdates.empty())
+    {
+        const auto update = m_pendingUpdates.front();
+        m_pendingUpdates.pop_front();
+        ApplyQuestUpdate(update);
+    }
 
     // Checked every frame rather than on scene events: an action's done event fires before its fragment runs, and the
     // action only counts as complete afterwards, with no event of its own
@@ -96,16 +91,40 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
             ReleaseUncheckedStages(pQuest, *pHeld);
         }
     }
+
+    Vector<uint32_t> stopped;
+    for (const auto& [formId, stage] : m_pendingStops)
+    {
+        TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(formId));
+        if (!pQuest || pQuest->IsStopped())
+        {
+            stopped.push_back(formId);
+            continue;
+        }
+
+        if (GetHeldStages(formId, pQuest) || !pQuest->IsStageReached(stage))
+            continue;
+
+        // Do not terminate an in-progress scene, even if the server has already seen a stop.
+        bool playing = false;
+        for (const auto* pScene : pQuest->scenes)
+            playing |= pScene && pScene->isPlaying;
+        if (playing)
+            continue;
+
+        ScopedQuestOverride override;
+        StopQuest(formId);
+        stopped.push_back(formId);
+    }
+    for (uint32_t formId : stopped)
+        m_pendingStops.erase(formId);
 }
 
 void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_heldStages.clear();
-}
-
-void QuestService::OnPartyLeft(const PartyLeftEvent&) noexcept
-{
-    m_heldStages.clear();
+    m_pendingUpdates.clear();
+    m_pendingStops.clear();
 }
 
 BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, const EventDispatcher<TESQuestStartStopEvent>*)
@@ -117,12 +136,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
     if (apEvent->started && apEvent->failed)
         return BSTEventResult::kOk;
 
-    if (!m_world.Get().GetPartyService().IsInParty())
-    {
-        if (apEvent->started)
-            NotifyOverlayOfQuestUpdate(apEvent->formId);
+    if (!m_world.GetTransport().IsOnline())
         return BSTEventResult::kOk;
-    }
 
     spdlog::info("Quest start/stop event: {:X}", apEvent->formId);
 
@@ -151,7 +166,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
             {
                 GameId Id;
                 auto& modSys = m_world.GetModSystem();
-                if (modSys.GetServerModId(formId, Id))
+                if (m_world.GetTransport().IsOnline() && modSys.GetServerModId(formId, Id))
                 {
                     RequestQuestUpdate update;
                     update.Id = Id;
@@ -172,11 +187,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
     if (ScopedQuestOverride::IsOverriden())
         return BSTEventResult::kOk;
 
-    if (!m_world.Get().GetPartyService().IsInParty())
-    {
-        NotifyOverlayOfQuestUpdate(apEvent->formId);
+    if (!m_world.GetTransport().IsOnline())
         return BSTEventResult::kOk;
-    }
 
     spdlog::info("Quest stage event: {:X}, stage: {}", apEvent->formId, apEvent->stageId);
 
@@ -207,7 +219,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
             {
                 GameId Id;
                 auto& modSys = m_world.GetModSystem();
-                if (modSys.GetServerModId(formId, Id))
+                if (m_world.GetTransport().IsOnline() && modSys.GetServerModId(formId, Id))
                 {
                     RequestQuestUpdate update;
                     update.Id = Id;
@@ -403,9 +415,8 @@ static bool IsCheckedByPlayingScene(TESQuest* apQuest, uint16_t aStage) noexcept
 void QuestService::HoldStage(TESQuest* apQuest, uint16_t aStage) noexcept
 {
     Vector<uint16_t>& stages = m_heldStages[apQuest->formID].Stages;
-    auto it = std::lower_bound(stages.begin(), stages.end(), aStage);
-    if (it == stages.end() || *it != aStage)
-        stages.insert(it, aStage);
+    if (std::find(stages.begin(), stages.end(), aStage) == stages.end())
+        stages.push_back(aStage);
 
     spdlog::info("Holding member quest stage {} for {:X} until no playing scene of it checks it", aStage, apQuest->formID);
 }
@@ -506,96 +517,61 @@ HeldStages* QuestService::GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest
     return &held;
 }
 
-void QuestService::OnQuestUpdate(const NotifyQuestUpdate& aUpdate) noexcept
+void QuestService::OnQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
 {
-    ModSystem& modSystem = World::Get().GetModSystem();
-    uint32_t formId = modSystem.GetGameId(aUpdate.Id);
-    TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(formId));
-    if (!pQuest)
-    {
-        spdlog::error("Failed to find quest, base id: {:X}, mod id: {:X}", aUpdate.Id.BaseId, aUpdate.Id.ModId);
-        return;
-    }
-
-    if (aUpdate.Status == NotifyQuestUpdate::StageUpdate && pQuest->IsStageReached(aUpdate.Stage))
-    {
-        spdlog::info("Remote quest {:X} already reached stage {}, current stage: {}", formId, aUpdate.Stage, pQuest->currentStage);
-        return;
-    }
-
-    // A member stage the leader's playing scene checks can push it past its own scripts (a phase ending before its lines
-    // and scripts ran), so hold it, and the stages after it, until the scene gets there or reaches it itself.
-    const bool cIsLeaderStage = aUpdate.Status == NotifyQuestUpdate::StageUpdate && m_world.GetPartyService().IsLeader();
-    HeldStages* pHeld = cIsLeaderStage || aUpdate.Status == NotifyQuestUpdate::Stopped ? GetHeldStages(formId, pQuest) : nullptr;
-    if (cIsLeaderStage && (pHeld || IsCheckedByPlayingScene(pQuest, aUpdate.Stage)))
-    {
-        HoldStage(pQuest, aUpdate.Stage);
-        return;
-    }
-
-    // The member reached the held stages before stopping the quest, and once it's stopped here they're dropped
-    if (pHeld && !pHeld->Stages.empty())
-    {
-        spdlog::info("Applying {} held member quest stages for {:X} before it stops", pHeld->Stages.size(), formId);
-        ApplyHeldStages(pQuest, *pHeld, pHeld->Stages.size());
-    }
-
-    if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
-    {
-        spdlog::info(__FUNCTION__ ": receiving type none/misc quest update gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                     aUpdate.Id.LogFormat(), aUpdate.Stage, aUpdate.Status,
-                     aUpdate.ClientQuestType, formId, pQuest->fullName.value.AsAscii());
-    }
-
-    // The quest events fire synchronously while the stage is set, don't send them back
-    ScopedQuestOverride _;
-
-    bool bResult = false;
-    switch (aUpdate.Status)
-    {
-    case NotifyQuestUpdate::Started:
-    {
-        pQuest->ScriptSetStage(aUpdate.Stage);
-        pQuest->SetActive(true);
-        bResult = true;
-        spdlog::info("Remote quest started: {:X}, stage: {}", formId, aUpdate.Stage);
-        break;
-    }
-    case NotifyQuestUpdate::StageUpdate:
-        pQuest->ScriptSetStage(aUpdate.Stage);
-        bResult = true;
-        spdlog::info("Remote quest updated: {:X}, stage: {}", formId, aUpdate.Stage);
-        break;
-    case NotifyQuestUpdate::Stopped:
-        bResult = StopQuest(formId);
-        spdlog::info("Remote quest stopped: {:X}, stage: {}", formId, aUpdate.Stage);
-        break;
-    default: break;
-    }
-
-    if (!bResult)
-        spdlog::error("Failed to update the client quest state, quest: {:X}, stage: {}, status: {}", formId, aUpdate.Stage, aUpdate.Status);
+    if (m_world.GetTransport().IsOnline())
+        m_pendingUpdates.push_back(acUpdate);
 }
 
-void QuestService::NotifyOverlayOfQuestUpdate(uint32_t aFormId) noexcept
+void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
 {
-    if (!m_world.GetTransport().IsOnline())
+    const uint32_t cFormId = m_world.GetModSystem().GetGameId(acUpdate.Id);
+    if (!cFormId)
         return;
 
-    // Nobody around to party with, or the invite toast already prompts the player to join one.
-    const auto remotePlayerView = m_world.view<PlayerComponent, RemoteComponent>();
-    if (m_world.GetPartyService().HasPendingInvitations() || remotePlayerView.begin() == remotePlayerView.end())
-        return;
-
-    TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(aFormId));
+    TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(cFormId));
     if (!pQuest || IsNonSyncableQuest(pQuest))
         return;
 
-    // Hidden background quests and minor misc tasks are too noisy to prompt about
-    if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
+    if (acUpdate.Status == NotifyQuestUpdate::Stopped)
+    {
+        if (!pQuest->IsStopped())
+            m_pendingStops[cFormId] = acUpdate.Stage;
+        return;
+    }
+
+    if (acUpdate.Status != NotifyQuestUpdate::Started && acUpdate.Status != NotifyQuestUpdate::StageUpdate)
         return;
 
-    m_world.GetOverlayService().GetOverlayApp()->ExecuteAsync("questUpdated");
+    // Never restart a locally completed quest just to replay an old stage.
+    if (pQuest->IsStopped() && (pQuest->flags & TESQuest::Flags::Completed))
+        return;
+
+    if (pQuest->IsStageReached(acUpdate.Stage))
+        return;
+
+    if (!pQuest->IsStopped())
+    {
+        // All clients protect their scenes, not just a party leader. Hold subsequent stages
+        // until earlier fragments finish or a scene is ready for the required stage.
+        HoldStage(pQuest, acUpdate.Stage);
+        return;
+    }
+
+    // Use the existing native stage path to start a stopped quest. Track its fragments just
+    // as for an already-running quest. No guessed engine offsets or new hooks are needed.
+    ScopedQuestOverride override;
+    if (pQuest->ScriptSetStage(acUpdate.Stage))
+    {
+        if (acUpdate.Status == NotifyQuestUpdate::Started)
+            pQuest->SetActive(true);
+        auto& held = m_heldStages[cFormId];
+        held.PendingItems.insert(held.PendingItems.end(), pQuest->GetStageItemCount(acUpdate.Stage), acUpdate.Stage);
+    }
+    else
+    {
+        spdlog::warn("Unable to apply shared quest {:X} stage {}; reconnect to retry journal", cFormId, acUpdate.Stage);
+    }
 }
 
 bool QuestService::StopQuest(uint32_t aformId)
@@ -624,8 +600,12 @@ bool QuestService::IsNonSyncableQuest(TESQuest* apQuest)
     // Quests with no quest stages are never synced. Most TESQues::Type:: quests should
     // be synced, including Type::None and Type::Miscellaneous, but there are a few
     // known exceptions that should be excluded that are in the table.
-    return    apQuest->stages.Empty() 
-           || std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
+    const char* pName = apQuest->idName.AsAscii();
+    const bool cPersonal = pName && (std::strncmp(pName, "RelationshipMarriage", 20) == 0 ||
+        std::strcmp(pName, "PlayerWerewolfQuest") == 0 || std::strcmp(pName, "PlayerVampireQuest") == 0);
+    return apQuest->stages.Empty() || (apQuest->formID >> 24) == 0xFF ||
+           (apQuest->flags & TESQuest::Flags::AllowRepeatStages) || cPersonal ||
+           std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
 }
 
 void QuestService::DebugDumpQuests()
