@@ -36,6 +36,8 @@
 #include <Structs/AnimationGraphDescriptorManager.h>
 #include <Structs/AnimationVariables.h>
 
+#include <optional>
+
 extern const AnimationGraphDescriptor* BehaviorVarPatch(BSAnimationGraphManager* pManager, Actor* pActor);
 
 namespace
@@ -971,21 +973,23 @@ uint32_t TESObjectREFR::GetAnimationVariableInt(BSFixedString* apVariableName) n
 
 namespace
 {
-bool ShouldCaptureObjectAnimation(TESObjectREFR* apReference, const BSFixedString* apAnimation) noexcept
+std::optional<ScriptAnimationEvent> CaptureObjectAnimation(TESObjectREFR* apReference, const BSFixedString* apAnimation) noexcept
 {
-    return !ScopedAnimationOverride::IsOverriden() && !ScopedActivateOverride::IsOverriden() &&
-           apReference && !apReference->IsTemporary() && !Cast<Actor>(apReference) &&
-           apAnimation && apAnimation->AsAscii() && *apAnimation->AsAscii();
+    if (ScopedAnimationOverride::IsOverriden() || ScopedActivateOverride::IsOverriden() ||
+        !apReference || apReference->IsTemporary() || Cast<Actor>(apReference) ||
+        !apAnimation || !apAnimation->AsAscii() || !*apAnimation->AsAscii())
+        return std::nullopt;
+    return ScriptAnimationEvent(apReference->formID, apAnimation->AsAscii());
 }
 }
 
 bool TP_MAKE_THISCALL(HookPlayAnimationAndWait, void, uint32_t auiStackID, TESObjectREFR* apSelf, BSFixedString* apAnimation, BSFixedString* apEventName)
 {
-    const bool cCapture = ShouldCaptureObjectAnimation(apSelf, apAnimation);
+    auto event = CaptureObjectAnimation(apSelf, apAnimation);
     ScopedAnimationOverride override;
     const bool cResult = TiltedPhoques::ThisCall(RealPlayAnimationAndWait, apThis, auiStackID, apSelf, apAnimation, apEventName);
-    if (cCapture && cResult)
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, apAnimation->AsAscii()));
+    if (event && cResult)
+        World::Get().GetRunner().Trigger(std::move(*event));
     return cResult;
 }
 
@@ -1008,11 +1012,11 @@ bool TESObjectREFR::SendAnimationEvent(BSFixedString* apEventName) noexcept
 
 bool TP_MAKE_THISCALL(HookPlayAnimation, void, uint32_t auiStackID, TESObjectREFR* apSelf, BSFixedString* apEventName)
 {
-    const bool cCapture = ShouldCaptureObjectAnimation(apSelf, apEventName);
+    auto event = CaptureObjectAnimation(apSelf, apEventName);
     ScopedAnimationOverride override;
     const bool cResult = TiltedPhoques::ThisCall(RealPlayAnimation, apThis, auiStackID, apSelf, apEventName);
-    if (cCapture && cResult)
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, apEventName->AsAscii()));
+    if (event && cResult)
+        World::Get().GetRunner().Trigger(std::move(*event));
     return cResult;
 }
 
@@ -1022,7 +1026,8 @@ bool TP_MAKE_THISCALL(HookActivate, TESObjectREFR, TESObjectREFR* apActivator, u
 
     // Exclude books from activation since only reading them removes them from the cell
     // Note: Books are now unsynced 
-    if (pActivator && apThis->baseForm->formType != FormType::Book)
+    if (!ScopedAnimationOverride::IsOverriden() && pActivator && apThis->baseForm &&
+        apThis->baseForm->formType != FormType::Book)
     {
         auto openState = TESObjectREFR::kNone;
         if (apThis->baseForm->formType == FormType::Door)

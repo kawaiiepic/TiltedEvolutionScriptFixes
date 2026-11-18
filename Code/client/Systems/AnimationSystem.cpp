@@ -54,12 +54,12 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 
         // Play the animation
         TESActionData actionData(first.Type & 0x3, apActor, pAction, pTarget);
-        actionData.eventName = BSFixedString(first.EventName.c_str());
+        actionData.eventName.Set(first.EventName.c_str());
         if (first.IdleId)
             actionData.idleForm = Cast<TESIdleForm>(TESForm::GetById(mods.GetGameId(first.IdleId)));
         if (pTarget)
         {
-            actionData.targetEventName = BSFixedString(first.TargetEventName.c_str());
+            actionData.targetEventName.Set(first.TargetEventName.c_str());
             if (first.TargetIdleId)
                 actionData.targetIdleForm = Cast<TESIdleForm>(TESForm::GetById(mods.GetGameId(first.TargetIdleId)));
         }

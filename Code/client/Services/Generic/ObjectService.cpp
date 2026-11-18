@@ -556,6 +556,7 @@ void ObjectService::OnUpdate(const UpdateEvent&) noexcept
         {
             BSFixedString eventName(it->EventName.c_str());
             pObject->PlayAnimation(&eventName);
+            eventName.Release();
         }
         it = m_pendingAnimations.erase(it);
     }
