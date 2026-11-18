@@ -4,9 +4,13 @@
 #include <DInputHook.hpp>
 
 #include <Services/OverlayClient.h>
+#include <Services/OverlayService.h>
 #include <Services/TransportService.h>
 
 #include <Messages/SendChatMessageRequest.h>
+#include <Messages/PlayerDialogueRequest.h>
+#include <limits>
+#include <cmath>
 #include <Messages/TeleportRequest.h>
 
 #include <Events/SetTimeCommandEvent.h>
@@ -49,6 +53,36 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessRevealPlayersMessage();
         else if (eventName == "sendMessage")
             ProcessChatMessage(eventArgs);
+        else if (eventName == "voteDialogue" || eventName == "manageDialogue")
+        {
+            // Send numeric arguments through the existing CEF event bridge, not chat.
+            const auto readId = [&](size_t aIndex, uint32_t& aValue)
+            {
+                const double value = eventArgs->GetType(aIndex) == VTYPE_DOUBLE
+                    ? eventArgs->GetDouble(aIndex) : static_cast<double>(eventArgs->GetInt(aIndex));
+                if (value < 0 || value > std::numeric_limits<uint32_t>::max() || !std::isfinite(value) || std::floor(value) != value)
+                    return false;
+                aValue = static_cast<uint32_t>(value);
+                return true;
+            };
+            PlayerDialogueRequest request{};
+            if (eventArgs->GetSize() == 3 &&
+                readId(0, request.ActorId) && readId(1, request.Revision) && readId(2, request.Index))
+            {
+                if (eventName == "manageDialogue")
+                {
+                    World::Get().GetRunner().Queue([request]()
+                    {
+                        World::Get().GetOverlayService().ManageDialogue(request.ActorId, request.Revision, request.Index);
+                    });
+                }
+                else
+                {
+                    request.Action = PlayerDialogueRequest::Vote;
+                    World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+                }
+            }
+        }
         else if (eventName == "setTime")
             ProcessSetTimeCommand(eventArgs);
         else if (eventName == "launchParty")

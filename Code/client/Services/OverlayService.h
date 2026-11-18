@@ -1,6 +1,8 @@
 #pragma once
 
 #include <include/internal/cef_ptr.h>
+#include <vector>
+#include <chrono>
 
 namespace TiltedPhoques
 {
@@ -24,7 +26,6 @@ struct NotifyPlayerDialogue;
 struct ConnectionErrorEvent;
 struct NotifyPlayerLevel;
 struct NotifyPlayerCellChanged;
-struct NotifyTeleport;
 struct NotifyPlayerHealthUpdate;
 enum ChatMessageTypes;
 struct PartyJoinedEvent;
@@ -62,6 +63,11 @@ struct OverlayService
 
     void SendSystemMessage(const std::string& acMessage);
 
+    // Called by the existing native dialogue-choice detour. False means suggest/block only.
+    uint32_t GetDialogueGrant(uint32_t aActorId) const noexcept;
+    bool CanSelectDialogue(const char* apText) noexcept;
+    void ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept;
+
     void SetPlayerHealthPercentage(uint32_t aFormId) const noexcept;
 
 protected:
@@ -77,12 +83,15 @@ protected:
     void OnPlayerLeft(const NotifyPlayerLeft&) noexcept;
     void OnPlayerLevel(const NotifyPlayerLevel&) noexcept;
     void OnPlayerCellChanged(const NotifyPlayerCellChanged& acMessage) const noexcept;
-    void OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept;
     void OnNotifyPlayerHealthUpdate(const NotifyPlayerHealthUpdate& acMessage) noexcept;
     void OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept;
     void OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept;
 
 private:
+    void RefreshDialogueSession() noexcept;
+    void CloseDialogueSession() noexcept;
+    void PublishDialogueOptions() noexcept;
+    bool SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
 
@@ -94,6 +103,18 @@ private:
 
     bool m_active = false;
     bool m_inGame = false;
+
+    uint32_t m_dialogueActorId{};
+    uint32_t m_dialogueToken{};
+    uint32_t m_nextDialogueToken{};
+    uint32_t m_dialogueSpeakerHandle{};
+    uint32_t m_dialoguePanelRevision{};
+    bool m_dialogueYielded{};
+    bool m_dialogueGranted{};
+    bool m_dialogueCanChoose{};
+    bool m_dialogueOptionsPublished{};
+    std::vector<TiltedPhoques::String> m_lastDialogueOptions;
+    std::chrono::steady_clock::time_point m_dialoguePublishAfter{};
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
@@ -108,7 +129,6 @@ private:
     entt::scoped_connection m_playerRemovedConnection;
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_cellChangedConnection;
-    entt::scoped_connection m_teleportConnection;
     entt::scoped_connection m_playerHealthConnection;
     entt::scoped_connection m_partyJoinedConnection;
     entt::scoped_connection m_partyLeftConnection;

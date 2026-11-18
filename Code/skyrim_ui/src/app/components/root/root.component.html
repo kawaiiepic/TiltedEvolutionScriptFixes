@@ -5,6 +5,27 @@
     <app-group></app-group>
   </ng-container>
 
+  <div class="shared-dialogues" [class.interactive]="active$ | async">
+    <section class="shared-dialogue" *ngFor="let panel of sharedDialogues$ | async; trackBy: trackDialogue">
+      <header>{{ panel.npc }} <small>{{ panel.canChoose ? 'You control dialogue' : panel.owner + ' controls dialogue' }}</small></header>
+      <p *ngIf="!panel.options.length">Waiting for dialogue options...</p>
+      <button type="button" *ngFor="let option of panel.options; let i = index"
+        [class.selected]="panel.selected === i"
+        [disabled]="!panel.canVote || !(active$ | async) || !option"
+        (click)="voteDialogue(panel, i)">
+        <span>{{ option }}</span><small>{{ panel.votes[i] || 0 }} votes</small>
+      </button>
+      <ng-container *ngIf="panel.canChoose">
+        <button type="button" [disabled]="!(active$ | async)" (click)="toggleDialoguePrivacy(panel)">
+          {{ panel.isPrivate ? 'Make public' : 'Make private' }}
+        </button>
+        <button type="button" *ngIf="panel.canPass" [disabled]="!(active$ | async)" (click)="passDialogue(panel)">
+          Pass control
+        </button>
+      </ng-container>
+      <footer *ngIf="panel.canVote">Open the Together overlay to vote.</footer>
+    </section>
+  </div>
   <app-notification-popup-container
     class="app-notification-popup"
   ></app-notification-popup-container>

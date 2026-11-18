@@ -16,19 +16,12 @@ bool Factions::operator!=(const Factions& acRhs) const noexcept
 
 void Factions::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
-    // Limit the number of factions to send
-    Serialization::WriteVarInt(aWriter, NpcFactions.size() & 0x1FF);
-
-    for (auto& entry : NpcFactions)
+    for (const auto* pEntries : {&NpcFactions, &ExtraFactions})
     {
-        entry.Serialize(aWriter);
-    }
-
-    Serialization::WriteVarInt(aWriter, ExtraFactions.size() & 0x1FF);
-
-    for (auto& entry : ExtraFactions)
-    {
-        entry.Serialize(aWriter);
+        const size_t cCount = std::min<size_t>(pEntries->size(), 0x1FF);
+        Serialization::WriteVarInt(aWriter, cCount);
+        for (size_t i = 0; i < cCount; ++i)
+            (*pEntries)[i].Serialize(aWriter);
     }
 }
 

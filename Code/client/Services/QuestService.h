@@ -3,34 +3,20 @@
 #include <World.h>
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Messages/NotifyQuestUpdate.h>
+#include <deque>
+#include <map>
+#include <set>
+#include <chrono>
+#include <Messages/NotifySceneState.h>
 
-struct NotifyQuestUpdate;
 struct DisconnectedEvent;
-struct PartyLeftEvent;
 struct UpdateEvent;
 
 struct TESQuest;
+struct BGSScene;
 
-/**
- * @brief Syncs quest starts, stops and stages across the party
- *
- * Every client runs the party's quests itself (scripts, scenes, dialogue), and only starts, stops and stages are
- * shared. Anything else a quest holds (aliases, script properties) only matches when the stage fragments produce it.
- *
- * Sending: TESQuestStartStopEvent and TESQuestStageEvent go out as RequestQuestUpdate, only in a party (outside one, an
- * update may prompt the overlay to suggest one). Failed starts, quests without stages and those in
- * kNonSyncableQuestIds are never sent, and the server drops None/Miscellaneous ones unless bEnableMiscQuestSync is set.
- *
- * Relaying: the server sends updates to the rest of the party as NotifyQuestUpdate. Members' scripts often reach the
- * same stage on their own, so it relays each once, from whoever reaches it first, until the quest next starts or stops.
- *
- * Applying: stages go through ScriptSetStage so their fragments run (and a stopped quest restarts), skipping those
- * already reached. Stops skip scripts. ScopedQuestOverride keeps the events this fires from being sent back.
- *
- * Scenes: setting a stage a playing scene waits on can end its phase early, skipping its lines and scripts and leaving
- * the quest stuck. So the leader, whose world the party follows, holds member stages that an upcoming phase checks and
- * queues later ones behind them. Members apply every stage right away.
- */
+/** @brief Applies server-wide quest progression using the native client quest engine. */
 class QuestService final : public BSTEventSink<TESQuestStartStopEvent>,
                            BSTEventSink<TESQuestStageEvent>,
                            BSTEventSink<TESQuestStageItemDoneEvent>,
@@ -49,7 +35,7 @@ public:
 
     struct HeldStages
     {
-        // Member stages not applied yet, sorted
+        // Stages not applied yet, in server journal order
         Vector<uint16_t> Stages{};
         // A stage per log entry of the applied stages whose fragment hasn't run yet
         Vector<uint16_t> PendingItems{};
@@ -59,7 +45,6 @@ private:
     void OnConnected(const ConnectedEvent&) noexcept;
     void OnUpdate(const UpdateEvent&) noexcept;
     void OnDisconnected(const DisconnectedEvent&) noexcept;
-    void OnPartyLeft(const PartyLeftEvent&) noexcept;
 
     BSTEventResult OnEvent(const TESQuestStartStopEvent*, const EventDispatcher<TESQuestStartStopEvent>*) override;
     BSTEventResult OnEvent(const TESQuestStageEvent*, const EventDispatcher<TESQuestStageEvent>*) override;
@@ -74,15 +59,41 @@ private:
     // The quest's held stages, while it has stages to apply or fragments to wait for. Drops the stages that can't be
     // applied anymore.
     HeldStages* GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest) noexcept;
-    void NotifyOverlayOfQuestUpdate(uint32_t aFormId) noexcept;
+    void PublishQuestCompletions() noexcept;
+    void ApplyQuestCompletions() noexcept;
+    void ApplyQuestUpdate(const SharedQuestUpdate&) noexcept;
+    void ObserveScene(uint32_t aFormId) noexcept;
+    void RefreshSceneStates() noexcept;
+    void OnSceneState(const NotifySceneState& acState) noexcept;
+    bool MayReleaseSceneStages(TESQuest* apQuest) const noexcept;
+    std::vector<SceneReferenceAlias> CaptureSceneAliases(BGSScene* apScene) const noexcept;
+    void CheckSceneAliases(BGSScene* apScene, const std::vector<SceneReferenceAlias>& acLocal) noexcept;
 
     World& m_world;
     // Keyed by quest form ID
     Map<uint32_t, HeldStages> m_heldStages{};
 
+    struct LocalScene
+    {
+        SceneState Last{};
+        std::chrono::steady_clock::time_point NextHeartbeat{};
+        std::chrono::steady_clock::time_point NextAliasSample{};
+        std::vector<SceneReferenceAlias> Aliases;
+        std::vector<SceneReferenceAlias> LastMismatches;
+    };
+    std::map<uint32_t, LocalScene> m_localScenes;
+    std::map<uint32_t, NotifySceneState> m_sharedScenes;
+    entt::scoped_connection m_sceneConnection;
+
     entt::scoped_connection m_joinedConnection;
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_disconnectedConnection;
-    entt::scoped_connection m_leftConnection;
+    std::deque<SharedQuestUpdate> m_pendingUpdates;
+    uint64_t m_receivedThrough{};
+    void AcknowledgeQuestUpdates() noexcept;
+    Map<uint32_t, uint16_t> m_pendingStops;
+    std::map<uint32_t, uint16_t> m_pendingCompletions;
+    std::set<uint32_t> m_completionWatch;
+    std::chrono::steady_clock::time_point m_nextCompletionScan{};
     entt::scoped_connection m_questUpdateConnection;
 };

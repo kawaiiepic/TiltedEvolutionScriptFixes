@@ -24,4 +24,8 @@ struct ObjectData
     LockData CurrentLockData{};
     Inventory CurrentInventory{};
     bool IsSenderFirst{};
+    bool HasCampaignLock{};
+    bool NoResetZone{};
+    bool IsContainer{};
+    bool HasCampaignStock{};
 };

@@ -49,11 +49,13 @@ enum ClientOpcode : unsigned char
     kTeleportRequest,
     kRequestPlayerHealthUpdate,
     kRequestWeatherChange,
-    kRequestCurrentWeather,
     kRequestSetWaypoint,
     kRequestRemoveWaypoint,
     kSetTimeCommandRequest,
     kRequestActionEvents,
+    kRequestSceneState,
+    kRequestQuestSyncAck,
+    kRequestCarriageTravel,
     kClientOpcodeMax
 };
 
@@ -114,5 +116,7 @@ enum ServerOpcode : unsigned char
     kNotifyRemoveWaypoint,
     kNotifySetTimeResult,
     kNotifyActionEvents,
+    kNotifySceneState,
+    kNotifyPlayerDowned,
     kServerOpcodeMax
 };

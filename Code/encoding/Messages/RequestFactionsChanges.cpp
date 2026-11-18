@@ -11,7 +11,8 @@ void RequestFactionsChanges::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     for (auto& change : Changes)
     {
         Serialization::WriteVarInt(aWriter, change.first);
-        change.second.Serialize(aWriter);
+        Serialization::WriteVarInt(aWriter, change.second.OwnershipEpoch);
+        change.second.Content.Serialize(aWriter);
     }
 }
 
@@ -25,6 +26,7 @@ void RequestFactionsChanges::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     for (auto i = 0u; i < count; ++i)
     {
         auto& change = Changes[Serialization::ReadVarInt(aReader) & 0xFFFFFFFF];
-        change.Deserialize(aReader);
+        change.OwnershipEpoch = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        change.Content.Deserialize(aReader);
     }
 }

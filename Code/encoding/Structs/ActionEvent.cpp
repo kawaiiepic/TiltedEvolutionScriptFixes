@@ -21,7 +21,7 @@ bool ActionEvent::operator==(const ActionEvent& acRhs) const noexcept
 {
     return Tick == acRhs.Tick &&
            // ActorId == acRhs.ActorId && // ActorId is a local field as it is filled up latter by the game client
-           ActionId == acRhs.ActionId && State1 == acRhs.State1 && State2 == acRhs.State2 && Type == acRhs.Type && TargetId == acRhs.TargetId && IdleId == acRhs.IdleId && EventName == acRhs.EventName && TargetEventName == acRhs.TargetEventName && Variables == acRhs.Variables;
+           ActionId == acRhs.ActionId && State1 == acRhs.State1 && State2 == acRhs.State2 && Type == acRhs.Type && TargetId == acRhs.TargetId && IdleId == acRhs.IdleId && TargetIdleId == acRhs.TargetIdleId && EventName == acRhs.EventName && TargetEventName == acRhs.TargetEventName && Variables == acRhs.Variables;
 }
 
 bool ActionEvent::operator!=(const ActionEvent& acRhs) const noexcept
@@ -39,7 +39,7 @@ void ActionEvent::GenerateDifferential(const ActionEvent& aPrevious, TiltedPhoqu
     if (TargetId != aPrevious.TargetId)
         flags |= kTargetId;
 
-    if (IdleId != aPrevious.IdleId)
+    if (IdleId != aPrevious.IdleId || TargetIdleId != aPrevious.TargetIdleId)
         flags |= kIdleId;
 
     if (State1 != aPrevious.State1 || State2 != aPrevious.State2)
@@ -67,17 +67,18 @@ void ActionEvent::GenerateDifferential(const ActionEvent& aPrevious, TiltedPhoqu
 
     if (flags & kActionId)
     {
-        Serialization::WriteVarInt(aWriter, ActionId);
+        ActionId.Serialize(aWriter);
     }
 
     if (flags & kTargetId)
     {
-        Serialization::WriteVarInt(aWriter, TargetId);
+        TargetId.Serialize(aWriter);
     }
 
     if (flags & kIdleId)
     {
-        Serialization::WriteVarInt(aWriter, IdleId);
+        IdleId.Serialize(aWriter);
+        TargetIdleId.Serialize(aWriter);
     }
 
     if (flags & kState)
@@ -120,17 +121,18 @@ void ActionEvent::ApplyDifferential(TiltedPhoques::Buffer::Reader& aReader) noex
 
     if (flags & kActionId)
     {
-        ActionId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        ActionId.Deserialize(aReader);
     }
 
     if (flags & kTargetId)
     {
-        TargetId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        TargetId.Deserialize(aReader);
     }
 
     if (flags & kIdleId)
     {
-        IdleId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+        IdleId.Deserialize(aReader);
+        TargetIdleId.Deserialize(aReader);
     }
 
     if (flags & kState)

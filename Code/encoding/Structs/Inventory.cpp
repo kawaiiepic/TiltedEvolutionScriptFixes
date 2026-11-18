@@ -150,11 +150,13 @@ void Inventory::AddOrRemoveEntry(const Entry& acEntry) noexcept
 
     if (duplicate != Entries.end())
     {
-        duplicate->Count += acEntry.Count;
-        if (duplicate->Count <= 0)
+        const int64_t cCount = static_cast<int64_t>(duplicate->Count) + acEntry.Count;
+        if (cCount <= 0)
             Entries.erase(duplicate);
+        else
+            duplicate->Count = static_cast<int32_t>(std::min<int64_t>(cCount, INT32_MAX));
     }
-    else
+    else if (acEntry.Count > 0)
     {
         Entries.push_back(acEntry);
     }

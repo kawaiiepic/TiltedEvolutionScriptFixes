@@ -18,3 +18,11 @@ struct Factions
     Vector<Faction> NpcFactions;
     Vector<Faction> ExtraFactions;
 };
+
+struct FactionUpdate
+{
+    uint32_t OwnershipEpoch{};
+    Factions Content;
+
+    bool operator==(const FactionUpdate&) const noexcept = default;
+};

@@ -2,6 +2,8 @@
 
 #include <Events/PacketEvent.h>
 #include <Structs/ActorData.h>
+#include <Campaign/FormSyncPolicies.h>
+#include <Campaign/NpcLifeJournal.h>
 
 struct UpdateEvent;
 struct CharacterInteriorCellChangeEvent;
@@ -26,6 +28,7 @@ struct SyncExperienceRequest;
 struct DialogueRequest;
 struct SubtitleRequest;
 struct Player;
+struct CharacterComponent;
 
 /**
  * @brief Manages player and actor state.
@@ -36,6 +39,8 @@ struct CharacterService
     ~CharacterService() noexcept = default;
 
     TP_NOCOPYMOVE(CharacterService);
+
+    bool CommitNpcDeath(CharacterComponent& aCharacter, bool aDead) noexcept;
 
     static void Serialize(World& aRegistry, entt::entity aEntity, CharacterSpawnRequest* apSpawnRequest) noexcept;
 
@@ -80,6 +85,8 @@ protected:
 
 private:
     World& m_world;
+    Campaign::FormSyncPolicies m_npcLifePolicies;
+    Campaign::NpcLifeJournal m_npcLife;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_exteriorCellChangeEventConnection;

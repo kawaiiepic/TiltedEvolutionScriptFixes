@@ -11,7 +11,7 @@
 
 namespace
 {
-constexpr char kBuildTag[]{BUILD_BRANCH "@" BUILD_COMMIT};
+constexpr char kBuildTag[]{BUILD_BRANCH "@" BUILD_PROTOCOL};
 } // namespace
 
 struct GameServerInstance final : IGameServerInstance

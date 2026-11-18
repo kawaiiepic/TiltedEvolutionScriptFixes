@@ -15,9 +15,31 @@
 #include <Messages/ScriptAnimationRequest.h>
 #include <Messages/NotifyScriptAnimation.h>
 
+namespace
+{
+constexpr const char* kLockPoliciesPath = "shared-lock-policies.conf";
+constexpr const char* kCellLockPoliciesPath = "shared-lock-cell-policies.conf";
+constexpr const char* kLockJournalPath = "shared-locks.log";
+}
+
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
+    , m_lockPolicies(kLockPoliciesPath)
+    , m_cellLockPolicies(kCellLockPoliciesPath)
+    , m_lockJournal(kLockJournalPath)
+    , m_stockCells("shared-stock-cell-policies.conf")
+    , m_stockJournal("shared-stock.log")
 {
+    if (!m_lockPolicies.IsHealthy())
+        spdlog::error("Unable to load persistent lock policies {} (error line {}).", kLockPoliciesPath, m_lockPolicies.ErrorLine());
+    if (!m_cellLockPolicies.IsHealthy())
+        spdlog::error("Unable to load cell lock policies {} (error line {}).", kCellLockPoliciesPath, m_cellLockPolicies.ErrorLine());
+    if (!m_lockJournal.IsHealthy())
+        spdlog::error("Unable to load persistent locks {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
+
+    if (!m_stockCells.IsHealthy() || !m_stockJournal.IsHealthy())
+        spdlog::error("Could not load shared-stock-cell-policies.conf or shared-stock.log");
+
     m_leaveCellConnection = aDispatcher.sink<PlayerLeaveCellEvent>().connect<&ObjectService::OnPlayerLeaveCellEvent>(this);
     m_assignObjectConnection = aDispatcher.sink<PacketEvent<AssignObjectsRequest>>().connect<&ObjectService::OnAssignObjectsRequest>(this);
     m_activateConnection = aDispatcher.sink<PacketEvent<ActivateRequest>>().connect<&ObjectService::OnActivate>(this);
@@ -59,12 +81,20 @@ void ObjectService::OnPlayerLeaveCellEvent(const PlayerLeaveCellEvent& acEvent) 
 // This is fine for containers and doors, but if this system is expanded, think of temporaries.
 void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsRequest>& acMessage) noexcept
 {
-    auto view = m_world.view<FormIdComponent, ObjectComponent, InventoryComponent>();
+    auto view = m_world.view<FormIdComponent, ObjectComponent, InventoryComponent, CellIdComponent>();
 
     AssignObjectsResponse response;
+    const auto& mods = m_world.ctx().at<ModsComponent>();
 
     for (const ObjectData& object : acMessage.Packet.Objects)
     {
+        const auto key = mods.FindFormKey(object.Id, *acMessage.pPlayer);
+        const auto cellKey = mods.FindFormKey(object.CellId, *acMessage.pPlayer);
+        if (!key || !cellKey)
+            continue;
+
+        const bool cNoResetInterior = object.NoResetZone && !object.WorldSpaceId;
+        const bool cPersist = m_lockPolicies.IsShared(*key, m_cellLockPolicies.IsShared(*cellKey, cNoResetInterior));
         const auto iter = std::find_if(
             std::begin(view), std::end(view),
             [view, id = object.Id](auto entity)
@@ -75,17 +105,28 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
 
         if (iter != std::end(view))
         {
+            if (view.get<CellIdComponent>(*iter).Cell != object.CellId)
+                continue;
             ObjectData objectData;
             objectData.ServerId = World::ToInteger(*iter);
 
             auto& formIdComponent = view.get<FormIdComponent>(*iter);
             objectData.Id = formIdComponent.Id;
+            objectData.CellId = object.CellId;
 
             auto& objectComponent = view.get<ObjectComponent>(*iter);
             objectData.CurrentLockData = objectComponent.CurrentLockData;
 
             auto& inventoryComponent = view.get<InventoryComponent>(*iter);
             objectData.CurrentInventory = inventoryComponent.Content;
+            if (objectComponent.CampaignStock)
+            {
+                if (const auto* pStock = m_stockJournal.Find(*objectComponent.CampaignStock))
+                {
+                    ApplySavedStock(objectData.CurrentInventory, *pStock);
+                    objectData.HasCampaignStock = true;
+                }
+            }
 
             objectData.IsSenderFirst = false;
 
@@ -97,87 +138,212 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
 
             m_world.emplace<FormIdComponent>(cEntity, object.Id);
 
-            auto& objectComponent = m_world.emplace<ObjectComponent>(cEntity, acMessage.pPlayer);
+            auto& objectComponent = m_world.emplace<ObjectComponent>(cEntity);
             objectComponent.CurrentLockData = object.CurrentLockData;
 
             m_world.emplace<CellIdComponent>(cEntity, object.CellId, object.WorldSpaceId, object.CurrentCoords);
             auto& inventoryComp = m_world.emplace<InventoryComponent>(cEntity);
             inventoryComp.Content = object.CurrentInventory;
+            inventoryComp.Content.RemoveByFilter([](const auto& entry) { return entry.IsQuestItem; });
 
             ObjectData objectData;
             objectData.Id = object.Id;
+            objectData.CellId = object.CellId;
             objectData.ServerId = World::ToInteger(cEntity);
             objectData.IsSenderFirst = true;
+            if (cPersist)
+            {
+                objectComponent.CampaignLock = key;
+                if (const auto* pState = m_lockJournal.Find(*key))
+                {
+                    objectData.HasCampaignLock = true;
+                    objectData.CurrentLockData.IsLocked = pState->Locked;
+                    objectData.CurrentLockData.LockLevel = pState->Level;
+                    objectComponent.CurrentLockData = objectData.CurrentLockData;
+                }
+            }
 
+            if (object.IsContainer && m_stockCells.IsShared(*cellKey, cNoResetInterior))
+            {
+                objectComponent.CampaignStock = key;
+                if (const auto* pStock = m_stockJournal.Find(*key))
+                {
+                    ApplySavedStock(inventoryComp.Content, *pStock);
+                    objectData.CurrentInventory = inventoryComp.Content;
+                    objectData.HasCampaignStock = true;
+                }
+            }
             response.Objects.push_back(objectData);
         }
     }
 
     if (!response.Objects.empty())
+    {
+        for (auto& object : response.Objects)
+        {
+            object.CurrentInventory.RemoveByFilter([&](const auto& entry)
+            {
+                return !acMessage.pPlayer->HasModId(entry.BaseId.ModId) &&
+                       entry.BaseId.ModId != UINT32_MAX;
+            });
+        }
         acMessage.pPlayer->Send(response);
+    }
 }
 
-void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept
+void ObjectService::ApplySavedStock(Inventory& aInventory, const Campaign::ContainerStock& acStock) const noexcept
 {
-    NotifyActivate notifyActivate;
-    notifyActivate.Id = acMessage.Packet.Id;
-    notifyActivate.ActivatorId = acMessage.Packet.ActivatorId;
-    notifyActivate.PreActivationOpenState = acMessage.Packet.PreActivationOpenState;
-
-    for (auto pPlayer : m_world.GetPlayerManager())
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    aInventory.RemoveByFilter([&](const auto& entry)
     {
-        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
+        return entry.IsPlainStock() && mods.FindFormKey(entry.BaseId).has_value();
+    });
+    for (const auto& [item, count] : acStock)
+    {
+        if (const auto id = mods.FindFormId(item))
         {
-            pPlayer->Send(notifyActivate);
+            Inventory::Entry stack{};
+            stack.BaseId = *id;
+            stack.Count = count;
+            aInventory.Entries.push_back(stack);
         }
     }
 }
 
-void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) const noexcept
+bool ObjectService::CommitStockChange(const ObjectComponent& acObject, const Inventory& acInventory,
+                                      const Inventory::Entry& acChange) noexcept
 {
-    NotifyLockChange notifyLockChange;
-    notifyLockChange.Id = acMessage.Packet.Id;
-    notifyLockChange.IsLocked = acMessage.Packet.IsLocked;
-    notifyLockChange.LockLevel = acMessage.Packet.LockLevel;
+    if (!acObject.CampaignStock || !acChange.IsPlainStock() || !acChange.Count)
+        return true;
 
-    auto objectView = m_world.view<FormIdComponent, ObjectComponent>();
-
-    const auto iter = std::find_if(
-        std::begin(objectView), std::end(objectView),
-        [objectView, id = acMessage.Packet.Id](auto entity)
-        {
-            const auto& formIdComponent = objectView.get<FormIdComponent>(entity);
-            return formIdComponent.Id == id;
-        });
-
-    if (iter != std::end(objectView))
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    const auto item = mods.FindFormKey(acChange.BaseId);
+    if (!item)
+        return true;
+    Campaign::ContainerStock stock;
+    if (const auto* pStock = m_stockJournal.Find(*acObject.CampaignStock))
+        stock = *pStock;
+    else
     {
-        auto& objectComponent = objectView.get<ObjectComponent>(*iter);
-        objectComponent.CurrentLockData.IsLocked = acMessage.Packet.IsLocked;
-        objectComponent.CurrentLockData.LockLevel = acMessage.Packet.LockLevel;
+        for (const auto& entry : acInventory.Entries)
+        {
+            if (!entry.IsPlainStock() || entry.Count <= 0)
+                continue;
+            if (const auto key = mods.FindFormKey(entry.BaseId))
+            {
+                auto& count = stock[*key];
+                count = static_cast<int32_t>(std::min<int64_t>(INT32_MAX, static_cast<int64_t>(count) + entry.Count));
+            }
+        }
     }
+
+    const int64_t cCount = static_cast<int64_t>(stock[*item]) + acChange.Count;
+    if (cCount <= 0)
+        stock.erase(*item);
+    else
+        stock[*item] = static_cast<int32_t>(std::min<int64_t>(INT32_MAX, cCount));
+    if (!m_stockJournal.Set(*acObject.CampaignStock, std::move(stock)))
+    {
+        spdlog::warn("Could not commit container stock to shared-stock.log");
+        return false;
+    }
+    return true;
+}
+
+void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept
+{
+    const auto& packet = acMessage.Packet;
+    const auto* pOwner = m_world.try_get<OwnerComponent>(static_cast<entt::entity>(packet.ActivatorId));
+    if (!pOwner || pOwner->GetOwner() != acMessage.pPlayer || !packet.CellId ||
+        packet.CellId != acMessage.pPlayer->GetCellComponent().Cell ||
+        !m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer))
+        return;
+
+    NotifyActivate notifyActivate;
+    notifyActivate.Id = packet.Id;
+    notifyActivate.CellId = packet.CellId;
+    notifyActivate.ActivatorId = packet.ActivatorId;
+    notifyActivate.PreActivationOpenState = packet.PreActivationOpenState;
+
+    for (auto pPlayer : m_world.GetPlayerManager())
+    {
+        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == packet.CellId &&
+            pPlayer->HasModId(packet.Id.ModId))
+            pPlayer->Send(notifyActivate);
+    }
+}
+
+void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) noexcept
+{
+    const auto& packet = acMessage.Packet;
+    if (!packet.CellId || !acMessage.pPlayer->GetCharacter() ||
+        !m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer))
+        return;
+
+    NotifyLockChange notifyLockChange;
+    notifyLockChange.Id = packet.Id;
+    notifyLockChange.CellId = packet.CellId;
+    notifyLockChange.IsLocked = packet.IsLocked;
+    notifyLockChange.LockLevel = packet.LockLevel;
+
+    const auto objectView = m_world.view<FormIdComponent, ObjectComponent, CellIdComponent>();
+    const auto iter = std::find_if(objectView.begin(), objectView.end(), [&](auto entity)
+    {
+        return objectView.get<FormIdComponent>(entity).Id == packet.Id;
+    });
+
+    if (iter != objectView.end())
+    {
+        const auto& cell = objectView.get<CellIdComponent>(*iter);
+        auto& objectComponent = objectView.get<ObjectComponent>(*iter);
+        if (cell.Cell != packet.CellId || !cell.IsInRange(acMessage.pPlayer->GetCellComponent(), false))
+            return;
+
+        if (objectComponent.CampaignLock)
+        {
+            if (!m_lockJournal.IsHealthy())
+                return;
+            if (!m_lockJournal.Set(*objectComponent.CampaignLock, {notifyLockChange.IsLocked, notifyLockChange.LockLevel}))
+            {
+                spdlog::error("Unable to persist lock change in {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
+                return;
+            }
+        }
+        objectComponent.CurrentLockData.IsLocked = notifyLockChange.IsLocked;
+        objectComponent.CurrentLockData.LockLevel = notifyLockChange.LockLevel;
+    }
+    else if (acMessage.pPlayer->GetCellComponent().Cell != packet.CellId)
+        return;
 
     for (Player* pPlayer : m_world.GetPlayerManager())
     {
         if (pPlayer == acMessage.pPlayer)
             continue;
 
-        if (pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
+        if (pPlayer->GetCellComponent().Cell == packet.CellId && pPlayer->HasModId(packet.Id.ModId))
             pPlayer->Send(notifyLockChange);
     }
 }
 
 void ObjectService::OnScriptAnimationRequest(const PacketEvent<ScriptAnimationRequest>& acMessage) noexcept
 {
-    auto& packet = acMessage.Packet;
+    const auto& packet = acMessage.Packet;
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    if (!acMessage.pPlayer->GetCharacter() || !packet.Cell ||
+        acMessage.pPlayer->GetCellComponent().Cell != packet.Cell || packet.EventName.empty() ||
+        packet.EventName.size() > 256 || !mods.FindFormKey(packet.Id, *acMessage.pPlayer))
+        return;
 
     NotifyScriptAnimation message{};
-    message.FormID = packet.FormID;
-    message.Animation = packet.Animation;
+    message.Id = packet.Id;
+    message.Cell = packet.Cell;
+    message.Tick = packet.Tick;
     message.EventName = packet.EventName;
 
     for (Player* pPlayer : m_world.GetPlayerManager())
     {
-        pPlayer->Send(message);
+        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == packet.Cell &&
+            pPlayer->HasModId(packet.Id.ModId))
+            pPlayer->Send(message);
     }
 }

@@ -4,8 +4,10 @@
 #include <Services/PartyService.h>
 
 #include <Services/CharacterService.h>
+#include <Services/OverlayService.h>
 #include <Services/QuestService.h>
 #include <Services/TransportService.h>
+#include <cmath>
 
 #include <Games/References.h>
 #include <Games/Misc/SubtitleManager.h>
@@ -127,6 +129,18 @@ void CharacterService::DeclineOwnership(const uint32_t aServerId, const uint32_t
     m_transport.Send(request);
 }
 
+static void RestoreCampaignDeath(Actor& aActor, bool aDead) noexcept
+{
+    if (aActor.IsDead() == aDead)
+        return;
+    if (aDead)
+        aActor.Kill();
+    else
+        aActor.Resurrect(false);
+    if (aActor.IsDead() != aDead)
+        spdlog::warn("Skyrim could not restore campaign death state for {:X}", aActor.formID);
+}
+
 void CharacterService::ReconcileActorData(
     const entt::entity aEntity, Actor* apActor, const uint32_t aOwnershipEpoch, const ActorData& acActorData, const bool aApplyInventory, const bool aIsLocalOwner) noexcept
 {
@@ -151,7 +165,9 @@ void CharacterService::ReconcileActorData(
             apActor->SetActorInventory(acActorData.InitialInventory);
     }
 
-    if (apActor->IsDead() != acActorData.IsDead)
+    if (acActorData.HasCampaignDeath)
+        RestoreCampaignDeath(*apActor, acActorData.IsDead);
+    else if (apActor->IsDead() != acActorData.IsDead)
     {
         if (acActorData.IsDead)
         {
@@ -329,8 +345,9 @@ void CharacterService::OnConnected(const ConnectedEvent& acConnectedEvent) const
     }
 }
 
-void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEvent) const noexcept
+void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEvent) noexcept
 {
+    m_cachedExperience = 0.f;
     auto remoteView = m_world.view<FormIdComponent, RemoteComponent>();
     for (auto entity : remoteView)
     {
@@ -435,6 +452,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
     actorData.InitialActorValues = acMessage.AllActorValues;
     actorData.InitialInventory = acMessage.CurrentInventory;
     actorData.IsDead = acMessage.IsDead;
+    actorData.HasCampaignDeath = acMessage.HasCampaignDeath;
     actorData.IsWeaponDrawn = acMessage.IsWeaponDrawn;
 
     if (acMessage.Owner)
@@ -445,7 +463,9 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         // Applying it would e.g. Respawn() (Resurrect + Reset) an actor that was killed while the request was in flight,
         // which re-rolls leveled temporary actors, removes them, and makes them get rediscovered as new entities endlessly.
         // Any local change since the request (e.g. death) is picked up by the usual LocalComponent diffing instead.
-        if (pActor->IsDead() != acMessage.IsDead)
+        if (acMessage.HasCampaignDeath)
+            RestoreCampaignDeath(*pActor, acMessage.IsDead);
+        else if (pActor->IsDead() != acMessage.IsDead)
             spdlog::info("Local actor {:X} death state changed while its assignment was in flight (server: {}, local: {}), keeping local state", pActor->formID, acMessage.IsDead, pActor->IsDead());
 
         m_weaponDrawUpdates.erase(pActor->formID);
@@ -462,7 +482,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         m_world.remove<EarlyAnimationBufferComponent>(cEntity);
 
         auto& localComponent = m_world.emplace_or_replace<LocalComponent>(cEntity, acMessage.ServerId, acMessage.OwnershipEpoch);
-        localComponent.IsDead = acMessage.IsDead;
+        localComponent.IsDead = acMessage.HasCampaignDeath ? pActor->IsDead() : acMessage.IsDead;
         localComponent.IsWeaponDrawn = acMessage.IsWeaponDrawn;
         pActor->GetExtension()->SetRemote(false);
     }
@@ -660,7 +680,8 @@ void CharacterService::OnReferencesMoveRequest(const ServerReferencesMoveRequest
     {
         auto itor = std::find_if(std::begin(view), std::end(view), [serverId = serverId, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == serverId; });
 
-        if (itor == std::end(view))
+        if (itor == std::end(view) || !movement.OwnershipEpoch ||
+            view.get<RemoteComponent>(*itor).OwnershipEpoch != movement.OwnershipEpoch)
             continue;
 
         auto& interpolationComponent = view.get<InterpolationComponent>(*itor);
@@ -724,25 +745,30 @@ void CharacterService::OnActionEvent(const ActionEvent& acActionEvent) const noe
 
 void CharacterService::OnFactionsChanges(const NotifyFactionsChanges& acEvent) const noexcept
 {
-    auto view = m_world.view<RemoteComponent, FormIdComponent, CacheComponent>();
-
-    for (const auto& [id, factions] : acEvent.Changes)
+    for (const auto& [id, change] : acEvent.Changes)
     {
-        const auto itor = std::find_if(std::begin(view), std::end(view), [id = id, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == id; });
+        const auto entity = Utils::FindEntityByServerId(id);
+        if (!entity)
+            continue;
 
-        if (itor != std::end(view))
+        const auto* pRemote = m_world.try_get<RemoteComponent>(*entity);
+        if (!pRemote || pRemote->OwnershipEpoch != change.OwnershipEpoch)
+            continue;
+
+        if (auto* pWaiting = m_world.try_get<WaitingFor3D>(*entity))
         {
-            auto& formIdComponent = view.get<FormIdComponent>(*itor);
-
-            auto* const pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
-            if (!pActor)
-                return;
-
-            auto& cacheComponent = view.get<CacheComponent>(*itor);
-            cacheComponent.FactionsContent = factions;
-
-            pActor->SetFactions(cacheComponent.FactionsContent);
+            pWaiting->SpawnRequest.FactionsContent = change.Content;
+            continue;
         }
+
+        const auto* pFormId = m_world.try_get<FormIdComponent>(*entity);
+        auto* pActor = pFormId ? Cast<Actor>(TESForm::GetById(pFormId->Id)) : nullptr;
+        if (!pActor)
+            continue;
+
+        if (auto* pCache = m_world.try_get<CacheComponent>(*entity))
+            pCache->FactionsContent = change.Content;
+        pActor->SetFactions(change.Content);
     }
 }
 
@@ -790,7 +816,10 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
     // Preserve the accepted epoch's pick for actors that still need to be created.
     if (auto* pWaitingFor3D = m_world.try_get<WaitingFor3D>(cEntity))
+    {
         pWaitingFor3D->SpawnRequest.LeveledNpcPickId = acMessage.LeveledNpcPickId;
+        pWaitingFor3D->SpawnRequest.FactionsContent = acMessage.FactionsContent;
+    }
 
     if (isLocalOwner)
     {
@@ -821,12 +850,14 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
         ReconcileActorData(cEntity, pActor, acMessage.OwnershipEpoch, acMessage.CurrentActorData, true, true);
         ApplyLeveledNpcPick(pActor, acMessage.LeveledNpcPickId);
+        if (pActor->GetFactions() != acMessage.FactionsContent)
+            pActor->SetFactions(acMessage.FactionsContent);
 
         DeleteRemoteEntityComponents(cEntity);
         CacheSystem::Setup(m_world, cEntity, pActor);
         m_world.emplace_or_replace<LocalAnimationComponent>(cEntity);
         auto& localComponent = m_world.emplace_or_replace<LocalComponent>(cEntity, acMessage.ServerId, acMessage.OwnershipEpoch);
-        localComponent.IsDead = acMessage.CurrentActorData.IsDead;
+        localComponent.IsDead = acMessage.CurrentActorData.HasCampaignDeath ? pActor->IsDead() : acMessage.CurrentActorData.IsDead;
         localComponent.IsWeaponDrawn = acMessage.CurrentActorData.IsWeaponDrawn;
 
         // LocalComponent is installed only after canonical reconciliation is complete.
@@ -860,7 +891,13 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
     ReconcileActorData(cEntity, pActor, acMessage.OwnershipEpoch, acMessage.CurrentActorData, pActor && pActor->GetNiNode(), false);
     if (pActor)
+    {
         ApplyLeveledNpcPick(pActor, acMessage.LeveledNpcPickId);
+        if (pActor->GetFactions() != acMessage.FactionsContent)
+            pActor->SetFactions(acMessage.FactionsContent);
+        if (auto* pCache = m_world.try_get<CacheComponent>(cEntity))
+            pCache->FactionsContent = acMessage.FactionsContent;
+    }
 
     spdlog::info("Actor {:X} is now owned by player {:X} at epoch {}", acMessage.ServerId, acMessage.OwnerPlayerId, acMessage.OwnershipEpoch);
 }
@@ -889,7 +926,11 @@ void CharacterService::OnRemoveCharacter(const NotifyRemoveCharacter& acMessage)
 void CharacterService::OnNotifyRespawn(const NotifyRespawn& acMessage) const noexcept
 {
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
-    const auto entityIt = std::find_if(view.begin(), view.end(), [view, id = acMessage.ActorId](auto aEntity) { return view.get<RemoteComponent>(aEntity).Id == id; });
+    const auto entityIt = std::find_if(view.begin(), view.end(), [view, &acMessage](auto aEntity)
+    {
+        const auto& remote = view.get<RemoteComponent>(aEntity);
+        return acMessage.OwnershipEpoch != 0 && remote.Id == acMessage.ActorId && remote.OwnershipEpoch == acMessage.OwnershipEpoch;
+    });
 
     if (entityIt == view.end())
     {
@@ -912,6 +953,7 @@ void CharacterService::OnNotifyRespawn(const NotifyRespawn& acMessage) const noe
 
     RequestRespawn request;
     request.ActorId = acMessage.ActorId;
+    request.OwnershipEpoch = acMessage.OwnershipEpoch;
 
     m_transport.Send(request);
 }
@@ -922,29 +964,27 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
 
     const auto it = std::find_if(view.begin(), view.end(), [view](auto entity) { return view.get<FormIdComponent>(entity).Id == 0x14; });
 
-    std::optional<uint32_t> serverIdRes = Utils::GetServerId(*it);
-    if (!serverIdRes.has_value())
-    {
-        spdlog::error("{}: failed to find server id", __FUNCTION__);
+    if (it == view.end())
         return;
-    }
+    const auto* pLocal = m_world.try_get<LocalComponent>(*it);
+    if (!pLocal)
+        return;
 
-    uint32_t serverId = serverIdRes.value();
+    RequestRespawn request{};
+    request.ActorId = pLocal->Id;
+    request.OwnershipEpoch = pLocal->OwnershipEpoch;
 
-    RequestRespawn request;
-    request.ActorId = serverId;
-
-    Actor* pActor = Utils::GetByServerId<Actor>(serverId);
+    Actor* pActor = Utils::GetByServerId<Actor>(pLocal->Id);
     if (!pActor)
     {
-        spdlog::warn(__FUNCTION__ ": could not find actor for server id {:X}", serverId);
+        spdlog::warn(__FUNCTION__ ": could not find actor for server id {:X}", pLocal->Id);
         return;
     }
 
     TESNPC* pNpc = Cast<TESNPC>(pActor->baseForm);
     if (!pNpc)
     {
-        spdlog::warn(__FUNCTION__ ": could not find actor baseform for server id {:X}", serverId);
+        spdlog::warn(__FUNCTION__ ": could not find actor baseform for server id {:X}", pLocal->Id);
         return;
     }
 
@@ -1098,7 +1138,9 @@ void CharacterService::OnNotifyNewPackage(const NotifyNewPackage& acMessage) con
 
 void CharacterService::OnAddExperienceEvent(const AddExperienceEvent& acEvent) noexcept
 {
-    m_cachedExperience += acEvent.Experience;
+    if (m_transport.IsOnline() && m_world.GetServerSettings().ShareCombatExperience &&
+        m_world.GetPartyService().IsInParty() && std::isfinite(acEvent.Experience) && acEvent.Experience > 0.f)
+        m_cachedExperience += acEvent.Experience;
 }
 
 void CharacterService::OnNotifySyncExperience(const NotifySyncExperience& acMessage) noexcept
@@ -1170,6 +1212,12 @@ void CharacterService::OnDialogueEvent(const DialogueEvent& acEvent) noexcept
 
     DialogueRequest request{};
     request.ServerId = serverIdRes.value();
+    if (acEvent.PlayerDialogue)
+    {
+        request.DialogueToken = m_world.GetOverlayService().GetDialogueGrant(request.ServerId);
+        if (!request.DialogueToken)
+            return;
+    }
     request.SoundFilename = acEvent.VoiceFile;
     if (acEvent.SceneID && m_world.GetModSystem().GetServerModId(acEvent.SceneID, request.SceneId))
         request.ScenePhase = acEvent.ScenePhase;
@@ -1217,6 +1265,12 @@ void CharacterService::OnSubtitleEvent(const SubtitleEvent& acEvent) noexcept
 
     SubtitleRequest request{};
     request.ServerId = serverIdRes.value();
+    if (acEvent.PlayerDialogue)
+    {
+        request.DialogueToken = m_world.GetOverlayService().GetDialogueGrant(request.ServerId);
+        if (!request.DialogueToken)
+            return;
+    }
     request.Text = acEvent.Text;
     request.TopicFormId = acEvent.TopicFormID;
     if (acEvent.SceneID && m_world.GetModSystem().GetServerModId(acEvent.SceneID, request.SceneId))
@@ -1262,6 +1316,7 @@ void CharacterService::OnNotifyActorTeleport(const NotifyActorTeleport& acMessag
 
 void CharacterService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept
 {
+    m_cachedExperience = 0.f;
     // Takes ownership of all actors
     if (acEvent.IsLeader)
     {
@@ -1454,9 +1509,12 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     message.IsDragon = pActor->IsDragon();
     message.IsMount = pActor->IsMount();
     message.IsPlayerSummon = pActor->GetCommandingActor() && pActor->GetCommandingActor()->formID == 0x14;
+    message.IsNonRespawning = !pNpc->actorData.Respawns() && !pNpc->actorData.IsEssential() &&
+                              !pNpc->actorData.baseTemplateForm && !pNpc->actorData.templateUseFlags;
 
     if (const TESNPC* pPick = pActor->GetLeveledPick())
     {
+        message.HasLeveledBase = true;
         const uint32_t pickFormId = pPick->formID;
         if (m_world.GetModSystem().GetServerModId(pickFormId, message.LeveledNpcPickId))
             spdlog::info("Captured leveled NPC pick {:X} for actor {:X} (base {:X})", pickFormId, pActor->formID, pNpc->formID);
@@ -1465,6 +1523,7 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     }
     else if (pNpc->IsTemporary())
     {
+        message.HasLeveledBase = true;
         spdlog::info("No leveled pick recoverable for temp base {:X} (actor {:X}), identity sync unavailable", pNpc->formID, pActor->formID);
     }
 
@@ -1862,7 +1921,9 @@ void CharacterService::RunLocalUpdates() const noexcept
             movementMessage.Updates.clear();
         }
 
-        AnimationSystem::SerializeMovement(m_world, pActor, movementMessage.Updates[localComponent.Id]);
+        auto& movement = movementMessage.Updates[localComponent.Id];
+        AnimationSystem::SerializeMovement(m_world, pActor, movement);
+        movement.OwnershipEpoch = localComponent.OwnershipEpoch;
     }
 
     if (!actionsMessage.Actions.empty())
@@ -2008,7 +2069,12 @@ void CharacterService::RunFactionsUpdates() const noexcept
         cacheComponent.FactionsContent = factions;
 
         // If not send the current factions and replace the cached factions
-        message.Changes[localComponent.Id] = factions;
+        message.Changes[localComponent.Id] = {localComponent.OwnershipEpoch, std::move(factions)};
+        if (message.Changes.size() == UINT8_MAX)
+        {
+            m_transport.Send(message);
+            message.Changes.clear();
+        }
     }
 
     if (!message.Changes.empty())
@@ -2066,8 +2132,11 @@ void CharacterService::RunExperienceUpdates() noexcept
     if (m_cachedExperience == 0.f)
         return;
 
-    if (!World::Get().GetPartyService().IsInParty())
+    if (!m_world.GetPartyService().IsInParty() || !m_world.GetServerSettings().ShareCombatExperience)
+    {
+        m_cachedExperience = 0.f;
         return;
+    }
 
     SyncExperienceRequest message;
     message.Experience = m_cachedExperience;

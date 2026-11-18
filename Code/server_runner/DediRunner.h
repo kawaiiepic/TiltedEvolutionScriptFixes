@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 
 static constexpr char kConfigPathName[] = "config";
 static constexpr char KCompilerStopThisBullshit[] = "ConOut";
-static constexpr char kBuildTag[]{BUILD_BRANCH "@" BUILD_COMMIT};
+static constexpr char kBuildTag[]{BUILD_BRANCH "@" BUILD_PROTOCOL};
 
 // Frontend class for the dedicated terminal based server
 struct DediRunner

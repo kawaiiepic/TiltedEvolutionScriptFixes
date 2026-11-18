@@ -1,6 +1,7 @@
 #include <Services/ObjectService.h>
 
 #include <World.h>
+#include <Games/Overrides.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/CellChangeEvent.h>
@@ -25,12 +26,22 @@
 #include <Games/TES.h>
 
 #include <inttypes.h>
+#include <map>
+#include <unordered_set>
+
+namespace
+{
+constexpr uint64_t kObjectAnimationDelayMs = 50;
+constexpr uint64_t kMaxAnimationClockSkewMs = 1000;
+constexpr size_t kMaxPendingObjectAnimations = 128;
+}
 
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport)
     : m_world(aWorld)
     , m_transport(aTransport)
 {
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&ObjectService::OnDisconnected>(this);
+    m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&ObjectService::OnUpdate>(this);
     m_cellChangeConnection = aDispatcher.sink<CellChangeEvent>().connect<&ObjectService::OnCellChange>(this);
     m_onActivateConnection = aDispatcher.sink<ActivateEvent>().connect<&ObjectService::OnActivate>(this);
     m_activateConnection = aDispatcher.sink<NotifyActivate>().connect<&ObjectService::OnActivateNotify>(this);
@@ -39,27 +50,20 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_assignObjectConnection = aDispatcher.sink<AssignObjectsResponse>().connect<&ObjectService::OnAssignObjectsResponse>(this);
     m_scriptAnimationConnection = aDispatcher.sink<ScriptAnimationEvent>().connect<&ObjectService::OnScriptAnimationEvent>(this);
     m_scriptAnimationNotifyConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&ObjectService::OnNotifyScriptAnimation>(this);
+}
 
-    EventDispatcherManager::Get()->activateEvent.RegisterSink(this);
+static bool IsNoResetZone(const TESObjectCELL* apCell) noexcept
+{
+    const auto* pZone = apCell && apCell->loadedCellData ? apCell->loadedCellData->encounterZone : nullptr;
+    if (!pZone)
+        return false;
+    const auto* pSkyrim = ModManager::Get()->GetByName("Skyrim.esm");
+    return pSkyrim && pZone->formID == (static_cast<uint32_t>(pSkyrim->GetId()) << 24 | 0xF90B1u);
 }
 
 bool IsPlayerHome(const TESObjectCELL* pCell) noexcept
 {
-    if (pCell && pCell->loadedCellData && pCell->loadedCellData->encounterZone)
-    {
-        // Only return true if cell has the NoResetZone encounter zone
-        if (pCell->loadedCellData->encounterZone->formID == 0xf90b1)
-        {
-            switch (pCell->formID)
-            {
-            case 0xeec55: // one known exception: Sinderion's Field Lab
-                return false;
-            default: return true;
-            }
-        }
-    }
-
-    return false;
+    return IsNoResetZone(pCell) && pCell->formID != 0xEEC55; // Sinderion's Field Lab
 }
 
 // Find each loaded faction's containers for a jailed player's belongings and stolen items.
@@ -108,9 +112,36 @@ bool ShouldSyncObject(const TESObjectREFR* apObject, const Set<const TESObjectRE
     }
 }
 
+static void ApplyLockState(TESObjectREFR& aObject, bool aLocked, uint8_t aLevel) noexcept
+{
+    Lock* pLock = aObject.GetLock();
+    if (!pLock)
+    {
+        if (!aLocked && !aLevel)
+            return;
+        pLock = aObject.CreateLock();
+        if (!pLock)
+        {
+            spdlog::error("Failed to create lock for object {:X}", aObject.formID);
+            return;
+        }
+    }
+    else if (pLock->IsLocked() == aLocked && pLock->lockLevel == aLevel)
+    {
+        return;
+    }
+
+    pLock->lockLevel = aLevel;
+    pLock->SetLock(aLocked);
+    aObject.LockChange();
+}
+
 void ObjectService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
-    // TODO(cosideci): clear object components
+    m_cell = {};
+    m_pendingAnimations.clear();
+    auto view = m_world.view<ObjectComponent>();
+    m_world.destroy(view.begin(), view.end());
 }
 
 void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
@@ -118,8 +149,16 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     if (!m_transport.IsConnected())
         return;
 
+    if (m_cell != acEvent.CellId)
+        m_pendingAnimations.clear();
+    m_cell = acEvent.CellId;
+    auto view = m_world.view<ObjectComponent>();
+    m_world.destroy(view.begin(), view.end());
+
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
-    TESObjectCELL* pCell = pPlayer->parentCell;
+    TESObjectCELL* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    if (!pCell)
+        return;
 
     // Player homes should not be synced, so that chest contents,
     // which are often used as storage, are never accidentally wiped.
@@ -150,6 +189,7 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     AssignObjectsRequest request{};
 
     const Set<const TESObjectREFR*> playerStashContainers = GetPlayerStashContainers();
+    const bool cNoReset = IsNoResetZone(pCell);
 
     for (TESObjectREFR* pObject : objects)
     {
@@ -161,10 +201,12 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 
         ObjectData objectData{};
         objectData.CellId = cellId;
+        objectData.NoResetZone = cNoReset;
         objectData.WorldSpaceId = worldSpaceId;
         objectData.CurrentCoords = GridCellCoords::CalculateGridCellCoords(pObject->position.x, pObject->position.y);
 
-        if (!m_world.GetModSystem().GetServerModId(pObject->formID, objectData.Id))
+        if (!m_world.GetModSystem().GetServerModId(pObject->formID, objectData.Id) ||
+            m_world.GetModSystem().GetGameId(objectData.Id) != pObject->formID)
         {
             spdlog::error("Server form id not found for object with form id {:X}", pObject->formID);
             continue;
@@ -176,7 +218,8 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
             objectData.CurrentLockData.LockLevel = pLock->lockLevel;
         }
 
-        if (pObject->baseForm->formType == FormType::Container)
+        objectData.IsContainer = pObject->baseForm->formType == FormType::Container;
+        if (objectData.IsContainer)
             objectData.CurrentInventory = pObject->GetInventory();
 
         request.Objects.push_back(objectData);
@@ -185,10 +228,48 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     m_transport.Send(request);
 }
 
+static void RestoreContainerStock(TESObjectREFR& aContainer, const Inventory& acStock) noexcept
+{
+    const Inventory current = aContainer.GetInventory();
+    std::map<uint64_t, Inventory::Entry> deltas;
+    Set<uint64_t> protectedItems;
+    for (const auto& entry : current.Entries)
+    {
+        if (!entry.IsPlainStock())
+            protectedItems.insert(entry.BaseId.LogFormat());
+    }
+
+    const auto accumulate = [&](const Inventory& acInventory, int32_t aDirection)
+    {
+        for (const auto& entry : acInventory.Entries)
+        {
+            const uint64_t cKey = entry.BaseId.LogFormat();
+            if (!entry.IsPlainStock() || protectedItems.contains(cKey) || entry.Count <= 0)
+                continue;
+            auto& delta = deltas[cKey];
+            delta.BaseId = entry.BaseId;
+            delta.Count = static_cast<int32_t>(std::clamp<int64_t>(
+                static_cast<int64_t>(delta.Count) + static_cast<int64_t>(entry.Count) * aDirection, -INT32_MAX, INT32_MAX));
+        }
+    };
+
+    accumulate(current, -1);
+    accumulate(acStock, 1);
+    ScopedInventoryOverride override;
+    for (const auto& [id, delta] : deltas)
+    {
+        if (delta.Count)
+            aContainer.AddOrRemoveItem(delta, true);
+    }
+}
+
 void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessage) noexcept
 {
     for (const ObjectData& objectData : acMessage.Objects)
     {
+        if (!m_cell || objectData.CellId != m_cell)
+            continue;
+
         const uint32_t cObjectId = World::Get().GetModSystem().GetGameId(objectData.Id);
         TESObjectREFR* pObject = Cast<TESObjectREFR>(TESForm::GetById(cObjectId));
         if (!pObject)
@@ -199,24 +280,17 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
 
         CreateObjectEntity(pObject->formID, objectData.ServerId);
 
+        if (!objectData.IsSenderFirst || objectData.HasCampaignLock)
+            ApplyLockState(*pObject, objectData.CurrentLockData.IsLocked, objectData.CurrentLockData.LockLevel);
+
+        if (objectData.HasCampaignStock && pObject->baseForm->formType == FormType::Container)
+        {
+            RestoreContainerStock(*pObject, objectData.CurrentInventory);
+            continue;
+        }
+
         if (objectData.IsSenderFirst)
             continue;
-
-        if (objectData.CurrentLockData != LockData{})
-        {
-            Lock* pLock = pObject->GetLock();
-
-            if (!pLock)
-            {
-                pLock = pObject->CreateLock();
-                if (!pLock)
-                    continue;
-            }
-
-            pLock->lockLevel = objectData.CurrentLockData.LockLevel;
-            pLock->SetLock(objectData.CurrentLockData.IsLocked);
-            pObject->LockChange();
-        }
 
         if (pObject->baseForm->formType == FormType::Container)
         {
@@ -250,12 +324,20 @@ entt::entity ObjectService::CreateObjectEntity(const uint32_t acFormId, const ui
 
 void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 {
+    if (!acEvent.pObject || !acEvent.pActivator)
+        return;
+
     if (acEvent.ActivateFlag)
     {
         acEvent.pObject->Activate(acEvent.pActivator, acEvent.Unk1, acEvent.pObjectToGet, acEvent.Count, acEvent.DefaultProcessing);
     }
 
     if (!m_transport.IsConnected())
+        return;
+
+    // Furniture animations are carried by actor actions and graph events.
+    // Activating the remote furniture also starts its gameplay scripts.
+    if (acEvent.pObject->baseForm && acEvent.pObject->baseForm->formType == FormType::Furniture)
         return;
 
     if (Lock* pLock = acEvent.pObject->GetLock())
@@ -306,6 +388,9 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
 void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
 {
+    if (!m_cell || acMessage.CellId != m_cell)
+        return;
+
     Actor* pActor = Utils::GetByServerId<Actor>(acMessage.ActivatorId);
     if (!pActor)
     {
@@ -320,6 +405,9 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
         spdlog::error("Failed to retrieve object to activate.");
         return;
     }
+
+    if (!pObject->baseForm || pObject->baseForm->formType == FormType::Furniture)
+        return;
 
     if (pObject->baseForm->formType == FormType::Door)
     {
@@ -353,6 +441,8 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
     }
 
     const auto* const pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormId));
+    if (!pObject)
+        return;
 
     TESObjectCELL* pCell = pObject->GetParentCellEx();
     if (!pCell)
@@ -375,6 +465,9 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
 
 void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexcept
 {
+    if (!m_cell || acMessage.CellId != m_cell)
+        return;
+
     const auto cObjectId = World::Get().GetModSystem().GetGameId(acMessage.Id);
     if (cObjectId == 0)
     {
@@ -389,34 +482,20 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
         return;
     }
 
-    auto* pLock = pObject->GetLock();
-
-    if(!acMessage.IsLocked)
-    {
-        if (!pLock || !pLock->IsLocked())
-            return;
-    }
-
-    if (!pLock && acMessage.IsLocked)
-    {
-        pLock = pObject->CreateLock();
-        if (!pLock)
-        {
-            spdlog::error("Failed to create lock for object form id {:X}", pObject->formID);
-            return;
-        }
-    }
-
-    pLock->lockLevel = acMessage.LockLevel;
-    pLock->SetLock(acMessage.IsLocked);
-    pObject->LockChange();
+    ApplyLockState(*pObject, acMessage.IsLocked, acMessage.LockLevel);
 }
 
 void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) noexcept
 {
     ScriptAnimationRequest request{};
-    request.FormID = acEvent.FormID;
-    request.Animation = acEvent.Animation;
+    auto& mods = m_world.GetModSystem();
+    auto* pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormID));
+    auto* pCell = pObject ? pObject->GetParentCellEx() : nullptr;
+    if (!m_transport.IsOnline() || !pCell || !mods.GetServerModId(acEvent.FormID, request.Id) ||
+        mods.GetGameId(request.Id) != acEvent.FormID ||
+        !mods.GetServerModId(pCell->formID, request.Cell) || request.Cell != m_cell)
+        return;
+    request.Tick = m_world.GetTick();
     request.EventName = acEvent.EventName;
 
     m_transport.Send(request);
@@ -424,42 +503,61 @@ void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) 
 
 void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept
 {
-    if (acMessage.FormID == 0)
+    if (!m_cell || acMessage.Cell != m_cell || acMessage.EventName.empty() ||
+        m_pendingAnimations.size() >= kMaxPendingObjectAnimations)
         return;
 
-    auto* pForm = TESForm::GetById(acMessage.FormID);
-    auto* pObject = Cast<TESObjectREFR>(pForm);
-
-    if (!pObject)
-    {
-        spdlog::error("Failed to fetch notify script animation object, form id: {:X}", acMessage.FormID);
+    const uint64_t cTick = m_world.GetTick();
+    if (cTick && acMessage.Tick &&
+        (acMessage.Tick > cTick ? acMessage.Tick - cTick : cTick - acMessage.Tick) > kMaxAnimationClockSkewMs)
         return;
-    }
 
-    BSFixedString eventName(acMessage.EventName.c_str());
-    if (acMessage.Animation == String{})
-    {
-        pObject->PlayAnimation(&eventName);
-    }
-    else
-    {
-        BSFixedString animation(acMessage.Animation.c_str());
-        pObject->PlayAnimationAndWait(&animation, &eventName);
-    }
+    m_pendingAnimations.push_back({acMessage.Id, acMessage.EventName, acMessage.Tick,
+                                   std::chrono::steady_clock::now() + std::chrono::milliseconds(750)});
 }
 
-BSTEventResult ObjectService::OnEvent(const TESActivateEvent* acEvent, const EventDispatcher<TESActivateEvent>* aDispatcher)
+void ObjectService::OnUpdate(const UpdateEvent&) noexcept
 {
-#if ENVIRONMENT_DEBUG
-    auto view = m_world.view<ObjectComponent>();
+    if (m_pendingAnimations.empty())
+        return;
 
-    const auto itor = std::find_if(std::begin(view), std::end(view), [id = acEvent->object->formID, view](entt::entity entity) { return view.get<ObjectComponent>(entity).Id == id; });
+    const auto now = std::chrono::steady_clock::now();
+    const uint64_t cTick = m_world.GetTick();
+    const auto& mods = m_world.GetModSystem();
+    const uint32_t cCellFormId = mods.GetGameId(m_cell);
+    std::unordered_set<GameId> waiting;
 
-    if (itor == std::end(view))
+    for (auto it = m_pendingAnimations.begin(); it != m_pendingAnimations.end();)
     {
-        AddObjectComponent(acEvent->object);
-    }
-#endif
+        if (now >= it->ExpiresAt)
+        {
+            it = m_pendingAnimations.erase(it);
+            continue;
+        }
 
-    return BSTEventResult::kOk;
+        if (waiting.contains(it->Id))
+        {
+            ++it;
+            continue;
+        }
+
+        const uint32_t cFormId = mods.GetGameId(it->Id);
+        auto* pObject = cFormId ? Cast<TESObjectREFR>(TESForm::GetById(cFormId)) : nullptr;
+        auto* pCell = pObject ? pObject->GetParentCellEx() : nullptr;
+        const bool cDue = !cTick || !it->Tick || (cTick >= it->Tick && cTick - it->Tick >= kObjectAnimationDelayMs);
+        if (!cDue || !pCell || pCell->formID != cCellFormId || !pObject->GetNiNode())
+        {
+            waiting.insert(it->Id);
+            ++it;
+            continue;
+        }
+
+        if (!Cast<Actor>(pObject))
+        {
+            BSFixedString eventName(it->EventName.c_str());
+            pObject->PlayAnimation(&eventName);
+            eventName.Release();
+        }
+        it = m_pendingAnimations.erase(it);
+    }
 }

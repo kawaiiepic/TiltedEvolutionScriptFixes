@@ -17,9 +17,10 @@ struct SubtitleRequest final : ClientMessage
     void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
     void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
 
-    bool operator==(const SubtitleRequest& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && ServerId == acRhs.ServerId && Text == acRhs.Text && TopicFormId == acRhs.TopicFormId && SceneId == acRhs.SceneId && ScenePhase == acRhs.ScenePhase; }
+    bool operator==(const SubtitleRequest& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && ServerId == acRhs.ServerId && Text == acRhs.Text && TopicFormId == acRhs.TopicFormId && SceneId == acRhs.SceneId && ScenePhase == acRhs.ScenePhase && DialogueToken == acRhs.DialogueToken; }
 
     uint32_t ServerId{};
+    uint32_t DialogueToken{}; // Nonzero for player dialogue with a server grant.
     TiltedPhoques::String Text{};
     uint32_t TopicFormId{};
     // The scene the line was spoken in on the sender, if not in the player dialogue menu

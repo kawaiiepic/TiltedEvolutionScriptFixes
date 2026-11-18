@@ -3,26 +3,80 @@
 #include <Events/PacketEvent.h>
 #include <Structs/GameId.h>
 
-struct World;
-struct UpdateEvent;
-struct RequestQuestUpdate;
+#include <map>
+#include <chrono>
+#include <Campaign/FormSyncPolicies.h>
+#include <Campaign/QuestJournal.h>
+#include <Messages/NotifyQuestUpdate.h>
+#include <Messages/NotifySceneState.h>
 
-/**
- * @brief Dispatch quest sync messages.
- *
- * This service is currently not in use.
- */
+struct World;
+struct Player;
+struct PlayerJoinEvent;
+struct RequestQuestUpdate;
+struct RequestQuestSyncAck;
+struct RequestSceneState;
+struct PlayerLeaveEvent;
+struct UpdateEvent;
+
+// The server owns an ordered campaign journal. The game clients still run native quest fragments.
 class QuestService
 {
 public:
     QuestService(World& aWorld, entt::dispatcher& aDispatcher);
+    void ShowCampaignStatus() const noexcept;
+    void BackupCampaign() const noexcept;
+    const Campaign::QuestSnapshot* GetCampaignQuest(const Campaign::PluginFormKey& acKey) const noexcept;
 
 private:
-    void OnQuestChanges(const PacketEvent<RequestQuestUpdate>& aChanges) noexcept;
+    struct QuestSync
+    {
+        size_t Cursor{};
+        NotifyQuestUpdate Pending;
+        std::chrono::steady_clock::time_point RetryAt{};
+    };
+
+    void OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessage) noexcept;
+    void OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept;
+    void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
+    void OnQuestSyncTick(const UpdateEvent&) noexcept;
+    void OnQuestSyncAck(const PacketEvent<RequestQuestSyncAck>& acEvent) noexcept;
+    void QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept;
+
+    struct SceneObserver
+    {
+        SceneState State{};
+        std::chrono::steady_clock::time_point LastSeen{};
+    };
+
+    struct SharedScene
+    {
+        NotifySceneState Canonical{};
+        std::map<uint32_t, SceneObserver> Observers;
+        bool Ended{};
+    };
+
+    void OnSceneState(const PacketEvent<RequestSceneState>& acEvent) noexcept;
+    void OnSceneTick(const UpdateEvent&) noexcept;
+    void RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept;
+    bool PreferDialogueOwner(SharedScene& aScene) noexcept;
+    void BroadcastScene(const NotifySceneState& acState) noexcept;
+    static void SendScene(const NotifySceneState& acState, const Player& acPlayer) noexcept;
+
+    std::map<uint64_t, SharedScene> m_scenes;
+    uint32_t m_nextSceneGeneration{};
+    std::chrono::steady_clock::time_point m_nextSceneTick{};
+    entt::scoped_connection m_sceneConnection;
+    entt::scoped_connection m_sceneTickConnection;
+    entt::scoped_connection m_leaveConnection;
 
     World& m_world;
+    Campaign::QuestJournal m_journal;
+    Campaign::FormSyncPolicies m_policies;
+    std::map<uint32_t, QuestSync> m_questSync;
 
     entt::scoped_connection m_questUpdateConnection;
-    entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_joinConnection;
+    entt::scoped_connection m_questSyncTickConnection;
+    entt::scoped_connection m_questSyncAckConnection;
 };

@@ -2,6 +2,7 @@
 
 #include <Components.h>
 #include <World.h>
+#include <Services/ObjectService.h>
 #include <GameServer.h>
 
 #include <Messages/NotifyObjectInventoryChanges.h>
@@ -70,15 +71,25 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
             }
         }
     }
-    else if (message.OwnershipEpoch != 0)
+    else
     {
-        spdlog::warn(
-            "Rejected inventory change from player {:X} because object {:X} unexpectedly carried ownership epoch {}",
-            acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch);
-        return;
+        const auto* pCell = m_world.try_get<CellIdComponent>(*it);
+        if (!m_world.all_of<ObjectComponent>(*it) || !pCell || !acMessage.pPlayer->GetCharacter() ||
+            acMessage.pPlayer->GetCellComponent().Cell != pCell->Cell || message.Item.IsQuestItem)
+            return;
+        if (message.OwnershipEpoch != 0)
+        {
+            spdlog::warn(
+             "Rejected inventory change from player {:X} because object {:X} unexpectedly carried ownership epoch {}",
+                acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch);
+            return;
+        }
     }
 
     auto& inventoryComponent = view.get<InventoryComponent>(*it);
+    if (const auto* pObject = m_world.try_get<ObjectComponent>(*it);
+        pObject && !m_world.ctx().at<ObjectService>().CommitStockChange(*pObject, inventoryComponent.Content, message.Item))
+        return;
     inventoryComponent.Content.AddOrRemoveEntry(message.Item);
 
     if (!message.UpdateClients && !isRemoteNpcInteraction)

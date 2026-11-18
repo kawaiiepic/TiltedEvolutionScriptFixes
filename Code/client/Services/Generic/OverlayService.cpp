@@ -19,9 +19,11 @@
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyPlayerJoined.h>
 #include <Messages/NotifyPlayerDialogue.h>
+#include <Messages/PlayerDialogueRequest.h>
+#include <Games/Misc/MenuTopicManager.h>
+#include <TESObjectREFR.h>
 #include <Messages/NotifyPlayerLevel.h>
 #include <Messages/NotifyPlayerCellChanged.h>
-#include <Messages/NotifyTeleport.h>
 #include <Messages/RequestPlayerHealthUpdate.h>
 #include <Messages/NotifyPlayerHealthUpdate.h>
 
@@ -123,7 +125,6 @@ OverlayService::OverlayService(World& aWorld, TransportService& transport, entt:
     m_playerRemovedConnection = m_world.on_destroy<PlayerComponent>().connect<&OverlayService::OnPlayerComponentRemoved>(this);
     m_playerLevelConnection = aDispatcher.sink<NotifyPlayerLevel>().connect<&OverlayService::OnPlayerLevel>(this);
     m_cellChangedConnection = aDispatcher.sink<NotifyPlayerCellChanged>().connect<&OverlayService::OnPlayerCellChanged>(this);
-    m_teleportConnection = aDispatcher.sink<NotifyTeleport>().connect<&OverlayService::OnNotifyTeleport>(this);
     m_playerHealthConnection = aDispatcher.sink<NotifyPlayerHealthUpdate>().connect<&OverlayService::OnNotifyPlayerHealthUpdate>(this);
     m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>().connect<&OverlayService::OnPartyJoinedEvent>(this);
     m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>().connect<&OverlayService::OnPartyLeftEvent>(this);
@@ -277,6 +278,8 @@ void OverlayService::SetPlayerHealthPercentage(uint32_t aFormId) const noexcept
 
 void OverlayService::OnUpdate(const UpdateEvent&) noexcept
 {
+    RefreshDialogueSession();
+    PublishDialogueOptions();
     RunDebugDataUpdates();
     RunPlayerHealthUpdates();
 }
@@ -292,6 +295,7 @@ void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 
 void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
 {
+    CloseDialogueSession();
     m_pOverlay->ExecuteAsync("disconnect");
 }
 
@@ -342,16 +346,270 @@ void OverlayService::OnChatMessageReceived(const NotifyChatMessageBroadcast& acM
     m_pOverlay->ExecuteAsync("message", pArguments);
 }
 
+bool OverlayService::SendDialogueAction(uint8_t aAction, const char* apText) noexcept
+{
+    if (!m_transport.IsOnline() || !m_dialogueToken)
+        return false;
+    PlayerDialogueRequest request{};
+    request.Action = aAction;
+    request.ActorId = m_dialogueActorId;
+    request.Token = m_dialogueToken;
+    if (apText)
+        request.Text = apText;
+    return m_transport.Send(request);
+}
+
+void OverlayService::CloseDialogueSession() noexcept
+{
+    // Invalidate the native selection grant locally before releasing it to someone else.
+    m_dialogueGranted = false;
+    m_dialogueCanChoose = false;
+    SendDialogueAction(PlayerDialogueRequest::Leave);
+    m_dialogueActorId = 0;
+    m_dialogueToken = 0;
+    m_dialogueSpeakerHandle = 0;
+    m_dialoguePanelRevision = 0;
+    m_dialogueYielded = false;
+    m_dialogueOptionsPublished = false;
+    m_lastDialogueOptions.clear();
+}
+
+void OverlayService::RefreshDialogueSession() noexcept
+{
+    if (!m_transport.IsOnline())
+        return;
+
+    auto* pManager = MenuTopicManager::Get();
+    if (!pManager || !pManager->menuOpen || !pManager->speaker)
+    {
+        if (m_dialogueToken)
+            CloseDialogueSession();
+        return;
+    }
+
+    const uint32_t cHandle = pManager->speaker.handle.iBits;
+    if (m_dialogueToken && m_dialogueSpeakerHandle == cHandle)
+        return;
+
+    if (m_dialogueToken)
+        CloseDialogueSession();
+
+    auto* pSpeaker = TESObjectREFR::GetByHandle(cHandle);
+    if (!pSpeaker)
+        return;
+
+    // Use the replicated actor entity, not a local runtime FormID, so dynamic NPCs
+    // and clients with different load orders refer to the same conversation.
+    auto view = m_world.view<FormIdComponent>(entt::exclude<ObjectComponent>);
+    for (auto entity : view)
+    {
+        if (view.get<FormIdComponent>(entity).Id != pSpeaker->formID)
+            continue;
+        const auto serverId = Utils::GetServerId(entity);
+        if (!serverId)
+            continue;
+
+        m_dialogueActorId = *serverId;
+        m_dialogueSpeakerHandle = cHandle;
+        if (++m_nextDialogueToken == 0)
+            ++m_nextDialogueToken;
+        m_dialogueToken = m_nextDialogueToken;
+        m_dialogueGranted = false;
+        m_dialogueCanChoose = false;
+        if (!SendDialogueAction(PlayerDialogueRequest::Join))
+            CloseDialogueSession();
+        return;
+    }
+}
+
+void OverlayService::PublishDialogueOptions() noexcept
+{
+    if (!m_transport.IsOnline() || !m_dialogueGranted || !m_dialogueCanChoose ||
+        std::chrono::steady_clock::now() < m_dialoguePublishAfter)
+        return;
+    const auto* pManager = MenuTopicManager::Get();
+    if (!pManager || !pManager->menuOpen || pManager->speaker.handle.iBits != m_dialogueSpeakerHandle)
+        return;
+
+    std::vector<String> options;
+    if (pManager->pOptions)
+    {
+        for (const auto* pOption : *pManager->pOptions)
+        {
+            if (options.size() >= 64)
+                break;
+            options.emplace_back(pOption && pOption->text ? pOption->text : "");
+        }
+    }
+    if (m_dialogueOptionsPublished && options == m_lastDialogueOptions)
+        return;
+    PlayerDialogueRequest request{};
+    request.Action = PlayerDialogueRequest::PublishOptions;
+    request.ActorId = m_dialogueActorId;
+    request.Token = m_dialogueToken;
+    request.Options = options;
+    if (m_transport.Send(request))
+    {
+        m_lastDialogueOptions = std::move(options);
+        m_dialogueOptionsPublished = true;
+    }
+}
+
+void OverlayService::ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept
+{
+    RefreshDialogueSession();
+    if (!m_dialogueGranted || !m_dialogueCanChoose || aActorId != m_dialogueActorId ||
+        !aRevision || aRevision != m_dialoguePanelRevision)
+        return;
+
+    if (aAction == 0)
+    {
+        // Revoke the local grant before sending Leave. Keep the token until
+        // the native menu closes so it cannot automatically rejoin.
+        m_dialogueYielded = true;
+        m_dialogueCanChoose = false;
+        if (!SendDialogueAction(PlayerDialogueRequest::Leave))
+        {
+            m_dialogueYielded = false;
+            m_dialogueCanChoose = true;
+        }
+        return;
+    }
+
+    if (aAction == 1 || aAction == 2)
+    {
+        PlayerDialogueRequest request{};
+        request.Action = PlayerDialogueRequest::SetPrivacy;
+        request.ActorId = aActorId;
+        request.Token = m_dialogueToken;
+        request.Revision = aRevision;
+        request.Index = aAction == 1 ? 1 : 0;
+        m_transport.Send(request);
+    }
+}
+
+uint32_t OverlayService::GetDialogueGrant(uint32_t aActorId) const noexcept
+{
+    return m_dialogueGranted && m_dialogueCanChoose && m_dialogueActorId == aActorId ? m_dialogueToken : 0;
+}
+
+bool OverlayService::CanSelectDialogue(const char* apText) noexcept
+{
+    if (!m_transport.IsOnline())
+        return true;
+
+    RefreshDialogueSession();
+    if (m_dialogueYielded)
+    {
+        Utils::ShowHudMessage("You passed control. Close and reopen dialogue to rejoin.");
+        return false;
+    }
+    if (!m_dialogueGranted)
+    {
+        Utils::ShowHudMessage("Waiting for shared dialogue control. Reopen the conversation if it cannot connect.");
+        return false;
+    }
+
+    if (m_dialogueCanChoose)
+    {
+        if (SendDialogueAction(PlayerDialogueRequest::Choose, apText))
+        {
+            m_dialogueOptionsPublished = false;
+            m_dialoguePublishAfter = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+            return true;
+        }
+        Utils::ShowHudMessage("Unable to send dialogue choice.");
+        return false;
+    }
+
+    if (!apText || !*apText)
+        return false;
+    if (SendDialogueAction(PlayerDialogueRequest::Suggest, apText))
+        Utils::ShowHudMessage("Dialogue suggestion sent to the conversation owner.");
+    else
+        Utils::ShowHudMessage("Unable to send dialogue suggestion.");
+    return false;
+}
+
 void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noexcept
 {
-    if (!m_pOverlay)
+    if (acMessage.Kind == NotifyPlayerDialogue::Panel || acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
+    {
+        if (acMessage.ActorId == m_dialogueActorId)
+            m_dialoguePanelRevision = acMessage.CanChoose ? acMessage.Revision : 0;
+        if (!m_pOverlay)
+            return;
+        auto pArguments = CefListValue::Create();
+        pArguments->SetDouble(0, acMessage.ActorId);
+        pArguments->SetBool(1, acMessage.Kind == NotifyPlayerDialogue::Panel);
+        pArguments->SetString(2, acMessage.Name.c_str());
+        pArguments->SetBool(3, acMessage.CanChoose);
+        pArguments->SetDouble(4, acMessage.Revision);
+        const auto* pActor = Utils::GetByServerId<Actor>(acMessage.ActorId);
+        pArguments->SetString(5, pActor && pActor->baseForm ? pActor->baseForm->GetName() : "NPC");
+        auto options = CefListValue::Create();
+        auto votes = CefListValue::Create();
+        for (size_t i = 0; i < acMessage.Options.size(); ++i)
+        {
+            options->SetString(i, acMessage.Options[i].c_str());
+            votes->SetInt(i, i < acMessage.Votes.size() ? static_cast<int>(acMessage.Votes[i]) : 0);
+        }
+        pArguments->SetList(6, options);
+        pArguments->SetList(7, votes);
+        pArguments->SetInt(8, acMessage.Selected == UINT32_MAX ? -1 : static_cast<int>(acMessage.Selected));
+        pArguments->SetBool(9, acMessage.CanVote);
+        pArguments->SetBool(10, acMessage.CanPass);
+        pArguments->SetBool(11, acMessage.Private);
+        m_pOverlay->ExecuteAsync("sharedDialogue", pArguments);
+        return;
+    }
+
+    if (m_dialogueYielded || !m_dialogueToken || acMessage.Token != m_dialogueToken || acMessage.ActorId != m_dialogueActorId)
+        return;
+
+    if (acMessage.Kind == NotifyPlayerDialogue::State)
+    {
+        const bool cChanged = !m_dialogueGranted || m_dialogueCanChoose != acMessage.CanChoose;
+        m_dialogueGranted = true;
+        m_dialogueCanChoose = acMessage.CanChoose;
+        if (cChanged)
+            m_dialogueOptionsPublished = false;
+        if (cChanged)
+        {
+            if (m_dialogueCanChoose)
+                Utils::ShowHudMessage("You control this conversation.");
+            else
+            {
+                const String message = acMessage.Name + " controls this conversation. Choose a response to suggest it.";
+                Utils::ShowHudMessage(message);
+            }
+        }
+        return;
+    }
+
+    if (acMessage.Kind == NotifyPlayerDialogue::Denied)
+    {
+        m_dialogueGranted = false;
+        m_dialogueCanChoose = false;
+        Utils::ShowHudMessage("Shared dialogue unavailable. Close and reopen the conversation.");
+        return;
+    }
+
+    if (acMessage.Kind == NotifyPlayerDialogue::Suggestion && m_dialogueCanChoose)
+    {
+        const String message = acMessage.Name + " suggests: " + acMessage.Text;
+        Utils::ShowHudMessage(message);
+    }
+
+    if (!m_pOverlay || (acMessage.Kind != NotifyPlayerDialogue::Choice && acMessage.Kind != NotifyPlayerDialogue::Suggestion))
         return;
 
     auto pArguments = CefListValue::Create();
     pArguments->SetInt(0, kPlayerDialogue);
-    pArguments->SetString(1, acMessage.Text.c_str());
+    const std::string text = (acMessage.Kind == NotifyPlayerDialogue::Suggestion ? "[Suggestion] " : "") +
+        std::string(acMessage.Text.c_str());
+    pArguments->SetString(1, text);
     pArguments->SetString(2, acMessage.Name.c_str());
-
     m_pOverlay->ExecuteAsync("message", pArguments);
 }
 
@@ -398,33 +656,6 @@ void OverlayService::OnPlayerCellChanged(const NotifyPlayerCellChanged& acMessag
     String cellName = GetCellName(acMessage.WorldSpaceId, acMessage.CellId);
     pArguments->SetString(1, cellName.c_str());
     m_pOverlay->ExecuteAsync("setCell", pArguments);
-}
-
-void OverlayService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
-{
-    auto& modSystem = m_world.GetModSystem();
-
-    const uint32_t cellId = modSystem.GetGameId(acMessage.CellId);
-    TESObjectCELL* pCell = Cast<TESObjectCELL>(TESForm::GetById(cellId));
-    if (!pCell)
-    {
-        const uint32_t worldSpaceId = modSystem.GetGameId(acMessage.WorldSpaceId);
-        TESWorldSpace* pWorldSpace = Cast<TESWorldSpace>(TESForm::GetById(worldSpaceId));
-        if (pWorldSpace)
-        {
-            GridCellCoords coordinates = GridCellCoords::CalculateGridCellCoords(acMessage.Position);
-            pCell = pWorldSpace->LoadCell(coordinates.X, coordinates.Y);
-        }
-
-        if (!pCell)
-        {
-            spdlog::error("Failed to fetch cell to teleport to.");
-            m_world.GetOverlayService().SendSystemMessage("Teleporting to player failed.");
-            return;
-        }
-    }
-
-    PlayerCharacter::Get()->MoveTo(pCell, acMessage.Position);
 }
 
 void OverlayService::OnNotifyPlayerHealthUpdate(const NotifyPlayerHealthUpdate& acMessage) noexcept

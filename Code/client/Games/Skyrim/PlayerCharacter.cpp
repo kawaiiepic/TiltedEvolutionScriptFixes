@@ -86,7 +86,7 @@ void PlayerCharacter::AddSkillExperience(int32_t aSkill, float aExperience) noex
     spdlog::debug("Added {} experience to skill {}", deltaExperience, aSkill);
 }
 
-NiPoint3 PlayerCharacter::RespawnPlayer() noexcept
+void PlayerCharacter::RecoverFromBleedout() noexcept
 {
     // Make bleedout state recoverable
     SetNoBleedoutRecovery(false);
@@ -96,6 +96,11 @@ NiPoint3 PlayerCharacter::RespawnPlayer() noexcept
     // Reset health to max
     // TODO(cosideci): there's a cleaner way to do this
     ForceActorValue(ActorValueOwner::ForceMode::DAMAGE, ActorValueInfo::kHealth, 1000000);
+}
+
+NiPoint3 PlayerCharacter::RespawnPlayer() noexcept
+{
+    RecoverFromBleedout();
 
     TESObjectCELL* pCell = nullptr;
 

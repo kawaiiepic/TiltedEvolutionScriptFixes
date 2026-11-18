@@ -49,12 +49,19 @@ add_requires(
     "tiltedcore 0.2.9", 
     "cryptopp 8.9.0", 
     "spdlog v1.13.0", 
-    "cpp-httplib 0.14.0",
     "gtest v1.14.0", 
     "mem 1.0.0", 
     "glm 0.9.9+8", 
     "zlib v1.3.1"
 )
+if is_plat("linux") then
+    -- GameNetworkingSockets uses OpenSSL 3 on Linux. Use the same TLS library
+    -- for HTTP so their identically named link libraries cannot conflict.
+    add_requires("cpp-httplib 0.15.3")
+    add_requireconfs("*.openssl3", { version = "3.5.7", system = false, override = true })
+else
+    add_requires("cpp-httplib 0.14.0")
+end
 if is_plat("windows") then
     add_requires(
         "discord 3.2.1", 

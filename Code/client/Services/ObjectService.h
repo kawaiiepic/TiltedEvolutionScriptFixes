@@ -1,10 +1,12 @@
 #pragma once
 
-#include <Events/EventDispatcher.h>
-#include <Games/Events.h>
+#include <Structs/GameId.h>
+#include <chrono>
+#include <deque>
 
 struct ServerTimeSettings;
 struct DisconnectedEvent;
+struct UpdateEvent;
 struct World;
 struct ActivateEvent;
 struct TransportService;
@@ -19,13 +21,14 @@ struct NotifyScriptAnimation;
 /**
  * @brief Handles objects in the environment.
  */
-class ObjectService final : public BSTEventSink<TESActivateEvent>
+class ObjectService final
 {
 public:
     ObjectService(World&, entt::dispatcher&, TransportService&);
 
 private:
     void OnDisconnected(const DisconnectedEvent&) noexcept;
+    void OnUpdate(const UpdateEvent&) noexcept;
     void OnCellChange(const CellChangeEvent&) noexcept;
     void OnAssignObjectsResponse(const AssignObjectsResponse&) noexcept;
     void OnActivate(const ActivateEvent&) noexcept;
@@ -35,14 +38,23 @@ private:
     void OnScriptAnimationEvent(const ScriptAnimationEvent&) noexcept;
     void OnNotifyScriptAnimation(const NotifyScriptAnimation&) noexcept;
 
-    BSTEventResult OnEvent(const TESActivateEvent*, const EventDispatcher<TESActivateEvent>*) override;
-
     entt::entity CreateObjectEntity(const uint32_t acFormId, const uint32_t acServerId) noexcept;
 
+    struct PendingAnimation
+    {
+        GameId Id;
+        String EventName;
+        uint64_t Tick;
+        std::chrono::steady_clock::time_point ExpiresAt;
+    };
+
+    GameId m_cell{};
+    std::deque<PendingAnimation> m_pendingAnimations;
     World& m_world;
     TransportService& m_transport;
 
     entt::scoped_connection m_disconnectedConnection;
+    entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_cellChangeConnection;
     entt::scoped_connection m_onActivateConnection;
     entt::scoped_connection m_activateConnection;

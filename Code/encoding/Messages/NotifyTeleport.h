@@ -18,9 +18,10 @@ struct NotifyTeleport final : ServerMessage
     void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
     void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
 
-    bool operator==(const NotifyTeleport& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && CellId == acRhs.CellId && Position == acRhs.Position && WorldSpaceId == acRhs.WorldSpaceId; }
+    bool operator==(const NotifyTeleport& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && CellId == acRhs.CellId && Position == acRhs.Position && WorldSpaceId == acRhs.WorldSpaceId && CarriageToken == acRhs.CarriageToken; }
 
     GameId CellId{};
     Vector3_NetQuantize Position{};
     GameId WorldSpaceId{};
+    uint32_t CarriageToken{};
 };

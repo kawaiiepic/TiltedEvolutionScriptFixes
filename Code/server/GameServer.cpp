@@ -18,6 +18,9 @@
 #include <Messages/NotifySettingsChange.h>
 #include <console/ConsoleRegistry.h>
 #include <resources/ResourceCollection.h>
+#include <Services/QuestService.h>
+
+#include <algorithm>
 
 constexpr size_t kMaxServerNameLength = 128u;
 
@@ -38,8 +41,10 @@ Console::Setting bEnableGreetings{"Gameplay:bEnableGreetings", "Enables NPC gree
 Console::Setting bEnablePvp{"Gameplay:bEnablePvp", "Enables pvp", false};
 Console::Setting bSyncPlayerHomes{"Gameplay:bSyncPlayerHomes", "Sync chests and displays in player homes and other NoResetZones", false};
 Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the custom multiplayer death system. Only disable it if you use another mod that replaces death", true};
+Console::Setting uPlayerRespawnDelay{"Gameplay:uPlayerRespawnDelay", "Seconds to wait for a revive before automatically respawning (1 to 120)", 30u, Console::SettingsFlags::kLocked};
 Console::Setting uTimeScale{"Gameplay:uTimeScale", "How many seconds pass ingame for every real second (0 to 1000). Changing this can make the game unstable", 20u};
 Console::Setting bSyncPlayerCalendar{"Gameplay:bSyncPlayerCalendar", "Syncs up all player calendars to be the same day, month, and year. This uses the date of the player with the furthest ahead date at connection.", false};
+Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Share combat skill XP within a party", false, Console::SettingsFlags::kLocked};
 Console::Setting bAutoPartyJoin{"Gameplay:bAutoPartyJoin", "Join parties automatically, as long as there is only one party in the server", true};
 // ModPolicy Stuff
 Console::Setting bEnableModCheck{"ModPolicy:bEnableModCheck", "Refuse clients whose mods do not match Data/loadorder.txt", false, Console::SettingsFlags::kLocked};
@@ -139,8 +144,10 @@ ServerSettings GetSettings()
     settings.PvpEnabled = bEnablePvp;
     settings.SyncPlayerHomes = bSyncPlayerHomes;
     settings.DeathSystemEnabled = bEnableDeathSystem;
+    settings.PlayerRespawnDelay = GameServer::GetPlayerRespawnDelay();
     settings.SyncPlayerCalendar = bSyncPlayerCalendar;
     settings.AutoPartyJoin = bAutoPartyJoin;
+    settings.ShareCombatExperience = bEnableXpSync;
     return settings;
 }
 
@@ -204,6 +211,21 @@ GameServer* GameServer::Get() noexcept
 bool GameServer::IsPublicServer() const noexcept
 {
     return bAnnounceServer;
+}
+
+bool GameServer::SharesCombatExperience() const noexcept
+{
+    return bEnableXpSync;
+}
+
+bool GameServer::HasDeathSystem() const noexcept
+{
+    return bEnableDeathSystem;
+}
+
+uint32_t GameServer::GetPlayerRespawnDelay() noexcept
+{
+    return std::clamp(uPlayerRespawnDelay.value_as<uint32_t>(), 1u, 120u);
 }
 
 bool GameServer::AllowsAutoPartyJoin() const noexcept
@@ -346,6 +368,10 @@ void GameServer::BindServerCommands()
             m_pResources->ForEachManifest([&](const auto& aManifest) { out->info("{} -> {}", aManifest.Name.c_str(), aManifest.Description.c_str()); });
         });
 
+    m_commands.RegisterCommand<>("campaign-status", "Inspect the shared quest journal and player replay progress",
+                                  [this](Console::ArgStack&) { m_pWorld->ctx().at<QuestService>().ShowCampaignStatus(); });
+    m_commands.RegisterCommand<>("campaign-backup", "Copy the shared quest journal to shared-quests.log.backup",
+                                  [this](Console::ArgStack&) { m_pWorld->ctx().at<QuestService>().BackupCampaign(); });
     m_commands.RegisterCommand<>("quit", "Stop the server", [&](Console::ArgStack&) { Kill(); });
 
     m_commands.RegisterCommand<int64_t, int64_t>(
@@ -774,7 +800,7 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
     info.m_addrRemote.ToString(remoteAddress, 48, false);
 
     AuthenticationResponse serverResponse;
-    serverResponse.Version = BUILD_COMMIT;
+    serverResponse.Version = BUILD_PROTOCOL;
 
     using RT = AuthenticationResponse::ResponseType;
     auto sendKick = [&](const RT type)
@@ -786,7 +812,7 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
     };
 #if 1
     // to make our testing life a bit easier.
-    if (acRequest->Version != BUILD_COMMIT)
+    if (acRequest->Version != BUILD_PROTOCOL)
     {
         spdlog::info("New player {:x} '{}' tried to connect with client {} - Version mismatch", aConnectionId, remoteAddress, acRequest->Version.c_str());
         sendKick(RT::kWrongVersion);

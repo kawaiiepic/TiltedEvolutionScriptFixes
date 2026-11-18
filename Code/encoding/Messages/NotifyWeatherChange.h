@@ -16,7 +16,9 @@ struct NotifyWeatherChange final : ServerMessage
     void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
     void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
 
-    bool operator==(const NotifyWeatherChange& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && Id == acRhs.Id; }
+    bool operator==(const NotifyWeatherChange& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && Id == acRhs.Id && Cell == acRhs.Cell && Owner == acRhs.Owner; }
 
     GameId Id{};
+    GameId Cell{};
+    uint32_t Owner{};
 };

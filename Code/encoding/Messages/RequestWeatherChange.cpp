@@ -3,6 +3,7 @@
 void RequestWeatherChange::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
     Id.Serialize(aWriter);
+    Cell.Serialize(aWriter);
 }
 
 void RequestWeatherChange::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -10,4 +11,5 @@ void RequestWeatherChange::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader
     ClientMessage::DeserializeRaw(aReader);
 
     Id.Deserialize(aReader);
+    Cell.Deserialize(aReader);
 }

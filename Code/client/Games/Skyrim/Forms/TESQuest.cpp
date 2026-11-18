@@ -99,8 +99,13 @@ bool TESQuest::ScriptSetStage(uint16_t stageIndex)
         return false;
 
     using Quest = TESQuest;
-    PAPYRUS_FUNCTION(void, Quest, SetCurrentStageID, int);
-    s_pSetCurrentStageID(this, stageIndex);
+    const auto* pAddress = World::Get().ctx().at<PapyrusService>().Get("Quest", "SetCurrentStageID");
+    const auto* pVm = GameVM::Get();
+    if (!pAddress || !pVm || !pVm->virtualMachine)
+        return false;
+
+    const PapyrusFunction<void, Quest, int> setCurrentStage(pAddress);
+    setCurrentStage(this, stageIndex);
     return IsStageReached(stageIndex);
 }
 

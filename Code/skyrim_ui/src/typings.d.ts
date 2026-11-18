@@ -96,6 +96,7 @@ declare namespace SkyrimTogetherTypes {
   type PartyInviteReceivedCallback = (inviterId: number) => void;
 
   type QuestUpdatedCallback = () => void;
+  type SharedDialogueCallback = (actorId: number, visible: boolean, owner: string, canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number, canVote: boolean, canPass: boolean, isPrivate: boolean) => void;
 }
 
 /** Global Skyrim: Together object. */
@@ -103,6 +104,8 @@ declare const skyrimtogether: SkyrimTogether;
 
 /** Global Skyrim: Together object type. */
 interface SkyrimTogether {
+  on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;
+  off(event: 'sharedDialogue', callback?: SkyrimTogetherTypes.SharedDialogueCallback): void;
   /** Add listener to when the UI is first initialized. */
   on(event: 'init', callback: SkyrimTogetherTypes.InitCallback): void;
 
@@ -384,6 +387,8 @@ interface SkyrimTogether {
    * Send message to server.
    */
   sendMessage(type: number, message: string): void;
+  voteDialogue(actorId: number, revision: number, index: number): void;
+  manageDialogue(actorId: number, revision: number, action: number): void;
 
   /**
    * Send a request to the server for changing the in-game time.

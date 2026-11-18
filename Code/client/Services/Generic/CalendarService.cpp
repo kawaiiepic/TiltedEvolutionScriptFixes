@@ -28,8 +28,13 @@ CalendarService::CalendarService(World& aWorld, entt::dispatcher& aDispatcher, T
 
 void CalendarService::OnTimeUpdate(const ServerTimeSettings& acMessage) noexcept
 {
-    // disable the game clock
-    ToggleGameClock(false);
+    const bool cFirstSync = !s_gameClockLocked;
+    if (cFirstSync)
+    {
+        ToggleGameClock(false);
+        m_fadeTimer = 0.f;
+    }
+    m_lastTick = m_world.GetTick();
     m_onlineTime.m_timeModel.TimeScale = acMessage.timeModel.TimeScale;
     m_onlineTime.m_timeModel.Time = acMessage.timeModel.Time;
 
@@ -39,7 +44,7 @@ void CalendarService::OnTimeUpdate(const ServerTimeSettings& acMessage) noexcept
         m_onlineTime.m_timeModel.Month = acMessage.timeModel.Month;
         m_onlineTime.m_timeModel.Year = acMessage.timeModel.Year;
     }
-    else
+    else if (cFirstSync)
     {
         m_onlineTime.m_timeModel.Day = m_offlineTime.m_timeModel.Day;
         m_onlineTime.m_timeModel.Month = m_offlineTime.m_timeModel.Month;
@@ -49,9 +54,9 @@ void CalendarService::OnTimeUpdate(const ServerTimeSettings& acMessage) noexcept
 
 void CalendarService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
-    // signal a time transition
-    m_fadeTimer = 0.f;
-    ToggleGameClock(true);
+    m_lastTick = 0;
+    if (s_gameClockLocked)
+        ToggleGameClock(true);
 }
 
 float CalendarService::TimeInterpolate(const TimeModel& aFrom, TimeModel& aTo) const

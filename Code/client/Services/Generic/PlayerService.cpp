@@ -1,36 +1,49 @@
 #include <Services/PlayerService.h>
 
 #include <World.h>
+#include <Components.h>
 
+#include <Events/ActivateEvent.h>
+#include <Events/RevivePlayerEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/ConnectedEvent.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/GridCellChangeEvent.h>
 #include <Events/CellChangeEvent.h>
-#include <Events/PlayerDialogueEvent.h>
 #include <Events/PlayerLevelEvent.h>
 #include <Events/PartyJoinedEvent.h>
 #include <Events/PartyLeftEvent.h>
 #include <Events/BeastFormChangeEvent.h>
 
 #include <Messages/PlayerRespawnRequest.h>
+#include <Messages/NotifyPlayerDowned.h>
 #include <Messages/NotifyPlayerRespawn.h>
 #include <Messages/ShiftGridCellRequest.h>
 #include <Messages/EnterExteriorCellRequest.h>
 #include <Messages/EnterInteriorCellRequest.h>
-#include <Messages/PlayerDialogueRequest.h>
 #include <Messages/PlayerLevelRequest.h>
+#include <Messages/RequestCarriageTravel.h>
 
+#include <Structs/CarriageTravel.h>
+#include <Structs/PlayerRevive.h>
 #include <Structs/ServerSettings.h>
 
 #include <PlayerCharacter.h>
+#include <Games/ActorExtension.h>
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESGlobal.h>
+#include <Forms/BGSKeyword.h>
+#include <Forms/TESWorldSpace.h>
+#include <Components/BGSKeywordForm.h>
 #include <Games/Overrides.h>
 #include <Games/References.h>
+#include <Games/TES.h>
 #include <AI/AIProcess.h>
+#include <AI/Movement/PlayerControls.h>
 #include <EquipManager.h>
 #include <Forms/TESRace.h>
+#include <Interface/UI.h>
+#include <Services/OverlayService.h>
 
 PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
     : m_world(aWorld)
@@ -42,21 +55,27 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_disconnectedConnection = m_dispatcher.sink<DisconnectedEvent>().connect<&PlayerService::OnDisconnected>(this);
     m_settingsConnection = m_dispatcher.sink<ServerSettings>().connect<&PlayerService::OnServerSettingsReceived>(this);
     m_notifyRespawnConnection = m_dispatcher.sink<NotifyPlayerRespawn>().connect<&PlayerService::OnNotifyPlayerRespawn>(this);
+    m_notifyDownedConnection = m_dispatcher.sink<NotifyPlayerDowned>().connect<&PlayerService::OnNotifyPlayerDowned>(this);
+    m_reviveConnection = m_dispatcher.sink<RevivePlayerEvent>().connect<&PlayerService::OnRevivePlayer>(this);
     m_gridCellChangeConnection = m_dispatcher.sink<GridCellChangeEvent>().connect<&PlayerService::OnGridCellChangeEvent>(this);
     m_cellChangeConnection = m_dispatcher.sink<CellChangeEvent>().connect<&PlayerService::OnCellChangeEvent>(this);
-    m_playerDialogueConnection = m_dispatcher.sink<PlayerDialogueEvent>().connect<&PlayerService::OnPlayerDialogueEvent>(this);
     m_playerLevelConnection = m_dispatcher.sink<PlayerLevelEvent>().connect<&PlayerService::OnPlayerLevelEvent>(this);
     m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>().connect<&PlayerService::OnPartyJoinedEvent>(this);
     m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>().connect<&PlayerService::OnPartyLeftEvent>(this);
+    m_carriageActivateConnection = aDispatcher.sink<ActivateEvent>().connect<&PlayerService::OnActivate>(this);
+    m_teleportConnection = aDispatcher.sink<NotifyTeleport>().connect<&PlayerService::OnNotifyTeleport>(this);
+    EventDispatcherManager::Get()->fastTravelEndEvent.RegisterSink(this);
 }
 
 void PlayerService::OnUpdate(const UpdateEvent&) noexcept
 {
     RunRespawnUpdates();
     RunPostDeathUpdates();
+    RunRevivePrompt();
     RunDifficultyUpdates();
     RunLevelUpdates();
     RunBeastFormDetection();
+    RunCarriageTravelUpdates();
 }
 
 void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -71,6 +90,9 @@ void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
 
 void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
+    m_carriage.reset();
+    m_carriageTeleport.reset();
+    m_reportedCell = {};
     PlayerCharacter::Get()->SetDifficulty(m_previousDifficulty);
     m_serverDifficulty = m_previousDifficulty = 6;
 
@@ -100,14 +122,131 @@ void PlayerService::OnServerSettingsReceived(const ServerSettings& acSettings) n
     }
 
     ToggleDeathSystem(acSettings.DeathSystemEnabled);
+    m_respawnDelay = acSettings.PlayerRespawnDelay;
 }
 
-void PlayerService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) const noexcept
+void PlayerService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) noexcept
 {
-    PlayerCharacter::Get()->PayGold(acMessage.GoldLost);
+    const bool cCurrentEpisode = m_localDowned && m_localDowned->Id == acMessage.DownId;
+    if (!m_isDeathSystemEnabled || !acMessage.DownId || acMessage.DownId == m_grantedDownId ||
+        (!cCurrentEpisode && acMessage.DownId != m_settlingDownId))
+        return;
 
-    std::string message = fmt::format("You died and lost {} gold.", acMessage.GoldLost);
-    Utils::ShowHudMessage(String(message));
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!pPlayer)
+        return;
+
+    m_grantedDownId = acMessage.DownId;
+    if (acMessage.GoldLost > 0)
+    {
+        pPlayer->PayGold(acMessage.GoldLost);
+        Utils::ShowHudMessage(String(fmt::format("You lost {} gold.", acMessage.GoldLost)));
+    }
+    if (!cCurrentEpisode || !pPlayer->actorState.IsBleedingOut())
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    m_localDowned->Resolved = true;
+    m_localDowned->NextAttempt = now + 1s;
+    if (acMessage.Revived)
+    {
+        pPlayer->RecoverFromBleedout();
+        Utils::ShowHudMessage("Another player revived you.");
+    }
+    else
+    {
+        FadeOutGame(true, true, 0.5f, true, 2.f);
+        pPlayer->PayCrimeGoldToAllFactions();
+        pPlayer->RespawnPlayer();
+    }
+
+    auto* pEquipManager = EquipManager::Get();
+    if (TESForm* pSpell = TESForm::GetById(m_cachedMainSpellId))
+        pEquipManager->EquipSpell(pPlayer, pSpell, 0);
+    if (TESForm* pSpell = TESForm::GetById(m_cachedSecondarySpellId))
+        pEquipManager->EquipSpell(pPlayer, pSpell, 1);
+    if (TESForm* pShout = TESForm::GetById(m_cachedPowerId))
+        pEquipManager->EquipShout(pPlayer, pShout);
+
+    m_knockdownDeadline = now + 1500ms;
+    m_knockdownStart = true;
+    m_knockdownOnlyIfDown = acMessage.Revived;
+}
+
+void PlayerService::OnNotifyPlayerDowned(const NotifyPlayerDowned& acMessage) noexcept
+{
+    if (acMessage.DownId)
+        m_downedPlayers.insert_or_assign(acMessage.ActorId, acMessage.DownId);
+    else
+        m_downedPlayers.erase(acMessage.ActorId);
+}
+
+std::optional<PlayerService::ReviveTarget> PlayerService::FindNearbyReviveTarget() const noexcept
+{
+    if (!m_isDeathSystemEnabled || !m_transport.IsOnline() || m_localDowned || m_downedPlayers.empty() ||
+        m_world.GetOverlayService().GetActive())
+        return std::nullopt;
+
+    const auto* pUI = UI::Get();
+    static const BSFixedString s_loadingMenu("Loading Menu");
+    static const BSFixedString s_dialogueMenu("Dialogue Menu");
+    if (!pUI || pUI->numPausesGame || pUI->IsUnpausedMenuOpen() ||
+        pUI->GetMenuOpen(s_loadingMenu) || pUI->GetMenuOpen(s_dialogueMenu))
+        return std::nullopt;
+
+    auto* pPlayer = PlayerCharacter::Get();
+    const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    if (!pCell || pPlayer->actorState.IsBleedingOut())
+        return std::nullopt;
+
+    std::optional<ReviveTarget> target;
+    float squaredDistance = PlayerRevive::kDistance * PlayerRevive::kDistance;
+    const auto view = m_world.view<RemoteComponent, FormIdComponent, PlayerComponent>();
+    for (const auto entity : view)
+    {
+        const uint32_t cActorId = view.get<RemoteComponent>(entity).Id;
+        const auto downed = m_downedPlayers.find(cActorId);
+        if (downed == m_downedPlayers.end())
+            continue;
+
+        auto* pActor = Cast<Actor>(TESForm::GetById(view.get<FormIdComponent>(entity).Id));
+        if (!pActor || !pActor->GetExtension()->IsRemotePlayer() || pActor->GetParentCellEx() != pCell || !pActor->GetNiNode())
+            continue;
+
+        const auto delta = glm::vec3(pActor->position) - glm::vec3(pPlayer->position);
+        const float cDistance = glm::dot(delta, delta);
+        if (cDistance <= squaredDistance)
+        {
+            squaredDistance = cDistance;
+            target = ReviveTarget{cActorId, downed->second};
+        }
+    }
+    return target;
+}
+
+void PlayerService::OnRevivePlayer(const RevivePlayerEvent&) noexcept
+{
+    if (const auto target = FindNearbyReviveTarget())
+    {
+        PlayerRespawnRequest request;
+        request.Action = PlayerRespawnRequest::Revive;
+        request.DownId = target->DownId;
+        request.TargetId = target->ActorId;
+        m_transport.Send(request);
+    }
+}
+
+void PlayerService::RunRevivePrompt() noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextRevivePrompt)
+        return;
+
+    m_nextRevivePrompt = now + 500ms;
+    auto target = FindNearbyReviveTarget();
+    if (target && target != m_promptTarget)
+        Utils::ShowHudMessage("Press F10 to revive the nearby player.");
+    m_promptTarget = target;
 }
 
 void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) const noexcept
@@ -127,7 +266,7 @@ void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) co
     }
 }
 
-void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) const noexcept
+void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
 {
     if (acEvent.WorldSpaceId)
     {
@@ -136,30 +275,177 @@ void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) const noex
         message.WorldSpaceId = acEvent.WorldSpaceId;
         message.CurrentCoords = acEvent.CurrentCoords;
 
-        m_transport.Send(message);
+        if (m_transport.Send(message))
+            m_reportedCell = message.CellId;
     }
     else
     {
         EnterInteriorCellRequest message;
         message.CellId = acEvent.CellId;
 
-        m_transport.Send(message);
+        if (m_transport.Send(message))
+            m_reportedCell = message.CellId;
     }
 }
 
-void PlayerService::OnPlayerDialogueEvent(const PlayerDialogueEvent& acEvent) const noexcept
+void PlayerService::OnActivate(const ActivateEvent& acEvent) noexcept
 {
-    if (!m_transport.IsConnected())
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!m_transport.IsOnline() || !pPlayer || acEvent.pActivator != pPlayer || !acEvent.pObject ||
+        !acEvent.pObject->baseForm || acEvent.pObject->baseForm->formType != FormType::Furniture)
         return;
 
-    const auto& partyService = m_world.GetPartyService();
-    if (!partyService.IsInParty())
+    // Skyrim.esm's isCartTravelPlayer keyword marks the actual passenger furniture.
+    constexpr uint32_t kCarriageSeatKeyword = 0x103444;
+    const auto* pSkyrim = ModManager::Get()->GetByName("Skyrim.esm");
+    auto* pKeyword = pSkyrim ? Cast<BGSKeyword>(TESForm::GetById((static_cast<uint32_t>(pSkyrim->GetId()) << 24) | kCarriageSeatKeyword)) : nullptr;
+    const auto* pKeywords = Cast<BGSKeywordForm>(acEvent.pObject->baseForm);
+    const auto* pCell = acEvent.pObject->GetParentCellEx();
+    if (!pKeyword || !pKeywords || !pKeywords->Contains(pKeyword) || !pCell || pCell != pPlayer->GetParentCellEx())
         return;
 
-    PlayerDialogueRequest request{};
-    request.Text = acEvent.Text;
+    RequestCarriageTravel request;
+    const auto& mods = m_world.GetModSystem();
+    if (acEvent.pObject->IsTemporary() || !mods.GetServerModId(acEvent.pObject->formID, request.Seat) ||
+        mods.GetGameId(request.Seat) != acEvent.pObject->formID ||
+        !mods.GetServerModId(pCell->formID, request.Cell) || request.Cell != m_reportedCell)
+        return;
 
-    m_transport.Send(request);
+    if (++m_nextCarriageToken == 0)
+        ++m_nextCarriageToken;
+    request.Token = m_nextCarriageToken;
+    request.Position = acEvent.pObject->position;
+    if (m_transport.Send(request))
+    {
+        GameId worldSpace{};
+        if (const auto* pWorldSpace = pPlayer->GetWorldSpace())
+            mods.GetServerModId(pWorldSpace->formID, worldSpace);
+        m_carriageTeleport.reset();
+        m_carriage = CarriageBoarding{request.Seat, request.Cell, worldSpace, request.Position,
+            std::chrono::steady_clock::now() + CarriageTravel::kBoardingLifetime, request.Token};
+    }
+}
+
+BSTEventResult PlayerService::OnEvent(const TESFastTravelEndEvent*, const EventDispatcher<TESFastTravelEndEvent>*)
+{
+    m_world.GetRunner().Queue([this]()
+    {
+        if (m_carriage)
+            m_carriage->Arrived = true;
+    });
+    return BSTEventResult::kOk;
+}
+
+void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
+{
+    if (!acMessage.CarriageToken)
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+        ApplyTeleport(acMessage);
+    }
+    else if (m_carriage && m_carriage->Token == acMessage.CarriageToken)
+        m_carriageTeleport = acMessage;
+}
+
+void PlayerService::RunCarriageTravelUpdates() noexcept
+{
+    if (!m_carriage)
+        return;
+    const auto* pUI = UI::Get();
+    static const BSFixedString s_mapMenu("MapMenu");
+    static const BSFixedString s_loadingMenu("Loading Menu");
+    if (std::chrono::steady_clock::now() >= m_carriage->ExpiresAt || (pUI && pUI->GetMenuOpen(s_mapMenu)))
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+        return;
+    }
+    if (pUI && pUI->GetMenuOpen(s_loadingMenu))
+    {
+        m_carriage->SawLoading |= m_carriage->SawRidingControls;
+        return;
+    }
+
+    auto* pPlayer = PlayerCharacter::Get();
+    const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    GameId currentCell{};
+    if (!pCell || !m_world.GetModSystem().GetServerModId(pCell->formID, currentCell))
+        return;
+
+    if (currentCell == m_carriage->Origin)
+    {
+        const glm::vec3 delta = glm::vec3(pPlayer->position) - m_carriage->Position;
+        m_carriage->SawRidingControls |= !BSInputEnableManager::IsMovementControlsEnabled();
+        if (glm::dot(delta, delta) > CarriageTravel::kBoardingDistance * CarriageTravel::kBoardingDistance)
+        {
+            m_carriage.reset();
+            m_carriageTeleport.reset();
+        }
+        else if (m_carriageTeleport && !m_carriage->Arrived)
+        {
+            const auto teleport = *m_carriageTeleport;
+            m_carriage.reset();
+            m_carriageTeleport.reset();
+            ApplyTeleport(teleport);
+        }
+        return;
+    }
+    if (currentCell != m_reportedCell)
+        return;
+
+    // Some scripted travel paths don't produce the native completion event. Vanilla
+    // carriage scripts disable movement before fading into a distant exterior load.
+    if (!m_carriage->Arrived && m_carriage->SawLoading && m_carriage->WorldSpace)
+    {
+        GameId worldSpace{};
+        const auto* pWorldSpace = pPlayer->GetWorldSpace();
+        const glm::vec3 delta = glm::vec3(pPlayer->position) - m_carriage->Position;
+        constexpr float kLongTravelDistance = 4096.f;
+        m_carriage->Arrived = pWorldSpace && m_world.GetModSystem().GetServerModId(pWorldSpace->formID, worldSpace) &&
+            worldSpace == m_carriage->WorldSpace && glm::dot(delta, delta) >= kLongTravelDistance * kLongTravelDistance;
+    }
+    if (!m_carriage->Arrived)
+        return;
+
+    RequestCarriageTravel request;
+    request.Seat = m_carriage->Seat;
+    request.Token = m_carriage->Token;
+    request.Cell = currentCell;
+    request.Position = pPlayer->position;
+    request.Arrived = true;
+    if (m_transport.Send(request))
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+    }
+}
+
+void PlayerService::ApplyTeleport(const NotifyTeleport& acMessage) noexcept
+{
+    auto& modSystem = m_world.GetModSystem();
+
+    const uint32_t cellId = modSystem.GetGameId(acMessage.CellId);
+    TESObjectCELL* pCell = Cast<TESObjectCELL>(TESForm::GetById(cellId));
+    if (!pCell)
+    {
+        const uint32_t worldSpaceId = modSystem.GetGameId(acMessage.WorldSpaceId);
+        TESWorldSpace* pWorldSpace = Cast<TESWorldSpace>(TESForm::GetById(worldSpaceId));
+        if (pWorldSpace)
+        {
+            GridCellCoords coordinates = GridCellCoords::CalculateGridCellCoords(acMessage.Position);
+            pCell = pWorldSpace->LoadCell(coordinates.X, coordinates.Y);
+        }
+
+        if (!pCell)
+        {
+            spdlog::error("Failed to fetch cell to teleport to.");
+            m_world.GetOverlayService().SendSystemMessage("Teleporting to player failed.");
+            return;
+        }
+    }
+
+    PlayerCharacter::Get()->MoveTo(pCell, acMessage.Position);
 }
 
 void PlayerService::OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept
@@ -195,90 +481,107 @@ void PlayerService::OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept
 
 void PlayerService::RunRespawnUpdates() noexcept
 {
-    if (!m_isDeathSystemEnabled)
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!m_isDeathSystemEnabled || !m_transport.IsOnline() || !pPlayer)
         return;
 
-    static bool s_startTimer = false;
-
-    PlayerCharacter* pPlayer = PlayerCharacter::Get();
     if (!pPlayer->actorState.IsBleedingOut())
     {
+        if (m_localDowned)
+        {
+            if (m_localDowned->Reported)
+            {
+                PlayerRespawnRequest recovered;
+                recovered.Action = PlayerRespawnRequest::Recovered;
+                recovered.DownId = m_localDowned->Id;
+                if (!m_transport.Send(recovered))
+                    return;
+                // A grant already in flight may still carry a server-committed penalty.
+                m_settlingDownId = recovered.DownId;
+            }
+            pPlayer->SetNoBleedoutRecovery(true);
+            m_localDowned.reset();
+        }
+
         m_cachedMainSpellId = pPlayer->magicItems[0] ? pPlayer->magicItems[0]->formID : 0;
         m_cachedSecondarySpellId = pPlayer->magicItems[1] ? pPlayer->magicItems[1]->formID : 0;
         m_cachedPowerId = pPlayer->equippedShout ? pPlayer->equippedShout->formID : 0;
-
-        s_startTimer = false;
         return;
     }
 
-    if (!s_startTimer)
+    if (!m_localDowned)
     {
-        s_startTimer = true;
-        m_respawnDeadline = std::chrono::steady_clock::now() + 5s;
-        FadeOutGame(true, true, 3.0f, true, 2.0f);
-
-        // If a player dies not by its health reaching 0, getting it up from its bleedout state isn't possible
-        // just by setting its health back to max. Therefore, put it to 0.
+        if (++m_nextDownId == 0)
+            ++m_nextDownId;
+        m_localDowned = LocalDownedState{m_nextDownId};
+        // Some bleedout paths leave positive health. The existing player recovery
+        // sequence expects to restore health from zero.
         if (pPlayer->GetActorValue(ActorValueInfo::kHealth) > 0.f)
-            pPlayer->ForceActorValue(ActorValueOwner::ForceMode::DAMAGE, ActorValueInfo::kHealth, 0);
-
-        pPlayer->PayCrimeGoldToAllFactions();
+            pPlayer->ForceActorValue(ActorValueOwner::ForceMode::DAMAGE, ActorValueInfo::kHealth, 0.f);
     }
 
-    const auto cNow = std::chrono::steady_clock::now();
-    if (cNow >= m_respawnDeadline)
+    auto& downed = *m_localDowned;
+    const auto now = std::chrono::steady_clock::now();
+    PlayerRespawnRequest request;
+    request.DownId = downed.Id;
+    if (!downed.Reported)
     {
-        pPlayer->RespawnPlayer();
-
-        m_transport.Send(PlayerRespawnRequest());
-
-        s_startTimer = false;
-
-        auto* pEquipManager = EquipManager::Get();
-        TESForm* pSpell = TESForm::GetById(m_cachedMainSpellId);
-        if (pSpell)
-            pEquipManager->EquipSpell(pPlayer, pSpell, 0);
-        pSpell = TESForm::GetById(m_cachedSecondarySpellId);
-        if (pSpell)
-            pEquipManager->EquipSpell(pPlayer, pSpell, 1);
-        pSpell = TESForm::GetById(m_cachedPowerId);
-        if (pSpell)
-            pEquipManager->EquipShout(pPlayer, pSpell);
-
-        m_knockdownDeadline = std::chrono::steady_clock::now() + 1500ms;
-        m_knockdownStart = true;
+        if (!Utils::GetLocalOwnershipToken(pPlayer->formID) || !m_transport.Send(request))
+            return;
+        downed.Reported = true;
+        downed.NextAttempt = now + std::chrono::seconds(m_respawnDelay);
+        Utils::ShowHudMessage(String(fmt::format("You are down. A nearby player can revive you before you respawn in {} seconds.", m_respawnDelay)));
+        return;
     }
+    if (now < downed.NextAttempt)
+        return;
+
+    if (downed.Resolved)
+    {
+        // Keep the existing bleedout recovery enabled until Skyrim leaves this
+        // state. Retrying must not charge gold or teleport the player again.
+        pPlayer->SetNoBleedoutRecovery(false);
+        if (pPlayer->GetActorValue(ActorValueInfo::kHealth) <= 0.f)
+            pPlayer->ForceActorValue(ActorValueOwner::ForceMode::DAMAGE, ActorValueInfo::kHealth, 1000000);
+        downed.NextAttempt = now + 1s;
+        return;
+    }
+
+    request.Action = PlayerRespawnRequest::Respawn;
+    // The server may have received the downed report later than this client sent it.
+    // Retry while still down and let the server decide which request resolves it.
+    downed.NextAttempt = now + 500ms;
+    m_transport.Send(request);
 }
 
-// Doesn't seem to respawn quite yet
 void PlayerService::RunPostDeathUpdates() noexcept
 {
     if (!m_isDeathSystemEnabled)
         return;
 
-    // If a player dies in ragdoll, it gets stuck.
-    // This code ragdolls the player again upon respawning.
-    // It also makes the player invincible for 10 seconds.
-    const auto cNow = std::chrono::steady_clock::now();
-    if (m_knockdownStart && cNow >= m_knockdownDeadline)
+    const auto now = std::chrono::steady_clock::now();
+    if (m_knockdownStart && now >= m_knockdownDeadline)
     {
-        PlayerCharacter* pPlayer = PlayerCharacter::Get();
+        auto* pPlayer = PlayerCharacter::Get();
+        if (!pPlayer || (m_knockdownOnlyIfDown && !pPlayer->actorState.IsBleedingOut()))
+            m_knockdownStart = false;
+        else if (pPlayer->currentProcess)
+        {
+            // Preserve the existing workaround for a player stuck in ragdoll.
+            PlayerCharacter::SetGodMode(true);
+            m_godmodeStart = true;
+            pPlayer->currentProcess->KnockExplosion(pPlayer, &pPlayer->position, 0.f);
+            if (!m_knockdownOnlyIfDown)
+                FadeOutGame(false, true, 0.5f, true, 2.f);
 
-        PlayerCharacter::SetGodMode(true);
-        m_godmodeStart = true;
-
-        pPlayer->currentProcess->KnockExplosion(pPlayer, &pPlayer->position, 0.f);
-
-        FadeOutGame(false, true, 0.5f, true, 2.f);
-
-        m_godmodeDeadline = std::chrono::steady_clock::now() + 10s;
-        m_knockdownStart = false;
+            m_godmodeDeadline = now + 10s;
+            m_knockdownStart = false;
+        }
     }
 
-    if (m_godmodeStart && cNow >= m_godmodeDeadline)
+    if (m_godmodeStart && now >= m_godmodeDeadline)
     {
         PlayerCharacter::SetGodMode(false);
-
         m_godmodeStart = false;
     }
 }
@@ -347,5 +650,31 @@ void PlayerService::ToggleDeathSystem(bool aSet) noexcept
 {
     m_isDeathSystemEnabled = aSet;
 
-    PlayerCharacter::Get()->SetPlayerRespawnMode(aSet);
+    if (!aSet)
+    {
+        if (m_localDowned && m_localDowned->Reported && m_transport.IsOnline())
+        {
+            PlayerRespawnRequest recovered;
+            recovered.Action = PlayerRespawnRequest::Recovered;
+            recovered.DownId = m_localDowned->Id;
+            m_transport.Send(recovered);
+        }
+        m_localDowned.reset();
+        m_downedPlayers.clear();
+        m_promptTarget.reset();
+        m_nextRevivePrompt = {};
+        m_settlingDownId = 0;
+        m_grantedDownId = 0;
+        if (m_knockdownStart && !m_knockdownOnlyIfDown)
+            FadeOutGame(false, true, 0.5f, true, 2.f);
+        m_knockdownStart = false;
+        if (m_godmodeStart)
+        {
+            PlayerCharacter::SetGodMode(false);
+            m_godmodeStart = false;
+        }
+    }
+
+    if (auto* pPlayer = PlayerCharacter::Get())
+        pPlayer->SetPlayerRespawnMode(aSet);
 }

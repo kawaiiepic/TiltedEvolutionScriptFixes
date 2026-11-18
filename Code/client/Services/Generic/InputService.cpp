@@ -2,6 +2,7 @@
 
 #include <Services/InputService.h>
 #include <Services/OverlayService.h>
+#include <Events/RevivePlayerEvent.h>
 
 #include <OverlayApp.hpp>
 
@@ -188,6 +189,12 @@ void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aTy
         return;
 
     const auto active = overlay.GetActive();
+
+    if (!active && overlay.GetInGame() && aType == KEYEVENT_KEYUP && aKey == VK_F10)
+    {
+        World::Get().GetRunner().Trigger(RevivePlayerEvent{});
+        return;
+    }
 
     spdlog::debug("ProcessKey, type: {}, key: {}, active: {}", aType, aKey, active);
 

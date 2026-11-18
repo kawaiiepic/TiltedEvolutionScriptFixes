@@ -2,8 +2,9 @@
 
 void ScriptAnimationRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
-    Serialization::WriteVarInt(aWriter, FormID);
-    Animation.Serialize(aWriter);
+    Id.Serialize(aWriter);
+    Cell.Serialize(aWriter);
+    Serialization::WriteVarInt(aWriter, Tick);
     EventName.Serialize(aWriter);
 }
 
@@ -11,7 +12,8 @@ void ScriptAnimationRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
 {
     ClientMessage::DeserializeRaw(aReader);
 
-    FormID = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
-    Animation.Deserialize(aReader);
+    Id.Deserialize(aReader);
+    Cell.Deserialize(aReader);
+    Tick = Serialization::ReadVarInt(aReader);
     EventName.Deserialize(aReader);
 }

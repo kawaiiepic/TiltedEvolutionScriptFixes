@@ -41,11 +41,9 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 
         const auto& first = *it;
 
-        const auto actionId = first.ActionId;
-        const auto targetId = first.TargetId;
-
-        const auto pAction = Cast<BGSAction>(TESForm::GetById(actionId));
-        const auto pTarget = Cast<TESObjectREFR>(TESForm::GetById(targetId));
+        const auto& mods = aWorld.GetModSystem();
+        const auto pAction = first.ActionId ? Cast<BGSAction>(TESForm::GetById(mods.GetGameId(first.ActionId))) : nullptr;
+        const auto pTarget = first.TargetId ? Cast<TESObjectREFR>(TESForm::GetById(mods.GetGameId(first.TargetId))) : nullptr;
 
         apActor->actorState.flags1 = first.State1;
         apActor->actorState.flags2 = first.State2;
@@ -56,8 +54,15 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 
         // Play the animation
         TESActionData actionData(first.Type & 0x3, apActor, pAction, pTarget);
-        actionData.eventName = BSFixedString(first.EventName.c_str());
-        actionData.idleForm = Cast<TESIdleForm>(TESForm::GetById(first.IdleId));
+        actionData.eventName.Set(first.EventName.c_str());
+        if (first.IdleId)
+            actionData.idleForm = Cast<TESIdleForm>(TESForm::GetById(mods.GetGameId(first.IdleId)));
+        if (pTarget)
+        {
+            actionData.targetEventName.Set(first.TargetEventName.c_str());
+            if (first.TargetIdleId)
+                actionData.targetIdleForm = Cast<TESIdleForm>(TESForm::GetById(mods.GetGameId(first.TargetIdleId)));
+        }
         actionData.someFlag = ((first.Type & 0x4) != 0) ? 1 : 0;
 
         const auto result = ActorMediator::Get()->ForceAction(&actionData);
@@ -87,6 +92,10 @@ void AnimationSystem::AddActionsForReplay(RemoteAnimationComponent& aAnimationCo
     for (auto action : acReplay.Actions)
     {
         action.Tick = 0;
+        // Rebuild the remote actor's state without restarting its old target's animation.
+        action.TargetId = {};
+        action.TargetIdleId = {};
+        action.TargetEventName.clear();
         aAnimationComponent.TimePoints.push_back(std::move(action));
     }
 
@@ -139,26 +148,4 @@ void AnimationSystem::SerializeActions(RequestActionEvents& aMessage, LocalCompo
 
     aMessage.Actions[localComponent.Id] = std::move(animationComponent.Actions);
     animationComponent.Actions.clear();
-}
-
-bool AnimationSystem::Serialize(World& aWorld, const ActionEvent& aActionEvent, const ActionEvent& aLastProcessedAction, std::string* apData)
-{
-    uint32_t actionBaseId = 0;
-    uint32_t actionModId = 0;
-    if (!aWorld.GetModSystem().GetServerModId(aActionEvent.ActionId, actionModId, actionBaseId))
-        return false;
-
-    uint32_t targetBaseId = 0;
-    uint32_t targetModId = 0;
-    if (!aWorld.GetModSystem().GetServerModId(aActionEvent.TargetId, targetModId, targetBaseId))
-        return false;
-
-    uint8_t scratch[1 << 14];
-    TiltedPhoques::ViewBuffer buffer(scratch, std::size(scratch));
-    Buffer::Writer writer(&buffer);
-    aActionEvent.GenerateDifferential(aLastProcessedAction, writer);
-
-    apData->assign(buffer.GetData(), buffer.GetData() + writer.Size());
-
-    return true;
 }

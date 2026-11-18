@@ -5,7 +5,7 @@ using TiltedPhoques::Serialization;
 
 bool ObjectData::operator==(const ObjectData& acRhs) const noexcept
 {
-    return ServerId == acRhs.ServerId && Id == acRhs.Id && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && CurrentCoords == acRhs.CurrentCoords && CurrentLockData == acRhs.CurrentLockData && CurrentInventory == acRhs.CurrentInventory && IsSenderFirst == acRhs.IsSenderFirst;
+    return ServerId == acRhs.ServerId && Id == acRhs.Id && CellId == acRhs.CellId && WorldSpaceId == acRhs.WorldSpaceId && CurrentCoords == acRhs.CurrentCoords && CurrentLockData == acRhs.CurrentLockData && CurrentInventory == acRhs.CurrentInventory && IsSenderFirst == acRhs.IsSenderFirst && HasCampaignLock == acRhs.HasCampaignLock && NoResetZone == acRhs.NoResetZone && IsContainer == acRhs.IsContainer && HasCampaignStock == acRhs.HasCampaignStock;
 }
 
 bool ObjectData::operator!=(const ObjectData& acRhs) const noexcept
@@ -23,6 +23,10 @@ void ObjectData::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcep
     CurrentLockData.Serialize(aWriter);
     CurrentInventory.Serialize(aWriter);
     Serialization::WriteBool(aWriter, IsSenderFirst);
+    Serialization::WriteBool(aWriter, HasCampaignLock);
+    Serialization::WriteBool(aWriter, NoResetZone);
+    Serialization::WriteBool(aWriter, IsContainer);
+    Serialization::WriteBool(aWriter, HasCampaignStock);
 }
 
 void ObjectData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -35,4 +39,8 @@ void ObjectData::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     CurrentLockData.Deserialize(aReader);
     CurrentInventory.Deserialize(aReader);
     IsSenderFirst = Serialization::ReadBool(aReader);
+    HasCampaignLock = Serialization::ReadBool(aReader);
+    NoResetZone = Serialization::ReadBool(aReader);
+    IsContainer = Serialization::ReadBool(aReader);
+    HasCampaignStock = Serialization::ReadBool(aReader);
 }

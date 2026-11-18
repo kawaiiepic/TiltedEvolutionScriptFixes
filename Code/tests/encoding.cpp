@@ -171,15 +171,16 @@ TEST_CASE("Differential structures", "[encoding.differential]")
     {
         ActionEvent sendAction, recvAction;
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
+        sendAction.TargetIdleId = GameId(9, 0xABC);
         sendAction.Type = 4;
 
         {
@@ -199,6 +200,7 @@ TEST_CASE("Differential structures", "[encoding.differential]")
             Buffer::Writer writer(&buff);
 
             sendAction.EventName = "Plot twist !";
+            sendAction.TargetIdleId = {};
 
             sendAction.GenerateDifferential(recvAction, writer);
 
@@ -215,15 +217,15 @@ TEST_CASE("Differential structures", "[encoding.differential]")
 
         TP_UNUSED(StringCache::Get().Add("test"))
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
         sendAction.Type = 4;
 
         {
@@ -389,15 +391,15 @@ TEST_CASE("Packets", "[encoding.packets]")
         Buffer buff(1000);
 
         ActionEvent sendAction;
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
         sendAction.Type = 4;
 
         AssignCharacterRequest sendMessage, recvMessage;
@@ -413,6 +415,8 @@ TEST_CASE("Packets", "[encoding.packets]")
         sendMessage.Position.z = 125452.4f;
         sendMessage.Rotation.x = -1.87f;
         sendMessage.Rotation.y = 45.35f;
+        sendMessage.IsNonRespawning = true;
+        sendMessage.HasLeveledBase = true;
 
         Buffer::Writer writer(&buff);
         sendMessage.Serialize(writer);
@@ -475,14 +479,14 @@ TEST_CASE("Packets", "[encoding.packets]")
     {
         ActionEvent firstAction;
         firstAction.Tick = 1712345678901;
-        firstAction.ActionId = 42;
-        firstAction.TargetId = 963741;
+        firstAction.ActionId = GameId(0, 42);
+        firstAction.TargetId = GameId(5, 963741);
         firstAction.State1 = 6547;
         firstAction.EventName = "jumpStandingStart";
 
         ActionEvent secondAction = firstAction;
         secondAction.Tick += 120;
-        secondAction.ActionId = 43;
+        secondAction.ActionId = GameId(0, 43);
         secondAction.EventName = "attackStart";
         secondAction.TargetEventName = "toast";
 
@@ -508,7 +512,7 @@ TEST_CASE("Packets", "[encoding.packets]")
     {
         ActionEvent action;
         action.Tick = 1712345678901;
-        action.ActionId = 42;
+        action.ActionId = GameId(0, 42);
         action.EventName = "blockStart";
 
         NotifyActionEvents sendMessage;
@@ -551,4 +555,335 @@ TEST_CASE("StringCache", "[encoding.string_cache]")
 
         REQUIRE(update == recvUpdate);
     }
+}
+
+TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
+{
+    SECTION("Owner publishes choices and spectator votes")
+    {
+        PlayerDialogueRequest request{};
+        request.Action = PlayerDialogueRequest::PublishOptions;
+        request.ActorId = 0xDEADBEEF;
+        request.Token = 123;
+        request.Revision = 456;
+        request.Index = 1;
+        request.Options = {"Tell me about the Greybeards.", "", "Goodbye."};
+        request.Text = "Example";
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == request.GetOpcode());
+        REQUIRE(*CastUnique<PlayerDialogueRequest>(std::move(message)) == request);
+    }
+
+    SECTION("Snapshot preserves option indices and counts")
+    {
+        NotifyPlayerDialogue panel{};
+        panel.Kind = NotifyPlayerDialogue::Panel;
+        panel.CanPass = true;
+        panel.Private = true;
+        panel.ActorId = 0xDEADBEEF;
+        panel.Revision = 7;
+        panel.Selected = 2;
+        panel.Name = "Owner";
+        panel.Options = {"Yes", "", "No"};
+        panel.Votes = {1, 0, 3};
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        panel.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == panel.GetOpcode());
+        REQUIRE(*CastUnique<NotifyPlayerDialogue>(std::move(message)) == panel);
+    }
+}
+
+TEST_CASE("Faction snapshots keep their ownership epoch", "[encoding.factions]")
+{
+    Faction faction;
+    faction.Id = GameId(3, 0x812);
+    faction.Rank = 4;
+
+    RequestFactionsChanges request;
+    request.Changes[7].OwnershipEpoch = 42;
+    request.Changes[7].Content.ExtraFactions.push_back(faction);
+    Buffer requestBuffer(4096);
+    Buffer::Writer requestWriter(&requestBuffer);
+    request.Serialize(requestWriter);
+    Buffer::Reader requestReader(&requestBuffer);
+    auto receivedRequest = ClientMessageFactory{}.Extract(requestReader);
+    REQUIRE(receivedRequest);
+    REQUIRE(*CastUnique<RequestFactionsChanges>(std::move(receivedRequest)) == request);
+
+    NotifyOwnershipTransfer transfer;
+    transfer.ServerId = 7;
+    transfer.OwnershipEpoch = 43;
+    transfer.FactionsContent = request.Changes[7].Content;
+    transfer.FactionsContent.NpcFactions.resize(512, faction);
+    Buffer transferBuffer(8192);
+    Buffer::Writer transferWriter(&transferBuffer);
+    transfer.Serialize(transferWriter);
+    Buffer::Reader transferReader(&transferBuffer);
+    auto receivedTransfer = ServerMessageFactory{}.Extract(transferReader);
+    REQUIRE(receivedTransfer);
+    transfer.FactionsContent.NpcFactions.pop_back();
+    REQUIRE(*CastUnique<NotifyOwnershipTransfer>(std::move(receivedTransfer)) == transfer);
+}
+
+TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
+{
+    SECTION("Native observer snapshot")
+    {
+        RequestSceneState request{};
+        request.State.Id = GameId(2, 0xFABCD);
+        request.State.Quest = GameId(0, 0x12345);
+        request.State.Phase = UINT32_MAX;
+        request.State.Active = true;
+        request.State.CompletedActions = {3, 9, 42};
+        request.State.ReferenceAliases = {{7, GameId(2, 0x33445)}, {12, GameId(0, 0x54321)}};
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == request.GetOpcode());
+        REQUIRE(*CastUnique<RequestSceneState>(std::move(message)) == request);
+    }
+
+    SECTION("Server ownership and generation")
+    {
+        NotifySceneState snapshot{};
+        snapshot.State.Id = GameId(1, 0x12345);
+        snapshot.State.Quest = GameId(1, 0x34567);
+        snapshot.State.Phase = 6;
+        snapshot.State.Active = true;
+        snapshot.State.CompletedActions = {12, 13};
+        snapshot.State.ReferenceAliases = {{3, GameId(4, 0x777)}};
+        snapshot.Owner = 4;
+        snapshot.Generation = 9;
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        snapshot.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == snapshot.GetOpcode());
+        REQUIRE(*CastUnique<NotifySceneState>(std::move(message)) == snapshot);
+    }
+}
+
+TEST_CASE("Campaign replay batch and acknowledgement round trip", "[encoding.campaign]")
+{
+    constexpr uint64_t cThrough = (1ull << 40) + 12;
+
+    NotifyQuestUpdate batch;
+    batch.Through = cThrough;
+    batch.Updates = {
+        {GameId(1, 0xABCDEF), 10, SharedQuestUpdate::Started},
+        {GameId(0, 0x123456), 40, SharedQuestUpdate::StageUpdate},
+        {GameId(0, 0x123456), 40, SharedQuestUpdate::Stopped},
+    };
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        batch.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ServerMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == NotifyQuestUpdate::Opcode);
+        const auto decoded = CastUnique<NotifyQuestUpdate>(std::move(message));
+        REQUIRE(decoded->Through == cThrough);
+        REQUIRE(decoded->Updates == batch.Updates);
+    }
+
+    RequestQuestSyncAck ack;
+    ack.Through = cThrough;
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        ack.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ClientMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == RequestQuestSyncAck::Opcode);
+        REQUIRE(CastUnique<RequestQuestSyncAck>(std::move(message))->Through == cThrough);
+    }
+}
+
+TEST_CASE("First object assignment can restore an unlocked campaign lock", "[encoding.campaign]")
+{
+    AssignObjectsResponse response;
+    auto& object = response.Objects.emplace_back();
+    object.Id = GameId(1, 0x18B);
+    object.IsSenderFirst = true;
+    object.HasCampaignLock = true;
+    object.NoResetZone = true;
+    object.IsContainer = true;
+    object.HasCampaignStock = true;
+    object.CellId = GameId(0, 0x804);
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    response.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ServerMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == AssignObjectsResponse::Opcode);
+    REQUIRE(CastUnique<AssignObjectsResponse>(std::move(message))->Objects == response.Objects);
+}
+
+TEST_CASE("Cell-scoped messages preserve plugin identity", "[encoding.campaign]")
+{
+    Buffer buffer(1024);
+    {
+        NotifyWeatherChange weather{};
+        weather.Cell = GameId(1, 0x421);
+        weather.Id = GameId(2, 0xABC);
+        weather.Owner = 34;
+        Buffer::Writer writer(&buffer);
+        weather.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ServerMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == NotifyWeatherChange::Opcode);
+        REQUIRE(*CastUnique<NotifyWeatherChange>(std::move(message)) == weather);
+    }
+    {
+        ScriptAnimationRequest animation{};
+        animation.Cell = GameId(1, 0x421);
+        animation.Id = GameId(5, 0x8AB);
+        animation.Tick = 123456;
+        animation.EventName = "ExampleGraphEvent";
+        Buffer::Writer writer(&buffer);
+        animation.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ClientMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == ScriptAnimationRequest::Opcode);
+        REQUIRE(*CastUnique<ScriptAnimationRequest>(std::move(message)) == animation);
+    }
+}
+
+TEST_CASE("Carriage travel retains the boarding token", "[encoding.travel]")
+{
+    RequestCarriageTravel arrival;
+    arrival.Seat = GameId(2, 0x812);
+    arrival.Cell = GameId(3, 0x928);
+    arrival.Position = glm::vec3(64.f, -128.f, 256.f);
+    arrival.Token = 17;
+    arrival.Arrived = true;
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    arrival.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == RequestCarriageTravel::Opcode);
+    const auto parsed = CastUnique<RequestCarriageTravel>(std::move(message));
+    REQUIRE(parsed->Seat == arrival.Seat);
+    REQUIRE(parsed->Cell == arrival.Cell);
+    REQUIRE(parsed->Position == arrival.Position);
+    REQUIRE(parsed->Token == arrival.Token);
+    REQUIRE(parsed->Arrived);
+
+    NotifyTeleport teleport;
+    teleport.CellId = arrival.Cell;
+    teleport.WorldSpaceId = GameId(0, 0x3C);
+    teleport.Position = arrival.Position;
+    teleport.CarriageToken = 4;
+    Buffer::Writer teleportWriter(&buffer);
+    teleport.Serialize(teleportWriter);
+    Buffer::Reader teleportReader(&buffer);
+    auto received = ServerMessageFactory{}.Extract(teleportReader);
+    REQUIRE(received);
+    REQUIRE(received->GetOpcode() == NotifyTeleport::Opcode);
+    REQUIRE(*CastUnique<NotifyTeleport>(std::move(received)) == teleport);
+}
+
+TEST_CASE("Player revive keeps the target and downed episode", "[encoding.respawn]")
+{
+    PlayerRespawnRequest request;
+    request.Action = PlayerRespawnRequest::Revive;
+    request.DownId = 23;
+    request.TargetId = 0x10002;
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    request.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == PlayerRespawnRequest::Opcode);
+    REQUIRE(*CastUnique<PlayerRespawnRequest>(std::move(message)) == request);
+
+    NotifyPlayerDowned downed;
+    downed.ActorId = request.TargetId;
+    downed.DownId = request.DownId;
+    Buffer::Writer downedWriter(&buffer);
+    downed.Serialize(downedWriter);
+    Buffer::Reader downedReader(&buffer);
+    auto notice = ServerMessageFactory{}.Extract(downedReader);
+    REQUIRE(notice);
+    REQUIRE(notice->GetOpcode() == NotifyPlayerDowned::Opcode);
+    auto parsed = CastUnique<NotifyPlayerDowned>(std::move(notice));
+    REQUIRE(parsed->ActorId == request.TargetId);
+    REQUIRE(parsed->DownId == request.DownId);
+
+    NotifyPlayerRespawn resolved;
+    resolved.DownId = request.DownId;
+    resolved.Revived = true;
+    Buffer::Writer resolvedWriter(&buffer);
+    resolved.Serialize(resolvedWriter);
+    Buffer::Reader resolvedReader(&buffer);
+    auto grant = ServerMessageFactory{}.Extract(resolvedReader);
+    REQUIRE(grant);
+    REQUIRE(grant->GetOpcode() == NotifyPlayerRespawn::Opcode);
+    REQUIRE(*CastUnique<NotifyPlayerRespawn>(std::move(grant)) == resolved);
+}
+
+TEST_CASE("Dropping missing stock does not create a negative inventory row", "[encoding.campaign]")
+{
+    Inventory inventory;
+    Inventory::Entry item{};
+    item.BaseId = GameId(0, 0xF);
+    item.Count = -5;
+    inventory.AddOrRemoveEntry(item);
+    REQUIRE(inventory.Entries.empty());
+
+    item.Count = INT32_MAX;
+    inventory.AddOrRemoveEntry(item);
+    inventory.AddOrRemoveEntry(item);
+    REQUIRE(inventory.Entries.size() == 1);
+    REQUIRE(inventory.Entries.front().Count == INT32_MAX);
+}
+
+TEST_CASE("Movement packets retain the ownership grant", "[encoding.campaign]")
+{
+    ClientReferencesMoveRequest movement{};
+    movement.Tick = 420;
+    movement.Updates[77].OwnershipEpoch = 32;
+    movement.Updates[77].CellId = GameId(0, 0x501);
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    movement.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == ClientReferencesMoveRequest::Opcode);
+    REQUIRE(*CastUnique<ClientReferencesMoveRequest>(std::move(message)) == movement);
 }

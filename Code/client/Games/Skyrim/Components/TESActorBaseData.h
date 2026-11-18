@@ -11,6 +11,7 @@ struct TESActorBaseData : BaseFormComponent
     enum BaseFlags
     {
         IS_ESSENTIAL = 1 << 1,
+        RESPAWN = 1 << 3,
     };
 
     uint32_t actorBaseFlags;
@@ -41,6 +42,7 @@ struct TESActorBaseData : BaseFormComponent
     static_assert(sizeof(FactionRank) == 0x10);
 
     bool IsEssential() const noexcept { return actorBaseFlags & BaseFlags::IS_ESSENTIAL; }
+    bool Respawns() const noexcept { return actorBaseFlags & BaseFlags::RESPAWN; }
     void SetEssential(bool aSet) noexcept
     {
         if (aSet)

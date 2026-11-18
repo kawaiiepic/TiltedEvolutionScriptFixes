@@ -2,6 +2,7 @@ name: Build windows
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -85,6 +86,9 @@ jobs:
         run: |
           xmake -y
           echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${BUILD_MODE}/" >> "$GITHUB_ENV"
+
+      - name: Run engine-independent tests
+        run: xmake run TPTests
 
       # Create distrib
       - name: Output distrib binaries via xmake

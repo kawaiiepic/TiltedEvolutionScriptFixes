@@ -70,6 +70,18 @@ jobs:
       - name: Build
         run: xmake -y
 
+      - name: Run engine-independent tests
+        run: xmake run TPTests
+
+      - name: Exercise campaign over the server transport
+        if: matrix.arch == 'amd64'
+        run: |
+          xmake build CampaignSmokeClient
+          python3 Code/tests/integration/campaign_smoke.py \
+            "build/linux/x86_64/$BUILD_MODE/SkyrimTogetherServer" \
+            "build/linux/x86_64/$BUILD_MODE/CampaignSmokeClient" \
+            build/BuildInfo.h
+
       - name: Stage Linux server
         run: |
           xmake install -o packaged

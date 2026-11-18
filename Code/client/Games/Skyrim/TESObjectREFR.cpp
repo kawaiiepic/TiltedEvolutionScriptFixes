@@ -36,6 +36,8 @@
 #include <Structs/AnimationGraphDescriptorManager.h>
 #include <Structs/AnimationVariables.h>
 
+#include <optional>
+
 extern const AnimationGraphDescriptor* BehaviorVarPatch(BSAnimationGraphManager* pManager, Actor* pActor);
 
 namespace
@@ -969,46 +971,38 @@ uint32_t TESObjectREFR::GetAnimationVariableInt(BSFixedString* apVariableName) n
     return s_pGetAnimationVariableInt(this, apVariableName);
 }
 
-static thread_local bool s_cancelAnimationWaitEvent = false;
-
-bool TESObjectREFR::PlayAnimationAndWait(BSFixedString* apAnimation, BSFixedString* apEventName) noexcept
+namespace
 {
-    using ObjectReference = TESObjectREFR;
-
-    PAPYRUS_FUNCTION(bool, ObjectReference, PlayAnimationAndWait, BSFixedString*, BSFixedString*);
-
-    s_cancelAnimationWaitEvent = true;
-    bool result = s_pPlayAnimationAndWait(this, apAnimation, apEventName);
-    s_cancelAnimationWaitEvent = false;
-    return result;
+std::optional<ScriptAnimationEvent> CaptureObjectAnimation(TESObjectREFR* apReference, const BSFixedString* apAnimation) noexcept
+{
+    if (ScopedAnimationOverride::IsOverriden() || ScopedActivateOverride::IsOverriden() ||
+        !apReference || apReference->IsTemporary() || Cast<Actor>(apReference) ||
+        !apAnimation || !apAnimation->AsAscii() || !*apAnimation->AsAscii())
+        return std::nullopt;
+    return ScriptAnimationEvent(apReference->formID, apAnimation->AsAscii());
 }
-
-#define OBJECT_ANIM_SYNC 0
+}
 
 bool TP_MAKE_THISCALL(HookPlayAnimationAndWait, void, uint32_t auiStackID, TESObjectREFR* apSelf, BSFixedString* apAnimation, BSFixedString* apEventName)
 {
-    spdlog::debug("Animation: {}, EventName: {}", apAnimation->AsAscii(), apEventName->AsAscii());
-
-#if OBJECT_ANIM_SYNC
-    if (!s_cancelAnimationWaitEvent && (apSelf->formID < 0xFF000000))
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, apAnimation->AsAscii(), apEventName->AsAscii()));
-#endif
-
-    return TiltedPhoques::ThisCall(RealPlayAnimationAndWait, apThis, auiStackID, apSelf, apAnimation, apEventName);
+    auto event = CaptureObjectAnimation(apSelf, apAnimation);
+    ScopedAnimationOverride override;
+    const bool cResult = TiltedPhoques::ThisCall(RealPlayAnimationAndWait, apThis, auiStackID, apSelf, apAnimation, apEventName);
+    if (event && cResult)
+        World::Get().GetRunner().Trigger(std::move(*event));
+    return cResult;
 }
-
-static thread_local bool s_cancelAnimationEvent = false;
 
 bool TESObjectREFR::PlayAnimation(BSFixedString* apEventName) noexcept
 {
-    using ObjectReference = TESObjectREFR;
+    const auto* pAddress = World::Get().ctx().at<PapyrusService>().Get("ObjectReference", "PlayAnimation");
+    const auto* pVm = GameVM::Get();
+    if (!pAddress || !pVm || !pVm->virtualMachine)
+        return false;
 
-    PAPYRUS_FUNCTION(bool, ObjectReference, PlayAnimation, BSFixedString*);
-
-    s_cancelAnimationEvent = true;
-    bool result = s_pPlayAnimation(this, apEventName);
-    s_cancelAnimationEvent = false;
-    return result;
+    ScopedAnimationOverride override;
+    const PapyrusFunction<bool, TESObjectREFR, BSFixedString*> playAnimation(pAddress);
+    return playAnimation(this, apEventName);
 }
 
 bool TESObjectREFR::SendAnimationEvent(BSFixedString* apEventName) noexcept
@@ -1018,14 +1012,12 @@ bool TESObjectREFR::SendAnimationEvent(BSFixedString* apEventName) noexcept
 
 bool TP_MAKE_THISCALL(HookPlayAnimation, void, uint32_t auiStackID, TESObjectREFR* apSelf, BSFixedString* apEventName)
 {
-    spdlog::debug("EventName: {}", apEventName->AsAscii());
-
-#if OBJECT_ANIM_SYNC
-    if (!s_cancelAnimationEvent && (apSelf->formID < 0xFF000000))
-        World::Get().GetRunner().Trigger(ScriptAnimationEvent(apSelf->formID, String{}, apEventName->AsAscii()));
-#endif
-
-    return TiltedPhoques::ThisCall(RealPlayAnimation, apThis, auiStackID, apSelf, apEventName);
+    auto event = CaptureObjectAnimation(apSelf, apEventName);
+    ScopedAnimationOverride override;
+    const bool cResult = TiltedPhoques::ThisCall(RealPlayAnimation, apThis, auiStackID, apSelf, apEventName);
+    if (event && cResult)
+        World::Get().GetRunner().Trigger(std::move(*event));
+    return cResult;
 }
 
 bool TP_MAKE_THISCALL(HookActivate, TESObjectREFR, TESObjectREFR* apActivator, uint8_t aUnk1, TESBoundObject* apObjectToGet, int32_t aCount, char aDefaultProcessing)
@@ -1034,7 +1026,8 @@ bool TP_MAKE_THISCALL(HookActivate, TESObjectREFR, TESObjectREFR* apActivator, u
 
     // Exclude books from activation since only reading them removes them from the cell
     // Note: Books are now unsynced 
-    if (pActivator && apThis->baseForm->formType != FormType::Book)
+    if (!ScopedAnimationOverride::IsOverriden() && pActivator && apThis->baseForm &&
+        apThis->baseForm->formType != FormType::Book)
     {
         auto openState = TESObjectREFR::kNone;
         if (apThis->baseForm->formType == FormType::Door)

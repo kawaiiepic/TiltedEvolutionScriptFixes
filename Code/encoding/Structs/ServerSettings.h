@@ -17,4 +17,6 @@ struct ServerSettings
     bool DeathSystemEnabled{};
     bool SyncPlayerCalendar{};
     bool AutoPartyJoin{};
+    bool ShareCombatExperience{};
+    uint32_t PlayerRespawnDelay{30};
 };

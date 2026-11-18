@@ -115,6 +115,7 @@ struct PlayerCharacter : Actor
     float GetSkillExperience(Skills::Skill aSkill) const noexcept { return (*pSkills)->skills[aSkill].xp; }
 
     NiPoint3 RespawnPlayer() noexcept;
+    void RecoverFromBleedout() noexcept;
 
     void PayCrimeGoldToAllFactions() noexcept;
 

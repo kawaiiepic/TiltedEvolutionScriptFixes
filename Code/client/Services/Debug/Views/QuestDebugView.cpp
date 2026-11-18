@@ -1,7 +1,7 @@
 #include <Services/DebugService.h>
 #include <Services/QuestService.h>
 #include <Services/PapyrusService.h>
-#include <Services/PartyService.h>
+#include <Services/TransportService.h>
 
 #include <PlayerCharacter.h>
 #include <Forms/TESQuest.h>
@@ -20,10 +20,9 @@ void DebugService::DrawQuestDebugView()
     ImGui::SetNextWindowSize(ImVec2(250, 440), ImGuiCond_FirstUseEver);
     ImGui::Begin("Quests");
 
-    // TODO(cosideci): yes I'll refactor this
-    if (!m_world.GetPartyService().IsLeader())
+    if (!m_world.GetTransport().IsOnline())
     {
-        ImGui::Text("You need to be the quest leader to access the quest debugger.");
+        ImGui::Text("Connect to the server to access the shared quest debugger.");
     }
     else
     {

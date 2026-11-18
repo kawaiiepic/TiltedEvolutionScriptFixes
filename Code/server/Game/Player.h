@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 struct ServerMessage;
 struct Player
 {
@@ -33,6 +35,10 @@ struct Player
     void SetUsername(String aUsername) noexcept;
     void SetMods(Vector<String> aMods) noexcept;
     void SetModIds(Vector<uint16_t> aModIds) noexcept;
+    [[nodiscard]] bool HasModId(uint32_t aModId) const noexcept
+    {
+        return aModId <= 0xFFFFu && std::find(m_modIds.begin(), m_modIds.end(), aModId) != m_modIds.end();
+    }
     void SetCharacter(entt::entity aCharacter) noexcept;
     void SetStringCacheId(uint32_t aStringCacheId) noexcept;
     // TODO(cosideci): update on level up
