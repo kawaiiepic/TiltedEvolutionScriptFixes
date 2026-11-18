@@ -18,6 +18,7 @@
 #include <Events/SetTimeCommandEvent.h>
 
 #include <World.h>
+#include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 
 OverlayClient::OverlayClient(TransportService& aTransport, TiltedPhoques::OverlayRenderHandler* apHandler)
     : TiltedPhoques::OverlayClient(apHandler)
@@ -150,6 +151,12 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         else if (eventName == "openPlayGuide")
             ProcessOpenPlayGuide();
 
+        // Wake the existing game-window dispatch for pre-game actions
+        // without running any engine work on CEF's browser thread.
+        if (eventName == "connect" || eventName == "disconnect" ||
+            eventName == "selectCharacter" || eventName == "enterWorld" ||
+            eventName == "deactivate")
+            BSGraphics::WakeMainMenuPump();
         return true;
     }
 

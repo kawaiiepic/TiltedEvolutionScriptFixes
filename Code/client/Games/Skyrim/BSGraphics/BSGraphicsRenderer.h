@@ -36,6 +36,8 @@ struct RendererWindow
 };
 
 RendererWindow* GetMainWindow();
+// Thread-safe wakeup from the CEF process-message callback.
+void WakeMainMenuPump() noexcept;
 
 struct DepthStencilTarget
 {

@@ -12,6 +12,7 @@
 #include <OverlayRenderHandlerD3D11.hpp>
 
 #include <Systems/RenderSystemD3D11.h>
+#include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 
 #include <World.h>
 
@@ -324,6 +325,7 @@ void OverlayService::SignalBrowserReady() noexcept
     // CEF thread: publish only an atomic signal. The game thread applies
     // it without depending on the runner queue.
     m_browserReadySignal.store(true, std::memory_order_release);
+    BSGraphics::WakeMainMenuPump();
 }
 
 void OverlayService::ProcessBrowserReady() noexcept

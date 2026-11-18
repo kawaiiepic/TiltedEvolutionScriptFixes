@@ -3,6 +3,7 @@
 #include "Systems/RenderSystemD3D11.h"
 
 #include "World.h"
+#include <atomic>
 
 #include "BSGraphics/BSGraphicsRenderer.h"
 #include "BSRandom/BSRandom.h"
@@ -18,18 +19,35 @@ namespace
 static RenderSystemD3D11* g_sRs = nullptr;
 static WNDPROC RealWndProc = nullptr;
 static RendererWindow* g_RenderWindow = nullptr;
-static HWND s_menuPumpWindow = nullptr;
+static std::atomic<HWND> s_menuPumpWindow{nullptr};
 static UINT_PTR s_menuPumpTimer = 0;
+
+// Use a process-independent registered window message rather than taking
+// an arbitrary WM_APP value that another installed mod might already use.
+UINT MenuPumpMessage() noexcept
+{
+    static const UINT s_message = RegisterWindowMessageW(L"SkyrimTogether.Campaign.MenuPump.v1");
+    return s_message;
+}
 
 static constexpr char kTogetherWindowName[]{"Skyrim Together"};
 
 void CALLBACK MenuPumpTimer(HWND aWindow, UINT, UINT_PTR aId, DWORD)
 {
-    if (aWindow == s_menuPumpWindow && aId == s_menuPumpTimer)
+    if (aWindow == s_menuPumpWindow.load(std::memory_order_acquire) && aId == s_menuPumpTimer)
         World::PumpMainMenu();
 }
 
 } // namespace
+
+void WakeMainMenuPump() noexcept
+{
+    const HWND window = s_menuPumpWindow.load(std::memory_order_acquire);
+    const UINT message = MenuPumpMessage();
+    if (window && message)
+        PostMessageW(window, message, 0, 0);
+}
+
 RendererWindow* GetMainWindow()
 {
     return g_RenderWindow;
@@ -45,18 +63,24 @@ void (*Renderer_Init)(Renderer*, BSGraphics::RendererInitOSData*, const BSGraphi
 // WNDPROC seems to be part of the renderer
 LRESULT CALLBACK Hook_WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    if (hwnd == s_menuPumpWindow && s_menuPumpTimer)
+    if (hwnd == s_menuPumpWindow.load(std::memory_order_acquire))
     {
-        if (uMsg == WM_TIMER && wParam == s_menuPumpTimer)
+        const UINT message = MenuPumpMessage();
+        if (message && uMsg == message)
+        {
+            World::PumpMainMenu();
+            return 0;
+        }
+        if (uMsg == WM_TIMER && s_menuPumpTimer && wParam == s_menuPumpTimer)
         {
             World::PumpMainMenu();
             return 0;
         }
         if (uMsg == WM_NCDESTROY)
         {
-            KillTimer(hwnd, s_menuPumpTimer);
+            s_menuPumpWindow.store(nullptr, std::memory_order_release);
+            if (s_menuPumpTimer) KillTimer(hwnd, s_menuPumpTimer);
             s_menuPumpTimer = 0;
-            s_menuPumpWindow = nullptr;
         }
     }
     if (InputService::WndProc(hwnd, uMsg, wParam, lParam) != 0)
@@ -86,22 +110,26 @@ void Hook_Renderer_Init(Renderer* self, BSGraphics::RendererInitOSData* aOSData,
 
     g_sRs->OnDeviceCreation(renderer.RenderWindowA[0].pSwapChain, renderer.pForwarder, renderer.pContext);
 
-    // Some title-screen loops do not invoke the VM hook. A window timer
-    // uses the existing window procedure rather than a render/worker thread.
-    if (s_menuPumpTimer && s_menuPumpWindow)
-        KillTimer(s_menuPumpWindow, s_menuPumpTimer);
-    s_menuPumpWindow = g_sRs->GetWindow();
-    if (!s_menuPumpWindow) s_menuPumpWindow = g_RenderWindow->hWnd;
-    const DWORD windowThread = s_menuPumpWindow ? GetWindowThreadProcessId(s_menuPumpWindow, nullptr) : 0;
+    // Title-screen work runs on the window owner, not inside physics,
+    // rendering or the engine's MainLoop detour chain.
+    const HWND oldWindow = s_menuPumpWindow.exchange(nullptr, std::memory_order_acq_rel);
+    if (s_menuPumpTimer && oldWindow)
+        KillTimer(oldWindow, s_menuPumpTimer);
+    HWND window = g_sRs->GetWindow();
+    if (!window) window = g_RenderWindow->hWnd;
+    const DWORD windowThread = window ? GetWindowThreadProcessId(window, nullptr) : 0;
     World::SetMenuWindowThread(windowThread);
     spdlog::info("Skyrim Together window owner thread: {} (renderer init thread {})", windowThread, GetCurrentThreadId());
-    s_menuPumpTimer = s_menuPumpWindow
-        ? SetTimer(s_menuPumpWindow, reinterpret_cast<UINT_PTR>(&s_menuPumpTimer), 50, &MenuPumpTimer)
+    s_menuPumpWindow.store(window, std::memory_order_release);
+    s_menuPumpTimer = window
+        ? SetTimer(window, reinterpret_cast<UINT_PTR>(&s_menuPumpTimer), 50, &MenuPumpTimer)
         : 0;
     if (s_menuPumpTimer)
         spdlog::info("Skyrim Together main-menu window timer installed");
     else
         spdlog::warn("Skyrim Together main-menu window timer unavailable");
+    // uiReady may have arrived before renderer initialization completed.
+    WakeMainMenuPump();
 }
 
 void (*StopTimer)(int) = nullptr;
@@ -110,11 +138,7 @@ void (*StopTimer)(int) = nullptr;
 void Hook_StopTimer(int type)
 {
     if (g_sRs)
-    {
-        // Existing title-screen render hook: pump only on the window owner.
-        World::PumpMainMenu();
         g_sRs->OnRender();
-    }
 
     StopTimer(type);
 }
