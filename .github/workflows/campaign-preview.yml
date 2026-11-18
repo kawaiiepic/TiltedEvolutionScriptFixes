@@ -1,0 +1,100 @@
+name: Campaign Preview Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/campaign-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: campaign-preview-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        skyrim-version: ['latest', '1.6.1170']
+    uses: ./.github/workflows/windows.yml
+    with:
+      build-mode: release
+      skyrim-version: ${{ matrix.skyrim-version }}
+      upload-build-for-next-job: true
+      archive-build-artifacts: true
+
+  build-linux:
+    uses: ./.github/workflows/linux.yml
+    with:
+      build-mode: release
+      upload-build-for-next-job: true
+
+  publish:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-files
+          pattern: '{release-asset-linux-*,SkyrimTogether-*}'
+          merge-multiple: true
+
+      - name: Validate and stage release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p publish
+          version="campaign-preview-${GITHUB_SHA:0:7}"
+          echo "PREVIEW_TAG=$version" >> "$GITHUB_ENV"
+
+          for suffix in "" "-sse1.6.1170"; do
+            client=(release-files/SkyrimTogether-*-windows-x64"$suffix".zip)
+            symbols=(release-files/SkyrimTogether-*-windows-x64"$suffix"-debug-symbols.zip)
+            test "${#client[@]}" -eq 1
+            test "${#symbols[@]}" -eq 1
+            unzip -tq "${client[0]}"
+            unzip -Z1 "${client[0]}" > client-entries.txt
+            grep -Fxq 'SkyrimTogetherReborn/SkyrimTogether.exe' client-entries.txt
+            grep -Fxq 'SkyrimTogetherReborn/SkyrimTogetherServer.exe' client-entries.txt
+            unzip -tq "${symbols[0]}"
+            cp "${client[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix.zip"
+            cp "${symbols[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix-debug-symbols.zip"
+          done
+
+          for arch in amd64 arm64; do
+            archives=(release-files/SkyrimTogetherServer-*-linux-"$arch".tar.gz)
+            test "${#archives[@]}" -eq 1
+            mkdir -p "server-$arch"
+            tar -xzf "${archives[0]}" -C "server-$arch"
+            test -x "server-$arch/SkyrimTogetherServer"
+            test -s "server-$arch/libSTServer.so"
+            test -s "server-$arch/config/STServer.ini"
+            (cd "server-$arch" && zip -q -r "../publish/SkyrimTogetherServer-$version-linux-$arch.zip" .)
+            unzip -tq "publish/SkyrimTogetherServer-$version-linux-$arch.zip"
+            cp "${archives[0]}" "publish/SkyrimTogetherServer-$version-linux-$arch.tar.gz"
+          done
+          (cd publish && sha256sum *.zip *.tar.gz > SHA256SUMS.txt)
+
+      - name: Publish matching prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite binaries."
+            exit 1
+          fi
+          gh release create "$PREVIEW_TAG" publish/* \
+            --target "$GITHUB_SHA" \
+            --title "Skyrim Together Shared Campaign Preview (${GITHUB_SHA:0:7})" \
+            --prerelease \
+            --notes "Experimental shared campaign build from commit $GITHUB_SHA. Windows archives include the client and Windows dedicated server. Linux server ZIP and tar.gz archives are provided for amd64 and arm64. Use matching builds on every client and server; select the client for your Skyrim runtime (latest or 1.6.1170). Back up character saves and server journals. Native gameplay has not been validated end to end."

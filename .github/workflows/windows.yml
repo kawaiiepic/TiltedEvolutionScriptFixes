@@ -20,6 +20,10 @@ on:
         required: false
         type: boolean
         default: false
+      archive-build-artifacts:
+        required: false
+        type: boolean
+        default: false
 
 env:
   BUILD_MODE: ${{ inputs.build-mode || 'releasedbg' }}
@@ -153,7 +157,7 @@ jobs:
         with:
           name: SkyrimTogether-${{ env.ARTIFACT_VERSION }}-windows-${{ matrix.arch }}${{ env.ASSET_SUFFIX }}
           # Direct downloads should receive the existing zip without another zip layer
-          archive: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+          archive: ${{ inputs.archive-build-artifacts || (github.event_name == 'push' && github.ref_type == 'tag') }}
           retention-days: 7
           if-no-files-found: error
           path: release-assets/SkyrimTogether-${{ env.ARTIFACT_VERSION }}-windows-${{ matrix.arch }}${{ env.ASSET_SUFFIX }}.zip
@@ -164,7 +168,7 @@ jobs:
         with:
           name: SkyrimTogether-${{ env.ARTIFACT_VERSION }}-windows-${{ matrix.arch }}${{ env.ASSET_SUFFIX }}-debug-symbols
           # Direct downloads should receive the existing zip without another zip layer
-          archive: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+          archive: ${{ inputs.archive-build-artifacts || (github.event_name == 'push' && github.ref_type == 'tag') }}
           retention-days: 7
           if-no-files-found: error
           path: release-assets/SkyrimTogether-${{ env.ARTIFACT_VERSION }}-windows-${{ matrix.arch }}${{ env.ASSET_SUFFIX }}-debug-symbols.zip
