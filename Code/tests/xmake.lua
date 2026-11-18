@@ -16,3 +16,16 @@ target("TPTests")
         "catch2",
         "mimalloc",
         "glm")
+
+if is_plat("linux") then
+    target("CampaignSmokeClient")
+        set_kind("binary")
+        set_group("Tests")
+        set_default(false)
+        add_undefines("NDEBUG")
+        add_defines("STEAMNETWORKINGSOCKETS_STATIC_LINK")
+        add_files("integration/CampaignClient.cpp")
+        add_includedirs("../encoding")
+        add_deps("SkyrimEncoding", "TiltedConnect")
+        add_packages("tiltedcore", "hopscotch-map", "gamenetworkingsockets", "glm")
+end
