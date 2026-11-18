@@ -21,7 +21,7 @@ constexpr const char* kJournalPath = "shared-quests.log";
 
 bool IsSharedType(uint8_t aType) noexcept
 {
-    return aType <= 11 && (aType != 0 && aType != 6 || bEnableMiscQuestSync);
+    return aType <= 11 && ((aType != 0 && aType != 6) || bEnableMiscQuestSync);
 }
 }
 
@@ -208,7 +208,28 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
         return;
 
     JournalEntry entry;
-    if (!ResolveEntry(message, *acMessage.pPlayer, entry) || !CanRecord(entry))
+    if (!ResolveEntry(message, *acMessage.pPlayer, entry))
+        return;
+
+    // Preserve the existing per-player active quest log for other services, independently
+    // of the campaign's historical journal and its duplicate suppression.
+    auto& entries = acMessage.pPlayer->GetQuestLogComponent().QuestContent.Entries;
+    const auto it = std::find_if(entries.begin(), entries.end(), [&](const auto& e) { return e.Id == message.Id; });
+    if (message.Status == RequestQuestUpdate::Stopped)
+    {
+        if (it != entries.end())
+            entries.erase(it);
+    }
+    else if (it == entries.end())
+    {
+        auto& record = entries.emplace_back();
+        record.Id = message.Id;
+        record.Stage = message.Stage;
+    }
+    else
+        it->Stage = std::max(it->Stage, message.Stage);
+
+    if (!CanRecord(entry))
         return;
 
     // A stop reports the current stage. The stage event may not have been delivered

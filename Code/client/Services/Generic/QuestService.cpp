@@ -102,6 +102,13 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
             continue;
         }
 
+        if (pQuest->currentStage > stage)
+        {
+            spdlog::warn("Ignoring stale shared quest stop {:X} at stage {}; local stage is {}", formId, stage, pQuest->currentStage);
+            stopped.push_back(formId);
+            continue;
+        }
+
         if (GetHeldStages(formId, pQuest) || !pQuest->IsStageReached(stage))
             continue;
 
@@ -162,7 +169,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
         }
         
         m_world.GetRunner().Queue(
-            [&, formId = pQuest->formID, stageId = pQuest->currentStage, stopped = pQuest->IsStopped(), type = pQuest->type]()
+            [&, formId = pQuest->formID, stageId = pQuest->currentStage, stopped = !apEvent->started, type = pQuest->type]()
             {
                 GameId Id;
                 auto& modSys = m_world.GetModSystem();
@@ -433,6 +440,8 @@ static void ApplyHeldStages(TESQuest* apQuest, HeldStages& aHeld, size_t aCount)
         const uint16_t cStage = aHeld.Stages[i];
         if (apQuest->ScriptSetStage(cStage))
             aHeld.PendingItems.insert(aHeld.PendingItems.end(), apQuest->GetStageItemCount(cStage), cStage);
+        else if (!apQuest->IsStageReached(cStage))
+            spdlog::warn("Unable to apply held shared quest {:X} stage {}; reconnect to retry journal", apQuest->formID, cStage);
     }
 
     aHeld.Stages.erase(aHeld.Stages.begin(), aHeld.Stages.begin() + aCount);
@@ -548,7 +557,22 @@ void QuestService::ApplyQuestUpdate(const NotifyQuestUpdate& acUpdate) noexcept
         return;
 
     if (pQuest->IsStageReached(acUpdate.Stage))
+    {
+        // A fresh quest can have currentStage == 0 before it is actually running.
+        // Use the already-exposed native start routine, without forcing alias filling.
+        if (acUpdate.Status == NotifyQuestUpdate::Started && acUpdate.Stage == 0 &&
+            pQuest->IsStopped() && !pQuest->alreadyRun && !pQuest->IsStageDone(0))
+        {
+            ScopedQuestOverride override;
+            bool started = false;
+            pQuest->EnsureQuestStarted(started, false);
+            if (!pQuest->IsStopped())
+                pQuest->SetActive(true);
+            else
+                spdlog::warn("Unable to start shared quest {:X} at stage zero; reconnect to retry journal", cFormId);
+        }
         return;
+    }
 
     if (!pQuest->IsStopped())
     {
