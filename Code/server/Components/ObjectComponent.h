@@ -5,6 +5,7 @@
 #endif
 
 #include <Structs/LockData.h>
+#include <Game/Player.h>
 #include <Campaign/PluginFormKey.h>
 #include <optional>
 
