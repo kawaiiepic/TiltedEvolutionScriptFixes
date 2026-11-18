@@ -32,6 +32,7 @@ export interface SharedDialoguePanel {
 export class ClientService implements OnDestroy {
   /** Initialization done. */
   public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
+  public readonly characterPortraits = new BehaviorSubject<ReadonlyMap<number, string>>(new Map());
 
   public initDone = new AsyncSubject<undefined>();
 
@@ -173,6 +174,7 @@ export class ClientService implements OnDestroy {
       this.onPartyInviteReceived.bind(this),
     );
     skyrimtogether.on('sharedDialogue', this.onSharedDialogue.bind(this));
+    skyrimtogether.on('characterPortrait', this.onCharacterPortrait.bind(this));
     skyrimtogether.on('questUpdated', this.onQuestUpdated.bind(this));
   }
 
@@ -208,6 +210,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyLeft');
     skyrimtogether.off('partyInviteReceived');
     skyrimtogether.off('sharedDialogue');
+    skyrimtogether.off('characterPortrait');
     skyrimtogether.off('questUpdated');
   }
 
@@ -353,6 +356,7 @@ export class ClientService implements OnDestroy {
   private onExitGame(): void {
     this.zone.run(() => {
       this.sharedDialogueChange.next([]);
+      this.characterPortraits.next(new Map());
       this.inGameStateChange.next(false);
     });
   }
@@ -387,6 +391,7 @@ export class ClientService implements OnDestroy {
     void this.zone.run(async () => {
       this.localPlayerId = undefined;
       this.sharedDialogueChange.next([]);
+      this.characterPortraits.next(new Map());
       this.connectionStateChange.next(false);
       this.isConnectionInProgressChange.next(false);
 
@@ -672,6 +677,49 @@ export class ClientService implements OnDestroy {
 
   public manageDialogue(panel: SharedDialoguePanel, action: number): void {
     skyrimtogether.manageDialogue(panel.actorId, panel.revision, action);
+  }
+
+  private onCharacterPortrait(playerId: number, width: number, height: number, rgba: string): void {
+    if (!Number.isInteger(playerId) || playerId < 0 || !this.connectionStateChange.getValue()) return;
+    this.zone.run(() => {
+      const portraits = new Map(this.characterPortraits.getValue());
+      if (!rgba) {
+        portraits.delete(playerId);
+        this.characterPortraits.next(portraits);
+        return;
+      }
+      if (width !== 96 || height !== 96 || rgba.length !== Math.ceil(width * height * 4 / 3) * 4) return;
+      try {
+        const pixels = atob(rgba);
+        if (pixels.length !== width * height * 4) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) return;
+        const image = context.createImageData(width, height);
+        // The renderer supplies sRGB pixels premultiplied in linear light.
+        const linear = (c: number) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+        const srgb = (c: number) => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+        for (let i = 0; i < pixels.length; i += 4) {
+          const alpha = pixels.charCodeAt(i + 3) / 255;
+          for (let channel = 0; channel < 3; ++channel) {
+            image.data[i + channel] = alpha > 0
+              ? Math.round(srgb(Math.min(1, linear(pixels.charCodeAt(i + channel) / 255) / alpha)) * 255) : 0;
+          }
+          image.data[i + 3] = pixels.charCodeAt(i + 3);
+        }
+        context.putImageData(image, 0, 0);
+        if (!portraits.has(playerId) && portraits.size >= 32) {
+          const oldest = portraits.keys().next();
+          if (!oldest.done) portraits.delete(oldest.value);
+        }
+        portraits.set(playerId, canvas.toDataURL('image/png'));
+        this.characterPortraits.next(portraits);
+      } catch {
+        // A failed snapshot leaves the count and native choice available.
+      }
+    });
   }
 
   private onSharedDialogue(actorId: number, visible: boolean, owner: string,

@@ -14,6 +14,12 @@
         [disabled]="!panel.canVote || !(active$ | async) || !option"
         (click)="voteDialogue(panel, i)">
         <span [attr.title]="dialogueVoters(panel, i) || null">{{ option }}<ng-container *ngIf="panel.votes[i]"> ({{ panel.votes[i] }})</ng-container></span>
+        <span class="dialogue-portraits" *ngIf="portraits$ | async as portraits">
+          <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
+            <img *ngIf="portraits.get(voter) as portrait" [src]="portrait"
+              [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
+          </ng-container>
+        </span>
       </button>
       <ng-container *ngIf="panel.canChoose">
         <button type="button" [disabled]="!(active$ | async)" (click)="toggleDialoguePrivacy(panel)">

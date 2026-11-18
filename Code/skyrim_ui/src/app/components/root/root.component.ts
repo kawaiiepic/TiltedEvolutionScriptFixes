@@ -41,8 +41,18 @@ export class RootComponent implements OnInit {
   view$ = this.uiRepository.view$;
 
   sharedDialogues$ = this.client.sharedDialogueChange.asObservable();
+  portraits$ = this.client.characterPortraits.asObservable();
 
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
+
+  dialogueVoterIds(panel: SharedDialoguePanel, index: number): number[] {
+    return panel.voterIds.filter((_, i) => panel.voterOptions[i] === index).slice(0, 8);
+  }
+
+  dialogueVoterName(id: number): string {
+    if (id === this.client.localPlayerId) return 'You';
+    return this.playerList.playerList.getValue()?.players.find(player => player.id === id)?.name || `Player ${id}`;
+  }
 
   dialogueVoters(panel: SharedDialoguePanel, index: number): string {
     const players = this.playerList.playerList.getValue()?.players || [];

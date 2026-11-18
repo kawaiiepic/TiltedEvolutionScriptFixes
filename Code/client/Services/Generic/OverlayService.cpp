@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <Services/OverlayService.h>
+#include <ModCompat/DialoguePortraits.h>
 
 #include <OverlayApp.hpp>
 
@@ -132,6 +133,7 @@ OverlayService::OverlayService(World& aWorld, TransportService& transport, entt:
 
 OverlayService::~OverlayService() noexcept
 {
+    DialoguePortraits::Reset();
 }
 
 void OverlayService::Create(RenderSystemD3D11* apRenderSystem) noexcept
@@ -280,12 +282,15 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
 {
     RefreshDialogueSession();
     PublishDialogueOptions();
+    if (m_transport.IsOnline())
+        DialoguePortraits::Update(m_world, m_pOverlay.get(), m_transport.GetLocalPlayerId());
     RunDebugDataUpdates();
     RunPlayerHealthUpdates();
 }
 
 void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 {
+    DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("connect");
 
     auto pArguments = CefListValue::Create();
@@ -296,6 +301,7 @@ void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
 {
     CloseDialogueSession();
+    DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("disconnect");
 }
 
@@ -558,6 +564,7 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
 {
     if (acMessage.Kind == NotifyPlayerDialogue::Panel || acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
     {
+        DialoguePortraits::Observe(acMessage);
         if (acMessage.ActorId == m_dialogueActorId)
             m_dialoguePanelRevision = acMessage.CanChoose ? acMessage.Revision : 0;
         if (!m_pOverlay)
@@ -667,6 +674,7 @@ void OverlayService::OnPlayerJoined(const NotifyPlayerJoined& acMessage) noexcep
 
 void OverlayService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
 {
+    DialoguePortraits::RemovePlayer(acMessage.PlayerId);
     auto pArguments = CefListValue::Create();
     pArguments->SetInt(0, acMessage.PlayerId);
     pArguments->SetString(1, acMessage.Username.c_str());
