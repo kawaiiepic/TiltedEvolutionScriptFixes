@@ -144,6 +144,9 @@ void CharacterService::OnUpdate(const UpdateEvent&) const noexcept
 
 void CharacterService::OnCharacterExteriorCellChange(const CharacterExteriorCellChangeEvent& acEvent) const noexcept
 {
+    if (auto* pCell = m_world.try_get<CellIdComponent>(acEvent.Entity))
+        *pCell = {acEvent.CellId, acEvent.WorldSpaceId, acEvent.CurrentCoords};
+
     CharacterSpawnRequest spawnMessage;
     Serialize(m_world, acEvent.Entity, &spawnMessage);
 
@@ -168,6 +171,9 @@ void CharacterService::OnCharacterExteriorCellChange(const CharacterExteriorCell
 
 void CharacterService::OnCharacterInteriorCellChange(const CharacterInteriorCellChangeEvent& acEvent) const noexcept
 {
+    if (auto* pCell = m_world.try_get<CellIdComponent>(acEvent.Entity))
+        *pCell = CellIdComponent(acEvent.NewCell);
+
     CharacterSpawnRequest spawnMessage;
     Serialize(m_world, acEvent.Entity, &spawnMessage);
 
@@ -390,19 +396,31 @@ void CharacterService::OnReferencesMoveRequest(const PacketEvent<ClientReference
             continue;
         }
 
+        if (!view.get<OwnerComponent>(*itor).IsCurrentOwner(acMessage.pPlayer, movement.OwnershipEpoch))
+            continue;
+
         auto& movementComponent = view.get<MovementComponent>(*itor);
         auto& cellIdComponent = view.get<CellIdComponent>(*itor);
         const auto& characterComponent = view.get<CharacterComponent>(*itor);
+        const auto& playerCell = acMessage.pPlayer->GetCellComponent();
+        if (characterComponent.IsPlayer() && playerCell &&
+            (playerCell.Cell != movement.CellId || playerCell.WorldSpaceId != movement.WorldSpaceId))
+            continue;
 
-        movementComponent.Tick = message.Tick;
-        movementComponent.Position = movement.Position;
-        movementComponent.Rotation = glm::vec3(movement.Rotation.x, 0.f, movement.Rotation.y);
-        movementComponent.Variables = movement.Variables;
-        movementComponent.Direction = movement.Direction;
+        if (message.Tick > movementComponent.Tick)
+        {
+            movementComponent.Tick = message.Tick;
+            movementComponent.Position = movement.Position;
+            movementComponent.Rotation = glm::vec3(movement.Rotation.x, 0.f, movement.Rotation.y);
+            movementComponent.Variables = movement.Variables;
+            movementComponent.Direction = movement.Direction;
 
-        cellIdComponent.Cell = movement.CellId;
-        cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
-        cellIdComponent.CenterCoords = GridCellCoords::CalculateGridCellCoords(movement.Position.x, movement.Position.y);
+            cellIdComponent.Cell = movement.CellId;
+            cellIdComponent.WorldSpaceId = movement.WorldSpaceId;
+            cellIdComponent.CenterCoords = GridCellCoords::CalculateGridCellCoords(movement.Position.x, movement.Position.y);
+        }
+        else if (cellIdComponent.Cell != movement.CellId || cellIdComponent.WorldSpaceId != movement.WorldSpaceId)
+            continue;
 
         for (auto pPlayer : m_world.GetPlayerManager())
         {
@@ -894,6 +912,8 @@ bool CharacterService::TransferOwnership(Player* apPlayer, const entt::entity aE
 
     ownerComponent.SetOwner(apPlayer);
     ownerComponent.OwnershipEpoch = newEpoch;
+    if (auto* pMovement = m_world.try_get<MovementComponent>(aEntity))
+        pMovement->Tick = 0;
     if (aResetInvalidOwners)
         ownerComponent.InvalidOwners.clear();
 
