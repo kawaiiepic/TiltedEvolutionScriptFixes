@@ -8,6 +8,11 @@ struct World;
 struct ClientRpcCalls;
 struct PlayerEnterWorldEvent;
 
+namespace Campaign
+{
+struct QuestEvent;
+}
+
 namespace Resources
 {
 struct ResourceCollection;
@@ -32,6 +37,8 @@ struct ScriptService
     std::tuple<bool, String> HandleChatMessage(const entt::entity aSender, const String& aMessage) noexcept;
 
     void HandlePlayerQuit(ConnectionId_t aConnectionId, Server::EDisconnectReason aReason) noexcept;
+
+    void HandleCampaignQuestCommitted(uint64_t aSequence, const Campaign::QuestEvent& acEvent, uint32_t aPlayerId) noexcept;
 
     std::tuple<bool, String> HandleSetTime(int aHours, int aMinutes, float aTimeScale) noexcept;
 

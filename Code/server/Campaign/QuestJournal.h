@@ -26,6 +26,14 @@ struct JournalRecord
     uint32_t Origin{}; // Only meaningful within the server process that accepted the event.
 };
 
+struct QuestSnapshot
+{
+    std::set<uint16_t> Stages;
+    uint16_t HighestStage{};
+    bool Stopped{};
+    uint64_t Sequence{};
+};
+
 class QuestJournal
 {
 public:
@@ -34,24 +42,18 @@ public:
     explicit QuestJournal(std::filesystem::path aPath);
     Result Append(const QuestEvent& acEvent, uint32_t aOrigin) noexcept;
     const std::vector<JournalRecord>& Records() const noexcept { return m_records; }
+    const QuestSnapshot* Find(const PluginFormKey& acKey) const noexcept;
     bool IsHealthy() const noexcept { return m_healthy; }
     size_t ErrorLine() const noexcept { return m_errorLine; }
 
 private:
-    struct QuestState
-    {
-        std::set<uint16_t> Stages;
-        uint16_t HighestStage{};
-        bool Stopped{};
-    };
-
     bool CanRecord(const QuestEvent& acEvent) const noexcept;
     void Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeStopStage);
     void Load();
 
     std::filesystem::path m_path;
     std::vector<JournalRecord> m_records;
-    std::map<PluginFormKey, QuestState> m_quests;
+    std::map<PluginFormKey, QuestSnapshot> m_quests;
     bool m_healthy{true};
     bool m_hasFile{};
     size_t m_errorLine{};

@@ -88,6 +88,11 @@ void QuestService::BackupCampaign() const noexcept
         pOut->error("Unable to back up {} to {}: {}", kJournalPath, kJournalBackupPath, error.message());
 }
 
+const Campaign::QuestSnapshot* QuestService::GetCampaignQuest(const Campaign::PluginFormKey& acKey) const noexcept
+{
+    return m_journal.Find(acKey);
+}
+
 void QuestService::QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept
 {
     const auto& event = acRecord.Event;
@@ -191,7 +196,10 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     if (result == Campaign::QuestJournal::Result::Unavailable)
         spdlog::error("Quest sync writes disabled: unable to commit record {} to {}.", m_journal.ErrorLine(), kJournalPath);
     else if (result == Campaign::QuestJournal::Result::Committed)
+    {
         spdlog::debug("Shared quest {}:{:X} stage {} status {}", entry.Quest.Plugin, entry.Quest.BaseId, entry.Stage, entry.Status);
+        m_world.GetScriptService().HandleCampaignQuestCommitted(m_journal.Records().size(), entry, acMessage.pPlayer->GetId());
+    }
 }
 
 void QuestService::SendScene(const NotifySceneState& acState, const Player& acPlayer) noexcept

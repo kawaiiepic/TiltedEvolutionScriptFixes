@@ -23,20 +23,25 @@ QuestJournal::QuestJournal(std::filesystem::path aPath)
     Load();
 }
 
+const QuestSnapshot* QuestJournal::Find(const PluginFormKey& acKey) const noexcept
+{
+    const auto it = m_quests.find(acKey);
+    return it == m_quests.end() ? nullptr : &it->second;
+}
+
 bool QuestJournal::CanRecord(const QuestEvent& acEvent) const noexcept
 {
-    const auto it = m_quests.find(acEvent.Quest);
-    if (it == m_quests.end())
+    const auto* pState = Find(acEvent.Quest);
+    if (!pState)
         return acEvent.Status != QuestEvent::Stopped;
 
-    const auto& state = it->second;
-    if (state.Stopped || acEvent.Status == QuestEvent::Started)
+    if (pState->Stopped || acEvent.Status == QuestEvent::Started)
         return false;
     if (acEvent.Status == QuestEvent::Stopped)
-        return acEvent.Stage >= state.HighestStage;
+        return acEvent.Stage >= pState->HighestStage;
 
     // Skyrim can explicitly set an earlier stage after the current stage has advanced.
-    return !state.Stages.contains(acEvent.Stage);
+    return !pState->Stages.contains(acEvent.Stage);
 }
 
 void QuestJournal::Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeStopStage)
@@ -51,6 +56,7 @@ void QuestJournal::Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aInc
     state.HighestStage = std::max(state.HighestStage, acEvent.Stage);
 
     m_records.push_back({acEvent, cApplyStage, aOrigin});
+    state.Sequence = m_records.size();
 }
 
 void QuestJournal::Load()

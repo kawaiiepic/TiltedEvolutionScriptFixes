@@ -64,6 +64,13 @@ TEST_CASE("The campaign commits a final stage and stop together", "[campaign]")
     REQUIRE(restarted.Records().back().Event.Stage == 25);
     REQUIRE(restarted.Records().back().ApplyStageBeforeStop);
     REQUIRE(restarted.Records().back().Origin == 0);
+    const auto* pSnapshot = restarted.Find(event.Quest);
+    REQUIRE(pSnapshot);
+    REQUIRE(pSnapshot->Stopped);
+    REQUIRE(pSnapshot->Sequence == 3);
+    REQUIRE(pSnapshot->HighestStage == 25);
+    const std::set<uint16_t> cExpectedStages{20, 25};
+    REQUIRE(pSnapshot->Stages == cExpectedStages);
     event.Status = QuestEvent::Started;
     REQUIRE(restarted.Append(event, 2) == QuestJournal::Result::Ignored);
 }

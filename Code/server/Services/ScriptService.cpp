@@ -196,6 +196,12 @@ void ScriptService::HandlePlayerQuit(ConnectionId_t aConnectionId, Server::EDisc
     CallEvent("onPlayerQuit", aConnectionId, reason);
 }
 
+void ScriptService::HandleCampaignQuestCommitted(uint64_t aSequence, const Campaign::QuestEvent& acEvent, uint32_t aPlayerId) noexcept
+{
+    CallEvent("onCampaignQuestCommitted", aSequence, acEvent.Quest.Plugin, acEvent.Quest.Lite,
+              acEvent.Quest.BaseId, acEvent.Stage, static_cast<uint8_t>(acEvent.Status), aPlayerId);
+}
+
 std::tuple<bool, String> ScriptService::HandleSetTime(int aHours, int aMinutes, float aTimeScale) noexcept
 {
     return CallCancelableEvent("onSetTime", aHours, aMinutes, aTimeScale);

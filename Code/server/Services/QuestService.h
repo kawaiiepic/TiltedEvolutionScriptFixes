@@ -26,6 +26,7 @@ public:
     QuestService(World& aWorld, entt::dispatcher& aDispatcher);
     void ShowCampaignStatus() const noexcept;
     void BackupCampaign() const noexcept;
+    const Campaign::QuestSnapshot* GetCampaignQuest(const Campaign::PluginFormKey& acKey) const noexcept;
 
 private:
     struct QuestSync
