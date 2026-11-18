@@ -25,6 +25,12 @@ Resolved non-actor speakers (including talking activators) now use native local 
 
 Native non-owner option selections already count as votes when the text uniquely matches an owner option. The desired presentation is the existing Skyrim dialogue list with vote counts appended to display labels, not a second voting list. The repository's menu wrapper exposes an opaque `uiMovie` pointer and read-only option text, but no verified Scaleform dialogue-list update method or lifetime contract. Do not overwrite native option text pointers or mutate interned strings. Verify the actual Dialogue Menu list and refresh path for both supported runtimes before replacing the overlay voting list. Preserve original option identity, revision validation, privacy and owner-only execution. The existing overlay remains until that native display path can be verified.
 
+### Character portraits and native vote labels
+
+Nearby public conversation snapshots now include bounded server-player/option pairs along with aggregate votes. Remote spectator snapshots expose only counts. Private sessions expose no voter identities. The existing fallback panel displays a count suffix and voter-name tooltip, not fabricated portraits. Native non-owner selections continue matching unmodified option text.
+
+[Smart Talk's dialogue renderer](https://github.com/Seb263/SkyrimSE_SmartTalk/blob/master/src/Features/Quest.hpp) demonstrates a Scaleform entry callback that preserves the original renderer and accesses the entry's topic index and text field. The fork still needs a verified GFx ABI, thread-safe refresh for votes while the list is open, and compatibility with modded dialogue menus. [Mesh Rendering Framework](https://github.com/QTR-Modding/Mesh-Rendering-Framework/blob/master/include/MeshRenderingFrameworkAPI.h) exposes an actor mesh constructor and image export API backed by CommonLib types; use an optional ABI-safe companion or verified native integration to render and cache actual character portraits, not generic race icons. Validate runtime support and GPL licensing before adopting source. Neither native labels nor portrait capture are implemented by the network change.
+
 ## Server operation
 
 Use a separate working directory for each server instance. Keep the files below on a persistent volume when using a container and use one active writer for that directory.

@@ -20,6 +20,8 @@ export interface SharedDialoguePanel {
   npc: string;
   options: string[];
   votes: number[];
+  voterIds: number[];
+  voterOptions: number[];
   selected: number;
 }
 
@@ -674,11 +676,11 @@ export class ClientService implements OnDestroy {
 
   private onSharedDialogue(actorId: number, visible: boolean, owner: string,
     canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number,
-    canVote: boolean, canPass: boolean, isPrivate: boolean): void {
+    canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[] = [], voterOptions: number[] = []): void {
     this.zone.run(() => {
       const panels = this.sharedDialogueChange.getValue().filter(panel => panel.actorId !== actorId);
       if (visible) {
-        panels.push({ actorId, owner, canChoose, canVote, canPass, isPrivate, revision, npc, options, votes, selected });
+        panels.push({ actorId, owner, canChoose, canVote, canPass, isPrivate, revision, npc, options, votes, voterIds, voterOptions, selected });
       }
       panels.sort((a, b) => Number(b.canChoose) - Number(a.canChoose) || a.actorId - b.actorId);
       this.sharedDialogueChange.next(panels);

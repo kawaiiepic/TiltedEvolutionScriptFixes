@@ -19,6 +19,13 @@ void NotifyPlayerDialogue::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) 
         Serialization::WriteString(aWriter, Options[i]);
         aWriter.WriteBits(i < Votes.size() ? Votes[i] : 0, 32);
     }
+    const uint32_t cVoters = static_cast<uint32_t>(std::min<size_t>(VoterChoices.size(), MaxVoterChoices));
+    aWriter.WriteBits(cVoters, 8);
+    for (uint32_t i = 0; i < cVoters; ++i)
+    {
+        aWriter.WriteBits(VoterChoices[i].first, 32);
+        aWriter.WriteBits(VoterChoices[i].second, 32);
+    }
     Serialization::WriteString(aWriter, Name);
     Serialization::WriteString(aWriter, Text);
 }
@@ -54,6 +61,15 @@ void NotifyPlayerDialogue::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader
         Options[i] = Serialization::ReadString(aReader);
         aReader.ReadBits(value, 32);
         Votes[i] = static_cast<uint32_t>(value);
+    }
+    aReader.ReadBits(value, 8);
+    VoterChoices.resize(static_cast<size_t>(value));
+    for (auto& [playerId, index] : VoterChoices)
+    {
+        aReader.ReadBits(value, 32);
+        playerId = static_cast<uint32_t>(value);
+        aReader.ReadBits(value, 32);
+        index = static_cast<uint32_t>(value);
     }
     Name = Serialization::ReadString(aReader);
     Text = Serialization::ReadString(aReader);

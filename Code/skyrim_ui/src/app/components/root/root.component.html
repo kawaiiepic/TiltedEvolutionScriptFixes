@@ -13,7 +13,7 @@
         [class.selected]="panel.selected === i"
         [disabled]="!panel.canVote || !(active$ | async) || !option"
         (click)="voteDialogue(panel, i)">
-        <span>{{ option }}</span><small>{{ panel.votes[i] || 0 }} votes</small>
+        <span [attr.title]="dialogueVoters(panel, i) || null">{{ option }}<ng-container *ngIf="panel.votes[i]"> ({{ panel.votes[i] }})</ng-container></span>
       </button>
       <ng-container *ngIf="panel.canChoose">
         <button type="button" [disabled]="!(active$ | async)" (click)="toggleDialoguePrivacy(panel)">

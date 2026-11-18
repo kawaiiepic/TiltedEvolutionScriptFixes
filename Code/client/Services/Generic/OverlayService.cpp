@@ -583,6 +583,15 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         pArguments->SetBool(9, acMessage.CanVote);
         pArguments->SetBool(10, acMessage.CanPass);
         pArguments->SetBool(11, acMessage.Private);
+        auto voterIds = CefListValue::Create();
+        auto voterOptions = CefListValue::Create();
+        for (size_t i = 0; i < acMessage.VoterChoices.size(); ++i)
+        {
+            voterIds->SetDouble(i, acMessage.VoterChoices[i].first);
+            voterOptions->SetInt(i, static_cast<int>(acMessage.VoterChoices[i].second));
+        }
+        pArguments->SetList(12, voterIds);
+        pArguments->SetList(13, voterOptions);
         m_pOverlay->ExecuteAsync("sharedDialogue", pArguments);
         return;
     }

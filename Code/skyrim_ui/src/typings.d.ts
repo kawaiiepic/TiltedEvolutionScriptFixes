@@ -96,7 +96,7 @@ declare namespace SkyrimTogetherTypes {
   type PartyInviteReceivedCallback = (inviterId: number) => void;
 
   type QuestUpdatedCallback = () => void;
-  type SharedDialogueCallback = (actorId: number, visible: boolean, owner: string, canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number, canVote: boolean, canPass: boolean, isPrivate: boolean) => void;
+  type SharedDialogueCallback = (actorId: number, visible: boolean, owner: string, canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number, canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[], voterOptions: number[]) => void;
 }
 
 /** Global Skyrim: Together object. */

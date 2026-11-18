@@ -581,18 +581,19 @@ TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
         REQUIRE(*CastUnique<PlayerDialogueRequest>(std::move(message)) == request);
     }
 
-    SECTION("Snapshot preserves option indices and counts")
+    SECTION("Snapshot preserves option indices, counts and voter identities")
     {
         NotifyPlayerDialogue panel{};
         panel.Kind = NotifyPlayerDialogue::Panel;
         panel.CanPass = true;
-        panel.Private = true;
+        panel.Private = false;
         panel.ActorId = 0xDEADBEEF;
         panel.Revision = 7;
         panel.Selected = 2;
         panel.Name = "Owner";
         panel.Options = {"Yes", "", "No"};
         panel.Votes = {1, 0, 3};
+        panel.VoterChoices = {{11, 0}, {12, 2}, {13, 2}, {14, 2}};
 
         Buffer buff(4096);
         Buffer::Writer writer(&buff);

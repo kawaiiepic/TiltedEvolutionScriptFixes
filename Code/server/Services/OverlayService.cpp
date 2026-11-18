@@ -238,7 +238,13 @@ void OverlayService::RefreshDialoguePanels() noexcept
             for (const auto& [voter, index] : session.Votes)
             {
                 if (index < panel.Votes.size())
+                {
                     ++panel.Votes[index];
+                    // Distant spectating remains aggregate-only; private conversations
+                    // do not expose the identities of previous voters.
+                    if (cNearby && !session.Private && panel.VoterChoices.size() < NotifyPlayerDialogue::MaxVoterChoices)
+                        panel.VoterChoices.emplace_back(voter, index);
+                }
                 if (voter == pPlayer->GetId())
                     panel.Selected = index;
             }

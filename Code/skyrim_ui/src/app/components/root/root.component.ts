@@ -7,6 +7,7 @@ import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.an
 import { View } from '../../models/view.enum';
 import { ClientService, SharedDialoguePanel } from '../../services/client.service';
 import { DestroyService } from '../../services/destroy.service';
+import { PlayerListService } from '../../services/player-list.service';
 import {
   SettingService,
   fontSizeToPixels,
@@ -43,6 +44,14 @@ export class RootComponent implements OnInit {
 
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
 
+  dialogueVoters(panel: SharedDialoguePanel, index: number): string {
+    const players = this.playerList.playerList.getValue()?.players || [];
+    return panel.voterIds
+      .filter((_, i) => panel.voterOptions[i] === index)
+      .map(id => id === this.client.localPlayerId ? 'You' : players.find(player => player.id === id)?.name || `Player ${id}`)
+      .join(', ');
+  }
+
   voteDialogue(panel: SharedDialoguePanel, index: number): void {
     if (panel.canVote) this.client.voteDialogue(panel.actorId, panel.revision, index);
   }
@@ -68,6 +77,7 @@ export class RootComponent implements OnInit {
   public constructor(
     private readonly destroy$: DestroyService,
     private readonly client: ClientService,
+    private readonly playerList: PlayerListService,
     private readonly sound: SoundService,
     private readonly uiRepository: UiRepository,
     private readonly translocoService: TranslocoService,
