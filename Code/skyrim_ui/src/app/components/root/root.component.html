@@ -162,7 +162,7 @@
 
     <ng-container [ngSwitch]="view$ | async">
       <app-popup *ngSwitchCase="RootView.CONNECT">
-        <app-connect (done)="closeView()"></app-connect>
+        <app-connect (done)="closeView()" (cancelled)="closeTitleView()"></app-connect>
       </app-popup>
       <app-popup *ngSwitchCase="RootView.CONNECT_PASSWORD">
         <app-connect-password (done)="closeView()"></app-connect-password>
@@ -175,7 +175,7 @@
       </app-popup>
       <app-popup *ngSwitchCase="RootView.SETTINGS" data-popup="settings">
         <app-settings
-          (done)="closeView()"
+          (done)="closeTitleView()"
           (settingsUpdated)="updateGroupPosition()"
         ></app-settings>
       </app-popup>

@@ -53,6 +53,7 @@ export class ClientService implements OnDestroy {
 
   /** Connection state change. */
   public connectionStateChange = new BehaviorSubject(false);
+  public readonly openSettings = new Subject<void>();
   public readonly mainMenuChange = new BehaviorSubject(false);
   public readonly lobbyStateChange = new BehaviorSubject(false);
   public readonly checkpointChange = new BehaviorSubject<CharacterCheckpoint>(emptyCheckpoint);
@@ -147,6 +148,7 @@ export class ClientService implements OnDestroy {
     private readonly translocoService: TranslocoService,
     private readonly chatService: ChatService,
   ) {
+    skyrimtogether.on('openSettings', () => this.zone.run(() => this.openSettings.next()));
     skyrimtogether.on('init', this.onInit.bind(this));
     skyrimtogether.on('activate', this.onActivate.bind(this));
     skyrimtogether.on('deactivate', this.onDeactivate.bind(this));
@@ -210,6 +212,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('exitGame');
     skyrimtogether.off('openingMenu');
     skyrimtogether.off('mainMenu');
+    skyrimtogether.off('openSettings');
     skyrimtogether.off('serverLobby');
     skyrimtogether.off('characterCheckpoint');
     skyrimtogether.off('connect');

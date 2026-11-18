@@ -33,12 +33,13 @@ using IsAvailable = bool (*)(const void*, const char*);
 using InvokeNoReturn = void (*)(void*, const char*, const PrimitiveValue*, uint32_t);
 constexpr size_t kAdvanceMovie = 5, kIsAvailable = 0xA, kSetVariable = 0x10, kGetVariable = 0x11;
 constexpr const char* kProtocol = "_root.STMenuProtocol";
+constexpr const char* kSettings = "_root.STSettingsRequested";
 constexpr const char* kPlay = "_root.STPlayRequested";
 constexpr const char* kStart = "_root.MenuHolder.Menu_mc.FadeOutAndCall";
 
 std::atomic<IMenu*> s_menu{};
 std::atomic<Advance> s_original{};
-std::atomic_bool s_ready{}, s_play{};
+std::atomic_bool s_ready{}, s_play{}, s_settings{};
 enum class StartState { Idle, Pending, Dispatched, Failed };
 std::atomic<StartState> s_start{StartState::Idle};
 InvokeNoReturn s_invoke{};
@@ -126,6 +127,9 @@ void HookAdvance(IMenu* pMenu, float interval, uint32_t time)
             spdlog::warn("Native Play request was read but could not be cleared");
         }
     }
+    bool settings = false;
+    if (ReadBool(movie, kSettings, settings) && settings && WriteBool(movie, kSettings, false))
+        s_settings.store(true);
     if (s_start.load() != StartState::Pending) return;
     const auto available = MovieFunction<IsAvailable>(movie, kIsAvailable);
     if (!available || !available(movie, kStart) || !s_invoke)
@@ -195,6 +199,7 @@ void Tick(bool aMainMenu) noexcept
             std::lock_guard guard(s_movieLock);
             s_ready.store(false);
             s_play.store(false);
+            s_settings.store(false);
             auto pending = StartState::Pending;
             s_start.compare_exchange_strong(pending, StartState::Failed);
         }
@@ -218,6 +223,7 @@ void Tick(bool aMainMenu) noexcept
         std::lock_guard guard(s_movieLock);
         s_ready.store(false);
         s_play.store(false);
+        s_settings.store(false);
         s_protocolProbeFrames = 0;
         s_playResetWarned = false;
         s_menu.store(menu);
@@ -229,6 +235,7 @@ bool ConsumePlayRequest() noexcept
 {
     return s_play.exchange(false);
 }
+bool ConsumeSettingsRequest() noexcept { return s_settings.exchange(false); }
 bool RequestNewGame() noexcept
 {
     if (!s_ready.load() || !s_menu.load() || !s_invoke) return false;

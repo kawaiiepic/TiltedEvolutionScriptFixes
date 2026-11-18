@@ -117,6 +117,7 @@ private:
     bool m_browserReady = false;
     std::atomic_bool m_browserReadySignal{false};
     bool m_menuOpenRequested = false;
+    bool m_settingsOpenRequested = false;
     bool m_browserWaitLogged = false;
     std::chrono::steady_clock::time_point m_mainMenuSince{};
 

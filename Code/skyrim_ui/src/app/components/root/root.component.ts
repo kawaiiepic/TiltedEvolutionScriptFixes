@@ -113,6 +113,7 @@ export class RootComponent implements OnInit {
     this.onInGameStateSubscription();
     this.onActivationStateSubscription();
     this.onFontSizeSubscription();
+    this.client.openSettings.pipe(takeUntil(this.destroy$)).subscribe(() => this.setView(View.SETTINGS));
     this.client.uiReady();
   }
 
@@ -166,6 +167,14 @@ export class RootComponent implements OnInit {
       this.sound.play(Sound.Focus);
     } else if (this.chatComp) {
       this.chatComp.focus();
+    }
+  }
+
+  public closeTitleView(): void {
+    if (this.client.mainMenuChange.getValue()) {
+      this.returnToNativeMenu();
+    } else {
+      this.closeView();
     }
   }
 

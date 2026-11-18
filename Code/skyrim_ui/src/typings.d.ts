@@ -105,6 +105,8 @@ declare const skyrimtogether: SkyrimTogether;
 
 /** Global Skyrim: Together object type. */
 interface SkyrimTogether {
+  on(event: 'openSettings', callback: () => void): void;
+  off(event: 'openSettings', callback?: () => void): void;
   on(event: 'mainMenu' | 'serverLobby', callback: (state: boolean) => void): void;
   off(event: 'mainMenu' | 'serverLobby', callback?: (state: boolean) => void): void;
   uiReady(): void;

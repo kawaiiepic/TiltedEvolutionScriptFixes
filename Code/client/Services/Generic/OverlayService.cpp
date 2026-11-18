@@ -387,6 +387,7 @@ void OverlayService::UpdateMainMenu() noexcept
     {
         m_mainMenu = mainMenu;
         m_menuOpenRequested = false;
+        m_settingsOpenRequested = false;
         m_browserWaitLogged = false;
         m_mainMenuSince = std::chrono::steady_clock::now();
         spdlog::info("Skyrim Together main menu: {}", m_mainMenu);
@@ -410,11 +411,18 @@ void OverlayService::UpdateMainMenu() noexcept
             m_menuOpenRequested = true;
             spdlog::info("Native Play request queued");
         }
+        if (MainMenuBridge::ConsumeSettingsRequest())
+            m_settingsOpenRequested = true;
         if (m_browserReady)
         {
             const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
-            if (m_menuOpenRequested && InputService::SetOverlayActive(*this, true))
+            if ((m_menuOpenRequested || m_settingsOpenRequested) && InputService::SetOverlayActive(*this, true))
+            {
+                if (m_settingsOpenRequested)
+                    m_pOverlay->ExecuteAsync("openSettings");
                 m_menuOpenRequested = false;
+                m_settingsOpenRequested = false;
+            }
             InputService::PollMainMenuHotkey(*this, window);
         }
         else if (!m_browserWaitLogged && std::chrono::steady_clock::now() - m_mainMenuSince >= std::chrono::seconds(5))
