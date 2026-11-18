@@ -6,7 +6,7 @@
 
 struct SharedQuestUpdate
 {
-    enum StatusCode : uint8_t { StageUpdate, Started, Stopped };
+    enum StatusCode : uint8_t { StageUpdate, Started, Stopped, Completed };
 
     GameId Id{};
     uint16_t Stage{};

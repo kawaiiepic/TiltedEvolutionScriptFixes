@@ -32,7 +32,7 @@ void NotifyQuestUpdate::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) n
             return;
         }
         update.Stage = static_cast<uint16_t>(value);
-        if (!aReader.ReadBits(value, 8) || value > SharedQuestUpdate::Stopped)
+        if (!aReader.ReadBits(value, 8) || value > SharedQuestUpdate::Completed)
         {
             Updates.clear();
             return;

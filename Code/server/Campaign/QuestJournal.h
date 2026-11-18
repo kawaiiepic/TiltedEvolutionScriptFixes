@@ -11,7 +11,7 @@ namespace Campaign
 {
 struct QuestEvent
 {
-    enum Kind : uint8_t { StageUpdate, Started, Stopped };
+    enum Kind : uint8_t { StageUpdate, Started, Stopped, Completed };
 
     PluginFormKey Quest;
     uint16_t Stage{};
@@ -22,7 +22,7 @@ struct QuestEvent
 struct JournalRecord
 {
     QuestEvent Event;
-    bool ApplyStageBeforeStop{};
+    bool ApplyStageBeforeOutcome{};
     uint32_t Origin{}; // Only meaningful within the server process that accepted the event.
 };
 
@@ -31,6 +31,7 @@ struct QuestSnapshot
     std::set<uint16_t> Stages;
     uint16_t HighestStage{};
     bool Stopped{};
+    bool Completed{};
     uint64_t Sequence{};
 };
 
@@ -48,7 +49,7 @@ public:
 
 private:
     bool CanRecord(const QuestEvent& acEvent) const noexcept;
-    void Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeStopStage);
+    void Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeOutcomeStage);
     void Load();
 
     std::filesystem::path m_path;

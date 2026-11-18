@@ -6,6 +6,7 @@
 #include <Messages/NotifyQuestUpdate.h>
 #include <deque>
 #include <map>
+#include <set>
 #include <chrono>
 #include <Messages/NotifySceneState.h>
 
@@ -58,6 +59,8 @@ private:
     // The quest's held stages, while it has stages to apply or fragments to wait for. Drops the stages that can't be
     // applied anymore.
     HeldStages* GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest) noexcept;
+    void PublishQuestCompletions() noexcept;
+    void ApplyQuestCompletions() noexcept;
     void ApplyQuestUpdate(const SharedQuestUpdate&) noexcept;
     void ObserveScene(uint32_t aFormId) noexcept;
     void RefreshSceneStates() noexcept;
@@ -89,5 +92,8 @@ private:
     uint64_t m_receivedThrough{};
     void AcknowledgeQuestUpdates() noexcept;
     Map<uint32_t, uint16_t> m_pendingStops;
+    std::map<uint32_t, uint16_t> m_pendingCompletions;
+    std::set<uint32_t> m_completionWatch;
+    std::chrono::steady_clock::time_point m_nextCompletionScan{};
     entt::scoped_connection m_questUpdateConnection;
 };

@@ -24,10 +24,12 @@ constexpr const char* kPoliciesPath = "shared-quest-policies.conf";
 constexpr auto kSceneObserverTimeout = std::chrono::seconds(20);
 static_assert(Campaign::QuestEvent::StageUpdate == static_cast<int>(RequestQuestUpdate::StageUpdate) &&
               Campaign::QuestEvent::Started == static_cast<int>(RequestQuestUpdate::Started) &&
-              Campaign::QuestEvent::Stopped == static_cast<int>(RequestQuestUpdate::Stopped));
+              Campaign::QuestEvent::Stopped == static_cast<int>(RequestQuestUpdate::Stopped) &&
+              Campaign::QuestEvent::Completed == static_cast<int>(RequestQuestUpdate::Completed));
 static_assert(Campaign::QuestEvent::StageUpdate == static_cast<int>(SharedQuestUpdate::StageUpdate) &&
               Campaign::QuestEvent::Started == static_cast<int>(SharedQuestUpdate::Started) &&
-              Campaign::QuestEvent::Stopped == static_cast<int>(SharedQuestUpdate::Stopped));
+              Campaign::QuestEvent::Stopped == static_cast<int>(SharedQuestUpdate::Stopped) &&
+              Campaign::QuestEvent::Completed == static_cast<int>(SharedQuestUpdate::Completed));
 
 bool IsSharedType(uint8_t aType) noexcept
 {
@@ -104,7 +106,7 @@ void QuestService::QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::Journal
     const auto id = mods.FindFormId(event.Quest);
     if (!id || !acPlayer.HasModId(id->ModId))
         return;
-    if (acRecord.ApplyStageBeforeStop)
+    if (acRecord.ApplyStageBeforeOutcome)
         aBatch.Updates.push_back({*id, event.Stage, SharedQuestUpdate::StageUpdate});
     aBatch.Updates.push_back({*id, event.Stage, event.Status});
 }
@@ -162,7 +164,7 @@ void QuestService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
 void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessage) noexcept
 {
     const auto& message = acMessage.Packet;
-    if (message.ClientQuestType > 11 || message.Status > RequestQuestUpdate::Stopped)
+    if (message.ClientQuestType > 11 || message.Status > RequestQuestUpdate::Completed)
         return;
 
     Campaign::QuestEvent entry{{}, message.Stage, static_cast<Campaign::QuestEvent::Kind>(message.Status), message.ClientQuestType};
@@ -179,6 +181,11 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     {
         if (it != entries.end())
             entries.erase(it);
+    }
+    else if (message.Status == RequestQuestUpdate::Completed)
+    {
+        if (it != entries.end())
+            it->Stage = std::max(it->Stage, message.Stage);
     }
     else if (it == entries.end())
     {

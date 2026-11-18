@@ -72,6 +72,9 @@ void QuestService::OnConnected(const ConnectedEvent&) noexcept
     m_pendingUpdates.clear();
     m_receivedThrough = 0;
     m_pendingStops.clear();
+    m_pendingCompletions.clear();
+    m_completionWatch.clear();
+    m_nextCompletionScan = {};
     m_localScenes.clear();
     m_sharedScenes.clear();
 }
@@ -112,6 +115,9 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
         }
     }
 
+    ApplyQuestCompletions();
+    PublishQuestCompletions();
+
     Vector<uint32_t> stopped;
     for (const auto& [formId, stage] : m_pendingStops)
     {
@@ -129,7 +135,7 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
             continue;
         }
 
-        if (GetHeldStages(formId, pQuest) || !pQuest->IsStageReached(stage))
+        if (m_pendingCompletions.contains(formId) || GetHeldStages(formId, pQuest) || !pQuest->IsStageReached(stage))
             continue;
 
         // Do not terminate an in-progress scene, even if the server has already seen a stop.
@@ -153,6 +159,9 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
     m_pendingUpdates.clear();
     m_receivedThrough = 0;
     m_pendingStops.clear();
+    m_pendingCompletions.clear();
+    m_completionWatch.clear();
+    m_nextCompletionScan = {};
     m_localScenes.clear();
     m_sharedScenes.clear();
 }
@@ -203,7 +212,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
                     update.Status = stopped ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started;
                     update.ClientQuestType = static_cast<std::underlying_type_t<TESQuest::Type>>(type); 
 
-                    m_world.GetTransport().Send(update);
+                    if (m_world.GetTransport().Send(update))
+                        m_completionWatch.insert(formId);
                 }
             });
     }
@@ -255,7 +265,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
                     update.Status = RequestQuestUpdate::StageUpdate;
                     update.ClientQuestType = static_cast<std::underlying_type_t<TESQuest::Type>>(type);
 
-                    m_world.GetTransport().Send(update);
+                    if (m_world.GetTransport().Send(update))
+                        m_completionWatch.insert(formId);
                 }
             });
     }
@@ -760,6 +771,67 @@ void QuestService::AcknowledgeQuestUpdates() noexcept
     m_world.GetTransport().Send(ack);
 }
 
+void QuestService::PublishQuestCompletions() noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextCompletionScan)
+        return;
+    m_nextCompletionScan = now + std::chrono::milliseconds(250);
+
+    std::erase_if(m_completionWatch, [this](uint32_t aFormId)
+    {
+        const auto* pQuest = Cast<TESQuest>(TESForm::GetById(aFormId));
+        if (!pQuest || (pQuest->flags & TESQuest::Flags::Failed))
+            return true;
+        if (!(pQuest->flags & TESQuest::Flags::Completed))
+            return false;
+
+        RequestQuestUpdate update{};
+        if (!GetPluginBackedId(m_world, aFormId, update.Id))
+            return true;
+        update.Stage = pQuest->currentStage;
+        update.Status = RequestQuestUpdate::Completed;
+        update.ClientQuestType = static_cast<uint8_t>(pQuest->type);
+        return m_world.GetTransport().Send(update);
+    });
+}
+
+void QuestService::ApplyQuestCompletions() noexcept
+{
+    for (auto it = m_pendingCompletions.begin(); it != m_pendingCompletions.end();)
+    {
+        const uint32_t cFormId = it->first;
+        const uint16_t cStage = it->second;
+        auto* pQuest = Cast<TESQuest>(TESForm::GetById(cFormId));
+        if (!pQuest || (pQuest->flags & TESQuest::Flags::Completed))
+        {
+            it = m_pendingCompletions.erase(it);
+            continue;
+        }
+
+        if (pQuest->currentStage > cStage || (pQuest->flags & TESQuest::Flags::Failed))
+        {
+            spdlog::warn("Cannot reconcile completed quest {:X} at stage {} with the local quest state", cFormId, cStage);
+            it = m_pendingCompletions.erase(it);
+            continue;
+        }
+
+        if (GetHeldStages(cFormId, pQuest) || !pQuest->IsStageReached(cStage))
+        {
+            ++it;
+            continue;
+        }
+
+        ScopedQuestOverride override;
+        pQuest->SetCompleted(false);
+        if (!(pQuest->flags & TESQuest::Flags::Completed))
+            spdlog::warn("Skyrim did not complete shared quest {:X} at stage {}", cFormId, cStage);
+        else
+            m_completionWatch.erase(cFormId);
+        it = m_pendingCompletions.erase(it);
+    }
+}
+
 void QuestService::ApplyQuestUpdate(const SharedQuestUpdate& acUpdate) noexcept
 {
     const uint32_t cFormId = m_world.GetModSystem().GetGameId(acUpdate.Id);
@@ -769,6 +841,12 @@ void QuestService::ApplyQuestUpdate(const SharedQuestUpdate& acUpdate) noexcept
     TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(cFormId));
     if (!pQuest || IsNonSyncableQuest(pQuest))
         return;
+
+    if (acUpdate.Status == SharedQuestUpdate::Completed)
+    {
+        m_pendingCompletions.insert_or_assign(cFormId, acUpdate.Stage);
+        return;
+    }
 
     if (acUpdate.Status == SharedQuestUpdate::Stopped)
     {

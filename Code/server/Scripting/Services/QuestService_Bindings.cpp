@@ -20,6 +20,7 @@ void CreateQuestServiceBindings(sol::state_view aState)
         snapshot["sequence"] = pQuest->Sequence;
         snapshot["highestStage"] = pQuest->HighestStage;
         snapshot["stopped"] = pQuest->Stopped;
+        snapshot["completed"] = pQuest->Completed;
         sol::table stages = lua.create_table();
         size_t index = 1;
         for (uint16_t stage : pQuest->Stages)

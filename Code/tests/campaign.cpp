@@ -53,7 +53,7 @@ TEST_CASE("The campaign commits a final stage and stop together", "[campaign]")
         event.Stage = 25;
         REQUIRE(journal.Append(event, 7) == QuestJournal::Result::Committed);
         REQUIRE(journal.Records().size() == 3);
-        REQUIRE(journal.Records().back().ApplyStageBeforeStop);
+        REQUIRE(journal.Records().back().ApplyStageBeforeOutcome);
         REQUIRE(journal.Records().back().Origin == 7);
     }
 
@@ -62,7 +62,7 @@ TEST_CASE("The campaign commits a final stage and stop together", "[campaign]")
     REQUIRE(restarted.Records().size() == 3);
     REQUIRE(restarted.Records().back().Event.Quest == event.Quest);
     REQUIRE(restarted.Records().back().Event.Stage == 25);
-    REQUIRE(restarted.Records().back().ApplyStageBeforeStop);
+    REQUIRE(restarted.Records().back().ApplyStageBeforeOutcome);
     REQUIRE(restarted.Records().back().Origin == 0);
     const auto* pSnapshot = restarted.Find(event.Quest);
     REQUIRE(pSnapshot);
@@ -89,7 +89,7 @@ TEST_CASE("The campaign reads legacy journals and rejects damaged sequences", "[
         QuestJournal journal(file.Path);
         REQUIRE(journal.IsHealthy());
         REQUIRE(journal.Records().size() == 3);
-        REQUIRE_FALSE(journal.Records().back().ApplyStageBeforeStop);
+        REQUIRE_FALSE(journal.Records().back().ApplyStageBeforeOutcome);
         const QuestEvent event{{"Another.esm", false, 266}, 18, QuestEvent::StageUpdate, 11};
         REQUIRE(journal.Append(event, 1) == QuestJournal::Result::Committed);
     }
@@ -98,12 +98,12 @@ TEST_CASE("The campaign reads legacy journals and rejects damaged sequences", "[
     SECTION("A gap is invalid")
     {
         std::ofstream damaged(file.Path, std::ios::app);
-        damaged << "2 6 \"Another.esm\" 0 266 19 0 11\n";
+        damaged << "3 6 \"Another.esm\" 0 266 19 0 11\n";
     }
     SECTION("A torn last record is invalid even when its fields parse")
     {
         std::ofstream damaged(file.Path, std::ios::app);
-        damaged << "2 5 \"Another.esm\" 0 266 19 0 11";
+        damaged << "3 5 \"Another.esm\" 0 266 19 0 11";
     }
 
     QuestJournal damaged(file.Path);
@@ -181,4 +181,44 @@ TEST_CASE("Persistent locks retain explicit unlocks through restart", "[campaign
     REQUIRE_FALSE(damaged.IsHealthy());
     REQUIRE_FALSE(damaged.Find(key));
     REQUIRE(damaged.ErrorLine() == 3);
+}
+
+TEST_CASE("Quest completion and stop survive independently", "[campaign]")
+{
+    TestJournalFile file;
+    QuestEvent event{{"Adventure.esp", false, 0x123}, 10, QuestEvent::StageUpdate, 8};
+    {
+        QuestJournal journal(file.Path);
+        REQUIRE(journal.Append(event, 1) == QuestJournal::Result::Committed);
+        event.Status = QuestEvent::Completed;
+        REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Committed);
+        REQUIRE(journal.Find(event.Quest)->Completed);
+        REQUIRE_FALSE(journal.Find(event.Quest)->Stopped);
+        REQUIRE(journal.Append(event, 3) == QuestJournal::Result::Ignored);
+        event.Status = QuestEvent::Stopped;
+        REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Committed);
+    }
+    QuestJournal journal(file.Path);
+    REQUIRE(journal.IsHealthy());
+    REQUIRE(journal.Find(event.Quest)->Stopped);
+    REQUIRE(journal.Find(event.Quest)->Completed);
+    REQUIRE(journal.Records().size() == 3);
+}
+
+TEST_CASE("A matching completion may follow the native stop", "[campaign]")
+{
+    TestJournalFile file;
+    QuestEvent event{{"Adventure.esp", false, 0x123}, 20, QuestEvent::StageUpdate, 8};
+    QuestJournal journal(file.Path);
+    REQUIRE(journal.Append(event, 1) == QuestJournal::Result::Committed);
+    event.Status = QuestEvent::Stopped;
+    REQUIRE(journal.Append(event, 1) == QuestJournal::Result::Committed);
+    event.Status = QuestEvent::Completed;
+    event.Stage = 19;
+    REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Ignored);
+    event.Stage = 21;
+    REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Ignored);
+    event.Stage = 20;
+    REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Committed);
+    REQUIRE_FALSE(journal.Records().back().ApplyStageBeforeOutcome);
 }

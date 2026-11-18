@@ -13,7 +13,7 @@ namespace
 {
 bool IsValid(const QuestEvent& acEvent) noexcept
 {
-    return acEvent.Quest.IsValid() && acEvent.Status <= QuestEvent::Stopped && acEvent.Type <= 11;
+    return acEvent.Quest.IsValid() && acEvent.Status <= QuestEvent::Completed && acEvent.Type <= 11;
 }
 }
 
@@ -33,7 +33,11 @@ bool QuestJournal::CanRecord(const QuestEvent& acEvent) const noexcept
 {
     const auto* pState = Find(acEvent.Quest);
     if (!pState)
-        return acEvent.Status != QuestEvent::Stopped;
+        return acEvent.Status == QuestEvent::Started || acEvent.Status == QuestEvent::StageUpdate;
+
+    if (acEvent.Status == QuestEvent::Completed)
+        return !pState->Completed && acEvent.Stage >= pState->HighestStage &&
+               (!pState->Stopped || acEvent.Stage == pState->HighestStage);
 
     if (pState->Stopped || acEvent.Status == QuestEvent::Started)
         return false;
@@ -44,13 +48,16 @@ bool QuestJournal::CanRecord(const QuestEvent& acEvent) const noexcept
     return !pState->Stages.contains(acEvent.Stage);
 }
 
-void QuestJournal::Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeStopStage)
+void QuestJournal::Record(const QuestEvent& acEvent, uint32_t aOrigin, bool aIncludeOutcomeStage)
 {
     auto& state = m_quests[acEvent.Quest];
-    const bool cApplyStage = acEvent.Status == QuestEvent::Stopped && aIncludeStopStage &&
+    const bool cOutcome = acEvent.Status == QuestEvent::Stopped || acEvent.Status == QuestEvent::Completed;
+    const bool cApplyStage = cOutcome && aIncludeOutcomeStage && !state.Stopped &&
                              state.Stages.insert(acEvent.Stage).second;
     if (acEvent.Status == QuestEvent::Stopped)
         state.Stopped = true;
+    else if (acEvent.Status == QuestEvent::Completed)
+        state.Completed = true;
     else if (acEvent.Status == QuestEvent::StageUpdate)
         state.Stages.insert(acEvent.Stage);
     state.HighestStage = std::max(state.HighestStage, acEvent.Stage);
@@ -71,7 +78,7 @@ void QuestJournal::Load()
     std::ifstream file(m_path, std::ios::binary);
     std::string line;
     size_t lineNumber = 0;
-    bool seenVersion2 = false;
+    unsigned int previousVersion = 1;
     while (std::getline(file, line))
     {
         ++lineNumber;
@@ -80,11 +87,10 @@ void QuestJournal::Load()
         unsigned int version{}, lite{}, stage{}, status{}, type{};
         uint64_t sequence{};
         QuestEvent event;
-        if (file.eof() || !(input >> version) || (version != 1 && version != 2) ||
-            (version == 1 && seenVersion2) ||
-            (version == 2 && (!(input >> sequence) || sequence != lineNumber)) ||
+        if (file.eof() || !(input >> version) || version < previousVersion || version > 3 ||
+            (version >= 2 && (!(input >> sequence) || sequence != lineNumber)) ||
             !(input >> std::quoted(event.Quest.Plugin) >> lite >> event.Quest.BaseId >> stage >> status >> type) ||
-            lite > 1 || stage > UINT16_MAX || status > QuestEvent::Stopped || type > 11)
+            lite > 1 || stage > UINT16_MAX || status > (version >= 3 ? QuestEvent::Completed : QuestEvent::Stopped) || type > 11)
         {
             m_errorLine = lineNumber;
             break;
@@ -101,8 +107,8 @@ void QuestJournal::Load()
             break;
         }
 
-        seenVersion2 |= version == 2;
-        Record(event, 0, version == 2);
+        previousVersion = version;
+        Record(event, 0, version >= 2);
     }
 
     m_healthy = m_healthy && file.eof() && !file.bad() && m_errorLine == 0;
@@ -122,7 +128,7 @@ QuestJournal::Result QuestJournal::Append(const QuestEvent& acEvent, uint32_t aO
 
     std::ostringstream record;
     record.imbue(std::locale::classic());
-    record << 2 << ' ' << m_records.size() + 1 << ' ' << std::quoted(acEvent.Quest.Plugin) << ' '
+    record << 3 << ' ' << m_records.size() + 1 << ' ' << std::quoted(acEvent.Quest.Plugin) << ' '
            << acEvent.Quest.Lite << ' ' << acEvent.Quest.BaseId << ' ' << acEvent.Stage << ' '
            << static_cast<unsigned int>(acEvent.Status) << ' ' << static_cast<unsigned int>(acEvent.Type) << '\n';
     if (!AppendDurably(m_path, record.str(), !m_hasFile))
