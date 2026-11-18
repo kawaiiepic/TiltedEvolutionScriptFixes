@@ -8,8 +8,13 @@
 #include <fstream>
 #include <limits>
 #include <system_error>
+#include <string_view>
+#include <utility>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -57,6 +62,20 @@ std::string Slot(const std::array<uint8_t, 32>& acKey)
     return result;
 }
 
+bool SyncDirectory(const std::filesystem::path& acPath)
+{
+#ifdef _WIN32
+    (void)acPath; // Final publication uses MoveFileExW with WRITE_THROUGH.
+    return true;
+#else
+    const int directory = open(acPath.empty() ? "." : acPath.c_str(), O_RDONLY | O_DIRECTORY);
+    if (directory < 0) return false;
+    const bool ok = fsync(directory) == 0;
+    close(directory);
+    return ok;
+#endif
+}
+
 bool Publish(const std::filesystem::path& acPending, const std::filesystem::path& acFinal)
 {
     std::error_code ec;
@@ -69,11 +88,7 @@ bool Publish(const std::filesystem::path& acPending, const std::filesystem::path
 #else
     std::filesystem::rename(acPending, acFinal, ec);
     if (ec) return false;
-    const int directory = open(acFinal.parent_path().c_str(), O_RDONLY | O_DIRECTORY);
-    if (directory < 0) return false;
-    const bool ok = fsync(directory) == 0;
-    close(directory);
-    return ok;
+    return SyncDirectory(acFinal.parent_path());
 #endif
 }
 }
@@ -224,7 +239,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             return;
         std::error_code ec;
         std::filesystem::create_directories(m_root, ec);
-        if (ec) { aReply.Status = P::IoError; return; }
+        if (ec || !SyncDirectory(m_root.parent_path())) { aReply.Status = P::IoError; return; }
         if (!std::filesystem::exists(lease.Directory, ec))
         {
             if (ec) { aReply.Status = P::IoError; return; }
@@ -237,6 +252,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             if (ec) { aReply.Status = P::IoError; return; }
         }
 
+        if (!SyncDirectory(m_root)) { aReply.Status = P::IoError; return; }
         lease.Upload = {lease.Latest.Number + 1, acRequest.EssSize, acRequest.CoSaveSize, acRequest.Digest};
         std::array<uint8_t, HeaderSize> header{};
         std::copy(kMagic.begin(), kMagic.end(), header.begin());

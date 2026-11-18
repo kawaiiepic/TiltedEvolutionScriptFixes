@@ -1,6 +1,11 @@
 #pragma once
 
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Allocator.hpp>
+#include <TiltedCore/Buffer.hpp>
+#include <TiltedCore/Serialization.hpp>
 #include "Message.h"
+#include <cstddef>
 #include <array>
 #include <cstdint>
 

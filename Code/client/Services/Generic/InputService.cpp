@@ -101,12 +101,11 @@ bool IsDisableKey(int aKey) noexcept
 void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
 {
     TiltedPhoques::DInputHook::Get().SetEnabled(aActive);
-    aOverlay.SetActive(aActive);
-
-    // Resend the actual context; opening the multiplayer overlay from the
-    // title screen must never pretend a Skyrim character is loaded.
+    // Publish actual menu context before activation; the Angular exitGame
+    // handler closes any open view, so it must precede opening Connect.
     aOverlay.SetVersion(BUILD_COMMIT);
     aOverlay.RefreshMenuPresentation();
+    aOverlay.SetActive(aActive);
 
     apRenderer->SetCursorVisible(aActive);
 

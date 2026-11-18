@@ -84,6 +84,48 @@ TEST_CASE("Character entry is a separate authenticated phase", "[encoding.auth]"
     REQUIRE(entry.Token.empty());
 }
 
+TEST_CASE("Checkpoint packets have bounded exact wire size", "[encoding.saves]")
+{
+    RequestCharacterSave request{};
+    request.Action = CharacterSavePayload::UploadChunk;
+    request.Revision = 5;
+    request.Offset = 17;
+    request.Count = 3;
+    request.Data[0] = 42;
+    request.Data.back() = 255;
+    Buffer buffer(CharacterSavePayload::WireSize + 16);
+    Buffer::Writer writer(&buffer);
+    request.Serialize(writer);
+    REQUIRE(writer.Size() == CharacterSavePayload::WireSize);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == RequestCharacterSave::Opcode);
+    auto received = CastUnique<RequestCharacterSave>(std::move(message));
+    REQUIRE(received->Action == request.Action);
+    REQUIRE(received->Revision == request.Revision);
+    REQUIRE(received->Offset == request.Offset);
+    REQUIRE(received->Count == request.Count);
+    REQUIRE(received->Data == request.Data);
+
+    NotifyCharacterSave reply{};
+    reply.Action = CharacterSavePayload::DownloadChunk;
+    reply.Revision = 6;
+    reply.Count = 3;
+    reply.Data = request.Data;
+    Buffer responseBuffer(CharacterSavePayload::WireSize + 16);
+    Buffer::Writer responseWriter(&responseBuffer);
+    reply.Serialize(responseWriter);
+    REQUIRE(responseWriter.Size() == CharacterSavePayload::WireSize);
+    Buffer::Reader responseReader(&responseBuffer);
+    auto response = ServerMessageFactory{}.Extract(responseReader);
+    REQUIRE(response);
+    REQUIRE(response->GetOpcode() == NotifyCharacterSave::Opcode);
+    auto decoded = CastUnique<NotifyCharacterSave>(std::move(response));
+    REQUIRE(decoded->Revision == reply.Revision);
+    REQUIRE(decoded->Data == reply.Data);
+}
+
 TEST_CASE("Static structures", "[encoding.static]")
 {
     GIVEN("GameId")
