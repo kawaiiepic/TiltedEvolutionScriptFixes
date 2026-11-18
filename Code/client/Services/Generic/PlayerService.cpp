@@ -34,6 +34,7 @@
 #include <Games/References.h>
 #include <Games/TES.h>
 #include <AI/AIProcess.h>
+#include <AI/Movement/PlayerControls.h>
 #include <EquipManager.h>
 #include <Forms/TESRace.h>
 #include <Interface/UI.h>
@@ -191,8 +192,11 @@ void PlayerService::OnActivate(const ActivateEvent& acEvent) noexcept
     request.Position = acEvent.pObject->position;
     if (m_transport.Send(request))
     {
+        GameId worldSpace{};
+        if (const auto* pWorldSpace = pPlayer->GetWorldSpace())
+            mods.GetServerModId(pWorldSpace->formID, worldSpace);
         m_carriageTeleport.reset();
-        m_carriage = CarriageBoarding{request.Seat, request.Cell, request.Position,
+        m_carriage = CarriageBoarding{request.Seat, request.Cell, worldSpace, request.Position,
             std::chrono::steady_clock::now() + CarriageTravel::kBoardingLifetime, request.Token};
     }
 }
@@ -233,7 +237,10 @@ void PlayerService::RunCarriageTravelUpdates() noexcept
         return;
     }
     if (pUI && pUI->GetMenuOpen(s_loadingMenu))
+    {
+        m_carriage->SawLoading |= m_carriage->SawRidingControls;
         return;
+    }
 
     auto* pPlayer = PlayerCharacter::Get();
     const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
@@ -244,6 +251,7 @@ void PlayerService::RunCarriageTravelUpdates() noexcept
     if (currentCell == m_carriage->Origin)
     {
         const glm::vec3 delta = glm::vec3(pPlayer->position) - m_carriage->Position;
+        m_carriage->SawRidingControls |= !BSInputEnableManager::IsMovementControlsEnabled();
         if (glm::dot(delta, delta) > CarriageTravel::kBoardingDistance * CarriageTravel::kBoardingDistance)
         {
             m_carriage.reset();
@@ -258,7 +266,21 @@ void PlayerService::RunCarriageTravelUpdates() noexcept
         }
         return;
     }
-    if (!m_carriage->Arrived || currentCell != m_reportedCell)
+    if (currentCell != m_reportedCell)
+        return;
+
+    // Some scripted travel paths don't produce the native completion event. Vanilla
+    // carriage scripts disable movement before fading into a distant exterior load.
+    if (!m_carriage->Arrived && m_carriage->SawLoading && m_carriage->WorldSpace)
+    {
+        GameId worldSpace{};
+        const auto* pWorldSpace = pPlayer->GetWorldSpace();
+        const glm::vec3 delta = glm::vec3(pPlayer->position) - m_carriage->Position;
+        constexpr float kLongTravelDistance = 4096.f;
+        m_carriage->Arrived = pWorldSpace && m_world.GetModSystem().GetServerModId(pWorldSpace->formID, worldSpace) &&
+            worldSpace == m_carriage->WorldSpace && glm::dot(delta, delta) >= kLongTravelDistance * kLongTravelDistance;
+    }
+    if (!m_carriage->Arrived)
         return;
 
     RequestCarriageTravel request;

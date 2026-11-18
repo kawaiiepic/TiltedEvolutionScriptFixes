@@ -71,10 +71,13 @@ private:
     {
         GameId Seat;
         GameId Origin;
+        GameId WorldSpace;
         glm::vec3 Position;
         std::chrono::steady_clock::time_point ExpiresAt;
         uint32_t Token;
         bool Arrived{};
+        bool SawRidingControls{};
+        bool SawLoading{};
     };
     std::optional<CarriageBoarding> m_carriage;
     std::optional<NotifyTeleport> m_carriageTeleport;
