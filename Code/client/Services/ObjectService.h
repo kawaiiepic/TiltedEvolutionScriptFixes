@@ -1,7 +1,5 @@
 #pragma once
 
-#include <Events/EventDispatcher.h>
-#include <Games/Events.h>
 #include <Structs/GameId.h>
 
 struct ServerTimeSettings;
@@ -20,7 +18,7 @@ struct NotifyScriptAnimation;
 /**
  * @brief Handles objects in the environment.
  */
-class ObjectService final : public BSTEventSink<TESActivateEvent>
+class ObjectService final
 {
 public:
     ObjectService(World&, entt::dispatcher&, TransportService&);
@@ -35,8 +33,6 @@ private:
     void OnLockChangeNotify(const NotifyLockChange&) noexcept;
     void OnScriptAnimationEvent(const ScriptAnimationEvent&) noexcept;
     void OnNotifyScriptAnimation(const NotifyScriptAnimation&) noexcept;
-
-    BSTEventResult OnEvent(const TESActivateEvent*, const EventDispatcher<TESActivateEvent>*) override;
 
     entt::entity CreateObjectEntity(const uint32_t acFormId, const uint32_t acServerId) noexcept;
 

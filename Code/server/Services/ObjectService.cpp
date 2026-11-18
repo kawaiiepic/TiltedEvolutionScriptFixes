@@ -252,43 +252,56 @@ bool ObjectService::CommitStockChange(const ObjectComponent& acObject, const Inv
 
 void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept
 {
+    const auto& packet = acMessage.Packet;
+    const auto* pOwner = m_world.try_get<OwnerComponent>(static_cast<entt::entity>(packet.ActivatorId));
+    if (!pOwner || pOwner->GetOwner() != acMessage.pPlayer || !packet.CellId ||
+        packet.CellId != acMessage.pPlayer->GetCellComponent().Cell ||
+        !m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer))
+        return;
+
     NotifyActivate notifyActivate;
-    notifyActivate.Id = acMessage.Packet.Id;
-    notifyActivate.ActivatorId = acMessage.Packet.ActivatorId;
-    notifyActivate.PreActivationOpenState = acMessage.Packet.PreActivationOpenState;
+    notifyActivate.Id = packet.Id;
+    notifyActivate.CellId = packet.CellId;
+    notifyActivate.ActivatorId = packet.ActivatorId;
+    notifyActivate.PreActivationOpenState = packet.PreActivationOpenState;
 
     for (auto pPlayer : m_world.GetPlayerManager())
     {
-        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
-        {
+        if (pPlayer != acMessage.pPlayer && pPlayer->GetCellComponent().Cell == packet.CellId &&
+            pPlayer->HasModId(packet.Id.ModId))
             pPlayer->Send(notifyActivate);
-        }
     }
 }
 
 void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) noexcept
 {
+    const auto& packet = acMessage.Packet;
+    if (!packet.CellId || !acMessage.pPlayer->GetCharacter() ||
+        !m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer))
+        return;
+
     NotifyLockChange notifyLockChange;
-    notifyLockChange.Id = acMessage.Packet.Id;
-    notifyLockChange.IsLocked = acMessage.Packet.IsLocked;
-    notifyLockChange.LockLevel = acMessage.Packet.LockLevel;
+    notifyLockChange.Id = packet.Id;
+    notifyLockChange.CellId = packet.CellId;
+    notifyLockChange.IsLocked = packet.IsLocked;
+    notifyLockChange.LockLevel = packet.LockLevel;
 
     const auto objectView = m_world.view<FormIdComponent, ObjectComponent, CellIdComponent>();
     const auto iter = std::find_if(objectView.begin(), objectView.end(), [&](auto entity)
     {
-        return objectView.get<FormIdComponent>(entity).Id == acMessage.Packet.Id;
+        return objectView.get<FormIdComponent>(entity).Id == packet.Id;
     });
 
     if (iter != objectView.end())
     {
         const auto& cell = objectView.get<CellIdComponent>(*iter);
         auto& objectComponent = objectView.get<ObjectComponent>(*iter);
-        if (cell.Cell != acMessage.Packet.CellId || !cell.IsInRange(acMessage.pPlayer->GetCellComponent(), false))
+        if (cell.Cell != packet.CellId || !cell.IsInRange(acMessage.pPlayer->GetCellComponent(), false))
             return;
 
         if (objectComponent.CampaignLock)
         {
-            if (!acMessage.pPlayer->GetCharacter() || !m_lockJournal.IsHealthy())
+            if (!m_lockJournal.IsHealthy())
                 return;
             if (!m_lockJournal.Set(*objectComponent.CampaignLock, {notifyLockChange.IsLocked, notifyLockChange.LockLevel}))
             {
@@ -299,13 +312,15 @@ void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage
         objectComponent.CurrentLockData.IsLocked = notifyLockChange.IsLocked;
         objectComponent.CurrentLockData.LockLevel = notifyLockChange.LockLevel;
     }
+    else if (acMessage.pPlayer->GetCellComponent().Cell != packet.CellId)
+        return;
 
     for (Player* pPlayer : m_world.GetPlayerManager())
     {
         if (pPlayer == acMessage.pPlayer)
             continue;
 
-        if (pPlayer->GetCellComponent().Cell == acMessage.Packet.CellId)
+        if (pPlayer->GetCellComponent().Cell == packet.CellId && pPlayer->HasModId(packet.Id.ModId))
             pPlayer->Send(notifyLockChange);
     }
 }

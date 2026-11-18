@@ -41,8 +41,6 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_assignObjectConnection = aDispatcher.sink<AssignObjectsResponse>().connect<&ObjectService::OnAssignObjectsResponse>(this);
     m_scriptAnimationConnection = aDispatcher.sink<ScriptAnimationEvent>().connect<&ObjectService::OnScriptAnimationEvent>(this);
     m_scriptAnimationNotifyConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&ObjectService::OnNotifyScriptAnimation>(this);
-
-    EventDispatcherManager::Get()->activateEvent.RegisterSink(this);
 }
 
 static bool IsNoResetZone(const TESObjectCELL* apCell) noexcept
@@ -373,6 +371,9 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
 void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
 {
+    if (!m_cell || acMessage.CellId != m_cell)
+        return;
+
     Actor* pActor = Utils::GetByServerId<Actor>(acMessage.ActivatorId);
     if (!pActor)
     {
@@ -444,6 +445,9 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
 
 void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexcept
 {
+    if (!m_cell || acMessage.CellId != m_cell)
+        return;
+
     const auto cObjectId = World::Get().GetModSystem().GetGameId(acMessage.Id);
     if (cObjectId == 0)
     {
@@ -502,20 +506,4 @@ void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessa
         BSFixedString animation(acMessage.Animation.c_str());
         pObject->PlayAnimationAndWait(&animation, &eventName);
     }
-}
-
-BSTEventResult ObjectService::OnEvent(const TESActivateEvent* acEvent, const EventDispatcher<TESActivateEvent>* aDispatcher)
-{
-#if ENVIRONMENT_DEBUG
-    auto view = m_world.view<ObjectComponent>();
-
-    const auto itor = std::find_if(std::begin(view), std::end(view), [id = acEvent->object->formID, view](entt::entity entity) { return view.get<ObjectComponent>(entity).Id == id; });
-
-    if (itor == std::end(view))
-    {
-        AddObjectComponent(acEvent->object);
-    }
-#endif
-
-    return BSTEventResult::kOk;
 }
