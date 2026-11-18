@@ -18,5 +18,6 @@ struct RequestWeatherChange final : ClientMessage
 
     bool operator==(const RequestWeatherChange& acRhs) const noexcept { return GetOpcode() == acRhs.GetOpcode() && Id == acRhs.Id && Cell == acRhs.Cell; }
 
-    GameId Id;
+    GameId Id{};
+    GameId Cell{};
 };
