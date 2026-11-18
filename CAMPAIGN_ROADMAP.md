@@ -88,6 +88,16 @@ The Linux server at `0eefbb5a` built and passed 210 assertions in 23 cases. The 
 
 Validate a vanilla forge and a forge with Immersive Interactions using two Skyrim clients on matched builds. Verify the bellows when the actor approaches, enters, stays in the loop, leaves or cancels, and repeats the interaction. Use different compatible light-plugin load orders for a modded furniture reference. Test a cell transition while an event is pending and verify that the remote observer receives only the visual action and never starts crafting or runs a second activation script.
 
+## Shared carriage travel
+
+Players travelling together activate the same carriage passenger seat. When one rider completes the native trip, the server sends eligible passengers at the departure cell to that player's actual destination. Other players retain control of their travel, and parties are optional. Only the originating ride runs the fare and departure scripts. Boarding expires after 60 seconds, and the server checks that each rider is still within 512 game units of the departure seat. A boarding token prevents a duplicate or stale arrival from moving someone again. Ordinary map travel clears the local boarding record.
+
+The client recognizes the vanilla `isCartTravelPlayer` furniture keyword. It uses the existing fast-travel completion dispatcher and also accepts a distant same-worldspace arrival after observing disabled movement and a loading screen from a recorded boarding. The fallback covers scripted travel paths that may omit the native completion event. The implementation uses the existing player teleport destination resolver. Custom carriages that lack the keyword are outside this path. [Vanilla carriage keyword](https://cslist.uesp.net/index.php?game=sr&formid=0x00103444) · [Vanilla CarriageSystemScript](https://cslist.uesp.net/index.php?game=sr&script=CarriageSystemScript)
+
+The Linux server at `b384823a` built and passed 220 assertions in 24 cases. Loopback clients verified partyless carriage arrival, one matching passenger teleport, no teleport for a bystander or a different carriage, and rejection of stale and repeated arrival packets. The Windows client and native ride remain unverified.
+
+Two-client Skyrim validation should cover one player buying a Whiterun-to-Riften trip, a second player activating the same carriage, and a third player staying near the driver without boarding. Check the second player's camera and controls after arrival. Also try cancellation, ordinary map fast travel and two players buying their own trips. The scripted loading fallback and the furniture-to-arrival timing require an in-game run.
+
 ## Validation checklist
 
 Run `xmake build TPTests` and `xmake run TPTests`. Build the Linux server and Windows client with the matching branch. Build the overlay with the pinned lockfile and pnpm 9. Each replay batch has at most 16 updates and only one batch can be outstanding per player. The server retries an unacknowledged batch after two seconds. Public dialogue panels send on change, and unchanged lock state does not append another disk record.

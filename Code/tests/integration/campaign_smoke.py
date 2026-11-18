@@ -1,4 +1,5 @@
 import argparse
+from contextlib import ExitStack
 import os
 import pathlib
 import pty
@@ -139,6 +140,18 @@ end)
             assert receiver.stdout.readline().strip() == "OBJECT_ANIMATION_READY"
             test_client("animation-sender")
             assert receiver.wait(timeout=8) == 0
+        with ExitStack() as passengers:
+            clients = []
+            for role in ("carriage-bystander", "carriage-other", "carriage-rider"):
+                client = passengers.enter_context(subprocess.Popen(
+                    [harness, role, version, f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True
+                ))
+                assert select.select([client.stdout], [], [], 12)[0]
+                assert client.stdout.readline().strip() == "CARRIAGE_READY"
+                clients.append(client)
+            test_client("carriage-leader")
+            for client in clients:
+                assert client.wait(timeout=8) == 0
         with subprocess.Popen([harness, "stock-owner", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as owner:
             assert select.select([owner.stdout], [], [], 12)[0]

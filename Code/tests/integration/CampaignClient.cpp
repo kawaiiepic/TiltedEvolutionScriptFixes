@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -30,7 +31,28 @@ public:
 
     void OnUpdate() override
     {
-        if (OwnerReady && std::chrono::steady_clock::now() - ReadyAt > 4s)
+        const auto now = std::chrono::steady_clock::now();
+        if (DepartureAt && now >= *DepartureAt)
+        {
+            DepartureAt.reset();
+            EnterExteriorCellRequest cell{};
+            cell.CellId = GameId(VanillaMod, 0xA22);
+            cell.WorldSpaceId = GameId(VanillaMod, 0x3C);
+            Transmit(cell);
+
+            RequestCarriageTravel arrival{};
+            arrival.Seat = GameId(QuestMod, 0x915);
+            arrival.Cell = cell.CellId;
+            arrival.Arrived = true;
+            arrival.Token = 99; // An earlier trip cannot pull the passengers along.
+            arrival.Position = glm::vec3(100.f, 0.f, 0.f);
+            Transmit(arrival);
+            arrival.Token = 1;
+            arrival.Position = glm::vec3(32.f, 64.f, 128.f);
+            Transmit(arrival);
+            Transmit(arrival); // Duplicate completion should not send a second teleport.
+        }
+        if (OwnerReady && now - ReadyAt > 4s)
             Done = true;
     }
     void OnDisconnected(EDisconnectReason aReason) override
@@ -124,7 +146,7 @@ public:
                 Transmit(cell);
                 AssignLock();
             }
-            if (Mode.starts_with("animation-"))
+            if (Mode.starts_with("animation-") || Mode.starts_with("carriage-"))
             {
                 EnterInteriorCellRequest cell{};
                 cell.CellId = GameId(VanillaMod, 0xA21);
@@ -134,6 +156,19 @@ public:
                 character.CellId = cell.CellId;
                 Transmit(character);
             }
+            return;
+        }
+
+        if (message->GetOpcode() == NotifyTeleport::Opcode && Mode.starts_with("carriage-"))
+        {
+            assert(Mode == "carriage-rider" && !SawCarriageTeleport);
+            const auto teleport = CastUnique<NotifyTeleport>(std::move(message));
+            assert(teleport->CarriageToken == 2 && teleport->CellId == GameId(VanillaMod, 0xA22));
+            assert(teleport->WorldSpaceId == GameId(VanillaMod, 0x3C));
+            assert(static_cast<const glm::vec3&>(teleport->Position) == glm::vec3(32.f, 64.f, 128.f));
+            SawCarriageTeleport = true;
+            OwnerReady = true;
+            ReadyAt = std::chrono::steady_clock::now() - 3s;
             return;
         }
 
@@ -244,6 +279,30 @@ public:
                 OwnerReady = true;
                 ReadyAt = std::chrono::steady_clock::now();
             }
+            else if (Mode.starts_with("carriage-"))
+            {
+                if (Mode != "carriage-bystander")
+                {
+                    RequestCarriageTravel boarding{};
+                    boarding.Seat = GameId(QuestMod, Mode == "carriage-other" ? 0x916 : 0x915);
+                    boarding.Cell = GameId(VanillaMod, 0xA21);
+                    boarding.Position = glm::vec3(0.f);
+                    boarding.Token = Mode == "carriage-leader" ? 1 : 2;
+                    Transmit(boarding);
+                }
+                if (Mode == "carriage-leader")
+                    DepartureAt = std::chrono::steady_clock::now() + 400ms;
+                else
+                {
+                    std::puts("CARRIAGE_READY");
+                    std::fflush(stdout);
+                }
+                if (Mode != "carriage-rider")
+                {
+                    OwnerReady = true;
+                    ReadyAt = std::chrono::steady_clock::now() + 2s;
+                }
+            }
             return;
         }
         if (message->GetOpcode() == AssignObjectsResponse::Opcode)
@@ -289,7 +348,7 @@ public:
         }
 
         if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" ||
-            Mode.starts_with("weather") || Mode.starts_with("animation-"))
+            Mode.starts_with("weather") || Mode.starts_with("animation-") || Mode.starts_with("carriage-"))
         {
             if (message->GetOpcode() == NotifyQuestUpdate::Opcode)
             {
@@ -419,7 +478,9 @@ public:
     bool SawNpc{};
     bool SawOwner{};
     bool OwnerReady{};
+    bool SawCarriageTeleport{};
     std::chrono::steady_clock::time_point ReadyAt{};
+    std::optional<std::chrono::steady_clock::time_point> DepartureAt;
     size_t Received{};
     uint64_t FirstThrough{};
     uint64_t LastThrough{};
