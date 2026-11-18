@@ -9,12 +9,25 @@ import { ChatService } from './chat.service';
 import { ErrorEvents, ErrorService } from './error.service';
 import { LoadingService } from './loading.service';
 
+export interface SharedDialoguePanel {
+  actorId: number;
+  owner: string;
+  canChoose: boolean;
+  revision: number;
+  npc: string;
+  options: string[];
+  votes: number[];
+  selected: number;
+}
+
 /** Client game service. */
 @Injectable({
   providedIn: 'root',
 })
 export class ClientService implements OnDestroy {
   /** Initialization done. */
+  public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
+
   public initDone = new AsyncSubject<undefined>();
 
   /** Activation state change. */
@@ -154,6 +167,7 @@ export class ClientService implements OnDestroy {
       'partyInviteReceived',
       this.onPartyInviteReceived.bind(this),
     );
+    skyrimtogether.on('sharedDialogue', this.onSharedDialogue.bind(this));
     skyrimtogether.on('questUpdated', this.onQuestUpdated.bind(this));
   }
 
@@ -188,6 +202,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyCreated');
     skyrimtogether.off('partyLeft');
     skyrimtogether.off('partyInviteReceived');
+    skyrimtogether.off('sharedDialogue');
     skyrimtogether.off('questUpdated');
   }
 
@@ -332,6 +347,7 @@ export class ClientService implements OnDestroy {
    */
   private onExitGame(): void {
     this.zone.run(() => {
+      this.sharedDialogueChange.next([]);
       this.inGameStateChange.next(false);
     });
   }
@@ -365,6 +381,7 @@ export class ClientService implements OnDestroy {
   private onDisconnect(isError: boolean): void {
     void this.zone.run(async () => {
       this.localPlayerId = undefined;
+      this.sharedDialogueChange.next([]);
       this.connectionStateChange.next(false);
       this.isConnectionInProgressChange.next(false);
 
@@ -641,6 +658,23 @@ export class ClientService implements OnDestroy {
     }
     this.zone.run(() => {
       this.partyInviteReceivedChange.next(inviterId);
+    });
+  }
+
+  public voteDialogue(actorId: number, revision: number, index: number): void {
+    // Reserved renderer message type, handled entirely by the native client.
+    skyrimtogether.sendMessage(5, `${actorId} ${revision} ${index}`);
+  }
+
+  private onSharedDialogue(actorId: number, visible: boolean, owner: string,
+    canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number): void {
+    this.zone.run(() => {
+      const panels = this.sharedDialogueChange.getValue().filter(panel => panel.actorId !== actorId);
+      if (visible) {
+        panels.push({ actorId, owner, canChoose, revision, npc, options, votes, selected });
+      }
+      panels.sort((a, b) => Number(b.canChoose) - Number(a.canChoose) || a.actorId - b.actorId);
+      this.sharedDialogueChange.next(panels);
     });
   }
 

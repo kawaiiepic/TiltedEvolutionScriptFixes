@@ -5,7 +5,7 @@ import { takeUntil } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.animation';
 import { View } from '../../models/view.enum';
-import { ClientService } from '../../services/client.service';
+import { ClientService, SharedDialoguePanel } from '../../services/client.service';
 import { DestroyService } from '../../services/destroy.service';
 import {
   SettingService,
@@ -38,6 +38,14 @@ export class RootComponent implements OnInit {
   readonly RootView = View;
 
   view$ = this.uiRepository.view$;
+
+  sharedDialogues$ = this.client.sharedDialogueChange.asObservable();
+
+  trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
+
+  voteDialogue(panel: SharedDialoguePanel, index: number): void {
+    if (!panel.canChoose) this.client.voteDialogue(panel.actorId, panel.revision, index);
+  }
 
   connected$ = this.client.connectionStateChange.asObservable();
   menuOpen$ = this.client.openingMenuChange.asObservable();

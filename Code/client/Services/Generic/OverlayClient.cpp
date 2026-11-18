@@ -7,6 +7,8 @@
 #include <Services/TransportService.h>
 
 #include <Messages/SendChatMessageRequest.h>
+#include <Messages/PlayerDialogueRequest.h>
+#include <sstream>
 #include <Messages/TeleportRequest.h>
 
 #include <Events/SetTimeCommandEvent.h>
@@ -119,6 +121,21 @@ void OverlayClient::ProcessRevealPlayersMessage()
 void OverlayClient::ProcessChatMessage(CefRefPtr<CefListValue> aEventArgs)
 {
     std::string contents = aEventArgs->GetString(1).ToString();
+    // The renderer bridge is supplied by the overlay library. Use a reserved
+    // UI-only message type, translated here; it is never sent as a chat packet.
+    if (aEventArgs->GetInt(0) == 5)
+    {
+        std::istringstream input(contents);
+        PlayerDialogueRequest request{};
+        request.Action = PlayerDialogueRequest::Vote;
+        if (!(input >> request.ActorId >> request.Revision >> request.Index))
+            return;
+        input >> std::ws;
+        if (!input.eof())
+            return;
+        World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+        return;
+    }
     if (!contents.empty())
     {
         SendChatMessageRequest messageRequest;

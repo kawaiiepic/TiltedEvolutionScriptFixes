@@ -1,6 +1,8 @@
 #include <GameServer.h>
 #include <Components.h>
 #include <Events/PlayerLeaveEvent.h>
+#include <Events/UpdateEvent.h>
+#include <algorithm>
 
 #include <Services/OverlayService.h>
 
@@ -25,6 +27,7 @@ OverlayService::OverlayService(World& aWorld, entt::dispatcher& aDispatcher)
 {
     m_chatMessageConnection = aDispatcher.sink<PacketEvent<SendChatMessageRequest>>().connect<&OverlayService::HandleChatMessage>(this);
     m_playerDialogueConnection = aDispatcher.sink<PacketEvent<PlayerDialogueRequest>>().connect<&OverlayService::OnPlayerDialogue>(this);
+    m_dialogueUpdateConnection = aDispatcher.sink<UpdateEvent>().connect<&OverlayService::OnDialogueUpdate>(this);
     m_dialogueLeaveConnection = aDispatcher.sink<PlayerLeaveEvent>().connect<&OverlayService::OnPlayerLeave>(this);
     m_teleportConnection = aDispatcher.sink<PacketEvent<TeleportRequest>>().connect<&OverlayService::OnTeleport>(this);
     m_playerHealthConnection = aDispatcher.sink<PacketEvent<RequestPlayerHealthUpdate>>().connect<&OverlayService::OnPlayerHealthUpdate>(this);
@@ -93,6 +96,105 @@ bool OverlayService::IsDialogueActorInRange(uint32_t aActorId, const Player& acP
     return true;
 }
 
+void OverlayService::InvalidateOptions(DialogueSession& aSession) noexcept
+{
+    aSession.Options.clear();
+    aSession.Votes.clear();
+    if (++m_nextDialogueRevision == 0)
+        ++m_nextDialogueRevision;
+    aSession.Revision = m_nextDialogueRevision;
+}
+
+void OverlayService::OnDialogueUpdate(const UpdateEvent&) noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextPanelRefresh)
+        return;
+    m_nextPanelRefresh = now + std::chrono::milliseconds(500);
+
+    // Revoke a grant only by ending the session, never by giving the same live
+    // native menu grant to two players. A revoked client must reopen its menu.
+    for (auto it = m_dialogueSessions.begin(); it != m_dialogueSessions.end();)
+    {
+        const auto* pOwner = m_world.GetPlayerManager().GetById(it->second.Owner);
+        if (pOwner && IsDialogueActorInRange(it->first, *pOwner))
+        {
+            ++it;
+            continue;
+        }
+        for (const auto& [playerId, token] : it->second.Participants)
+        {
+            if (const auto* pPlayer = m_world.GetPlayerManager().GetById(playerId))
+            {
+                NotifyPlayerDialogue denied{};
+                denied.Kind = NotifyPlayerDialogue::Denied;
+                denied.ActorId = it->first;
+                denied.Token = token;
+                pPlayer->Send(denied);
+            }
+            m_playerDialogues.erase(playerId);
+        }
+        it = m_dialogueSessions.erase(it);
+    }
+    RefreshDialoguePanels();
+}
+
+void OverlayService::RefreshDialoguePanels() noexcept
+{
+    for (auto& [actorId, session] : m_dialogueSessions)
+    {
+        for (auto it = session.Votes.begin(); it != session.Votes.end();)
+        {
+            const auto* pVoter = m_world.GetPlayerManager().GetById(it->first);
+            if (!pVoter || !IsDialogueActorInRange(actorId, *pVoter))
+                it = session.Votes.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+    {
+        auto& previous = m_visiblePanels[pPlayer->GetId()];
+        std::set<uint32_t> visible;
+        for (const auto& [actorId, session] : m_dialogueSessions)
+        {
+            if (!IsDialogueActorInRange(actorId, *pPlayer))
+                continue;
+            const auto* pOwner = m_world.GetPlayerManager().GetById(session.Owner);
+            if (!pOwner)
+                continue;
+            visible.insert(actorId);
+            NotifyPlayerDialogue panel{};
+            panel.Kind = NotifyPlayerDialogue::Panel;
+            panel.ActorId = actorId;
+            panel.Revision = session.Revision;
+            panel.CanChoose = pPlayer->GetId() == session.Owner;
+            panel.Name = pOwner->GetUsername();
+            panel.Options = session.Options;
+            panel.Votes.resize(panel.Options.size(), 0);
+            for (const auto& [voter, index] : session.Votes)
+            {
+                if (index < panel.Votes.size())
+                    ++panel.Votes[index];
+                if (voter == pPlayer->GetId())
+                    panel.Selected = index;
+            }
+            pPlayer->Send(panel);
+        }
+        for (uint32_t actorId : previous)
+        {
+            if (visible.count(actorId))
+                continue;
+            NotifyPlayerDialogue closed{};
+            closed.Kind = NotifyPlayerDialogue::PanelClosed;
+            closed.ActorId = actorId;
+            pPlayer->Send(closed);
+        }
+        previous = std::move(visible);
+    }
+}
+
 void OverlayService::SendDialogueState(uint32_t aActorId, const DialogueSession& acSession) const noexcept
 {
     const auto* pOwner = m_world.GetPlayerManager().GetById(acSession.Owner);
@@ -128,6 +230,7 @@ void OverlayService::LeaveDialogue(uint32_t aPlayerId) noexcept
 
     auto& state = session->second;
     state.Participants.erase(aPlayerId);
+    state.Votes.erase(aPlayerId);
     if (state.Participants.empty())
     {
         m_dialogueSessions.erase(session);
@@ -165,6 +268,7 @@ void OverlayService::LeaveDialogue(uint32_t aPlayerId) noexcept
             return;
         }
         state.Owner = state.Participants.begin()->first;
+        InvalidateOptions(state);
     }
 
     SendDialogueState(cActorId, state);
@@ -173,6 +277,9 @@ void OverlayService::LeaveDialogue(uint32_t aPlayerId) noexcept
 void OverlayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
     LeaveDialogue(acEvent.pPlayer->GetId());
+    m_visiblePanels.erase(acEvent.pPlayer->GetId());
+    for (auto& [actorId, session] : m_dialogueSessions)
+        session.Votes.erase(acEvent.pPlayer->GetId());
 }
 
 void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& acMessage) noexcept
@@ -181,7 +288,23 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
     Player* pPlayer = acMessage.pPlayer;
     const uint32_t cPlayerId = pPlayer->GetId();
 
-    if (!request.Token || request.Action > PlayerDialogueRequest::Choose || request.Text.size() > 1024)
+    if (request.Action > PlayerDialogueRequest::Vote || request.Text.size() > 1024 || request.Options.size() > 64)
+        return;
+
+    if (request.Action == PlayerDialogueRequest::Vote)
+    {
+        const auto session = m_dialogueSessions.find(request.ActorId);
+        if (session == m_dialogueSessions.end() || !IsDialogueActorInRange(request.ActorId, *pPlayer))
+            return;
+        auto& state = session->second;
+        if (state.Owner == cPlayerId || request.Revision != state.Revision || request.Index >= state.Options.size() ||
+            state.Options[request.Index].empty())
+            return;
+        state.Votes[cPlayerId] = request.Index;
+        return;
+    }
+
+    if (!request.Token)
         return;
 
     if (request.Action == PlayerDialogueRequest::Join)
@@ -215,7 +338,10 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
         LeaveDialogue(cPlayerId);
         auto& state = m_dialogueSessions[request.ActorId];
         if (state.Participants.empty())
+        {
             state.Owner = cPlayerId;
+            InvalidateOptions(state);
+        }
 
         state.Participants[cPlayerId] = request.Token;
         m_playerDialogues[cPlayerId] = request.ActorId;
@@ -239,16 +365,40 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
         return;
     }
 
-    if (!IsDialogueActorInRange(request.ActorId, *pPlayer) || request.Text.empty())
+    if (!IsDialogueActorInRange(request.ActorId, *pPlayer))
         return;
 
     const bool cOwner = state.Owner == cPlayerId;
+    if (request.Action == PlayerDialogueRequest::PublishOptions)
+    {
+        if (!cOwner || std::any_of(request.Options.begin(), request.Options.end(), [](const auto& option) { return option.size() > 1024; }))
+            return;
+        if (state.Options != request.Options)
+        {
+            InvalidateOptions(state);
+            state.Options = request.Options;
+        }
+        return;
+    }
+    if (request.Text.empty())
+        return;
     if ((request.Action == PlayerDialogueRequest::Choose && !cOwner) ||
         (request.Action == PlayerDialogueRequest::Suggest && cOwner))
     {
         SendDialogueState(request.ActorId, state);
         return;
     }
+
+    if (!cOwner)
+    {
+        // Native menus may show a different set of options. Match only an exact,
+        // unambiguous owner option; otherwise retain the suggestion as chat.
+        const auto option = std::find(state.Options.begin(), state.Options.end(), request.Text);
+        if (option != state.Options.end() && std::find(std::next(option), state.Options.end(), request.Text) == state.Options.end())
+            state.Votes[cPlayerId] = static_cast<uint32_t>(std::distance(state.Options.begin(), option));
+    }
+    else
+        InvalidateOptions(state);
 
     // The selection hook only executes the native response for the granted owner.
     // Suggestions are explanatory chat text and never execute a game function here.

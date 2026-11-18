@@ -281,6 +281,7 @@ void OverlayService::SetPlayerHealthPercentage(uint32_t aFormId) const noexcept
 void OverlayService::OnUpdate(const UpdateEvent&) noexcept
 {
     RefreshDialogueSession();
+    PublishDialogueOptions();
     RunDebugDataUpdates();
     RunPlayerHealthUpdates();
 }
@@ -369,6 +370,8 @@ void OverlayService::CloseDialogueSession() noexcept
     m_dialogueActorId = 0;
     m_dialogueToken = 0;
     m_dialogueSpeakerHandle = 0;
+    m_dialogueOptionsPublished = false;
+    m_lastDialogueOptions.clear();
 }
 
 void OverlayService::RefreshDialogueSession() noexcept
@@ -419,6 +422,39 @@ void OverlayService::RefreshDialogueSession() noexcept
     }
 }
 
+void OverlayService::PublishDialogueOptions() noexcept
+{
+    if (!m_transport.IsOnline() || !m_dialogueGranted || !m_dialogueCanChoose ||
+        std::chrono::steady_clock::now() < m_dialoguePublishAfter)
+        return;
+    const auto* pManager = MenuTopicManager::Get();
+    if (!pManager || !pManager->menuOpen || pManager->speaker.handle.iBits != m_dialogueSpeakerHandle)
+        return;
+
+    std::vector<String> options;
+    if (pManager->pOptions)
+    {
+        for (const auto* pOption : *pManager->pOptions)
+        {
+            if (options.size() >= 64)
+                break;
+            options.emplace_back(pOption && pOption->text ? pOption->text : "");
+        }
+    }
+    if (m_dialogueOptionsPublished && options == m_lastDialogueOptions)
+        return;
+    PlayerDialogueRequest request{};
+    request.Action = PlayerDialogueRequest::PublishOptions;
+    request.ActorId = m_dialogueActorId;
+    request.Token = m_dialogueToken;
+    request.Options = options;
+    if (m_transport.Send(request))
+    {
+        m_lastDialogueOptions = std::move(options);
+        m_dialogueOptionsPublished = true;
+    }
+}
+
 bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 {
     if (!m_transport.IsOnline())
@@ -434,7 +470,11 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
     if (m_dialogueCanChoose)
     {
         if (SendDialogueAction(PlayerDialogueRequest::Choose, apText))
+        {
+            m_dialogueOptionsPublished = false;
+            m_dialoguePublishAfter = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
             return true;
+        }
         Utils::ShowHudMessage("Unable to send dialogue choice.");
         return false;
     }
@@ -448,6 +488,32 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 
 void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noexcept
 {
+    if (acMessage.Kind == NotifyPlayerDialogue::Panel || acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
+    {
+        if (!m_pOverlay)
+            return;
+        auto pArguments = CefListValue::Create();
+        pArguments->SetDouble(0, acMessage.ActorId);
+        pArguments->SetBool(1, acMessage.Kind == NotifyPlayerDialogue::Panel);
+        pArguments->SetString(2, acMessage.Name.c_str());
+        pArguments->SetBool(3, acMessage.CanChoose);
+        pArguments->SetDouble(4, acMessage.Revision);
+        const auto* pActor = Utils::GetByServerId<Actor>(acMessage.ActorId);
+        pArguments->SetString(5, pActor && pActor->baseForm ? pActor->baseForm->GetName() : "Nearby NPC");
+        auto options = CefListValue::Create();
+        auto votes = CefListValue::Create();
+        for (size_t i = 0; i < acMessage.Options.size(); ++i)
+        {
+            options->SetString(i, acMessage.Options[i].c_str());
+            votes->SetInt(i, i < acMessage.Votes.size() ? static_cast<int>(acMessage.Votes[i]) : 0);
+        }
+        pArguments->SetList(6, options);
+        pArguments->SetList(7, votes);
+        pArguments->SetInt(8, acMessage.Selected == UINT32_MAX ? -1 : static_cast<int>(acMessage.Selected));
+        m_pOverlay->ExecuteAsync("sharedDialogue", pArguments);
+        return;
+    }
+
     if (!m_dialogueToken || acMessage.Token != m_dialogueToken || acMessage.ActorId != m_dialogueActorId)
         return;
 
@@ -456,6 +522,8 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         const bool cChanged = !m_dialogueGranted || m_dialogueCanChoose != acMessage.CanChoose;
         m_dialogueGranted = true;
         m_dialogueCanChoose = acMessage.CanChoose;
+        if (cChanged)
+            m_dialogueOptionsPublished = false;
         if (cChanged)
         {
             if (m_dialogueCanChoose)

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <include/internal/cef_ptr.h>
+#include <vector>
+#include <chrono>
 
 namespace TiltedPhoques
 {
@@ -88,6 +90,7 @@ protected:
 private:
     void RefreshDialogueSession() noexcept;
     void CloseDialogueSession() noexcept;
+    void PublishDialogueOptions() noexcept;
     bool SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
@@ -107,6 +110,9 @@ private:
     uint32_t m_dialogueSpeakerHandle{};
     bool m_dialogueGranted{};
     bool m_dialogueCanChoose{};
+    bool m_dialogueOptionsPublished{};
+    std::vector<TiltedPhoques::String> m_lastDialogueOptions;
+    std::chrono::steady_clock::time_point m_dialoguePublishAfter{};
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
