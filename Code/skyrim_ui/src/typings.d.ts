@@ -107,6 +107,7 @@ declare const skyrimtogether: SkyrimTogether;
 interface SkyrimTogether {
   on(event: 'mainMenu' | 'serverLobby', callback: (state: boolean) => void): void;
   off(event: 'mainMenu' | 'serverLobby', callback?: (state: boolean) => void): void;
+  uiReady(): void;
   enterWorld(): void;
   selectCharacter(key: string): void;
   on(event: 'characterCheckpoint', callback: (required: boolean, phase: string, name: string, revision: string, detail: string) => void): void;

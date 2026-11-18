@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <Services/OverlayService.h>
+#include <Services/InputService.h>
 #include <ModCompat/DialoguePortraits.h>
 #include <ModCompat/CharacterCheckpoints.h>
 
@@ -146,6 +147,8 @@ void OverlayService::Create(RenderSystemD3D11* apRenderSystem) noexcept
     m_pProvider = TiltedPhoques::MakeUnique<D3D11RenderProvider>(apRenderSystem);
     m_pOverlay = new OverlayApp(m_pProvider.get(), new ::OverlayClient(m_transport, m_pProvider->Create()));
 
+    spdlog::info("Initializing Skyrim Together browser overlay");
+    m_browserReady = false;
     if (!m_pOverlay->Initialize())
     {
         spdlog::error("Overlay could not be initialized");
@@ -179,6 +182,7 @@ void OverlayService::Reload() noexcept
 {
     SetInGame(false);
     SetActive(false);
+    m_browserReady = false;
     GetOverlayApp()->GetClient()->GetBrowser()->Reload();
     Initialize();
     SetInGame(true);
@@ -289,6 +293,27 @@ void OverlayService::SetPlayerHealthPercentage(uint32_t aFormId) const noexcept
     m_pOverlay->ExecuteAsync("setHealth", pArguments);
 }
 
+void OverlayService::OnBrowserReady() noexcept
+{
+    if (!m_pOverlay) return;
+    m_browserReady = true;
+    spdlog::info("Skyrim Together frontend ready");
+    Initialize();
+    SetVersion(BUILD_COMMIT);
+    RefreshMenuPresentation();
+    auto lobby = CefListValue::Create();
+    lobby->SetBool(0, m_transport.IsInLobby());
+    m_pOverlay->ExecuteAsync("serverLobby", lobby);
+    if (m_transport.IsOnline())
+    {
+        m_pOverlay->ExecuteAsync("connect");
+        auto player = CefListValue::Create();
+        player->SetInt(0, m_transport.GetLocalPlayerId());
+        m_pOverlay->ExecuteAsync("setLocalPlayerId", player);
+    }
+    m_pOverlay->ExecuteAsync(m_active ? "activate" : "deactivate");
+}
+
 void OverlayService::RefreshMenuPresentation() noexcept
 {
     if (!m_pOverlay)
@@ -320,6 +345,7 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
     if (m_mainMenu != mainMenu)
     {
         m_mainMenu = mainMenu;
+        spdlog::info("Skyrim Together main menu: {}", m_mainMenu);
         auto args = CefListValue::Create();
         args->SetBool(0, m_mainMenu);
         m_pOverlay->ExecuteAsync("mainMenu", args);
@@ -332,6 +358,24 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
                     renderer->SetCursorVisible(false);
         }
     }
+    if (m_mainMenu && m_browserReady)
+    {
+        const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
+        if (!m_openedInitialMenu && window && GetForegroundWindow() == window)
+        {
+            if (m_transport.IsOnline() || m_transport.IsInLobby() || m_active)
+                m_openedInitialMenu = true;
+            else if (InputService::SetOverlayActive(*this, true))
+            {
+                m_openedInitialMenu = true;
+                spdlog::info("Opened initial main-menu connection screen");
+            }
+        }
+        InputService::PollMainMenuHotkey(*this, window);
+    }
+    else
+        InputService::PollMainMenuHotkey(*this, nullptr);
+    if (m_mainMenu && !m_transport.IsOnline()) return;
     RefreshDialogueSession();
     PublishDialogueOptions();
     if (m_transport.IsOnline())

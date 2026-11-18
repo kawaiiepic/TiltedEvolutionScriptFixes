@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace NativeCheckpointDriver
 {
@@ -6,4 +7,6 @@ namespace NativeCheckpointDriver
 // default on checkpoint servers; native signatures still need binary/gameplay validation.
 bool TryRegister() noexcept;
 void CheckForUnexpectedLoad() noexcept;
+uint64_t NewGameGeneration() noexcept;
+uint64_t LoadGeneration() noexcept;
 }

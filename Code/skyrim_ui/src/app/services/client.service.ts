@@ -294,6 +294,8 @@ export class ClientService implements OnDestroy {
     }
   }
 
+  public uiReady(): void { skyrimtogether.uiReady(); }
+
   public enterWorld(): void {
     if (this.lobbyStateChange.getValue() && this.inGameStateChange.getValue()) skyrimtogether.enterWorld();
   }

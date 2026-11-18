@@ -1,6 +1,6 @@
 <ng-container *ngIf="(inGame$ | async) || (mainMenu$ | async)">
   <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
-    F2 · PLAY
+    SKYRIM TOGETHER · F2 / RIGHT CTRL TO PLAY
   </aside>
   <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
@@ -55,7 +55,7 @@
         {{ (mainMenu$ | async) ? 'Play' : ('COMPONENT.ROOT.CONNECT' | transloco) }}
       </button>
       <ng-container *ngIf="lobby$ | async">
-        <button *ngIf="inGame$ | async" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'ready' && (checkpoint$ | async)?.phase !== 'staged' && (checkpoint$ | async)?.phase !== 'new-native'" data-style-ornament="inverted" (click)="enterWorld()">{{ (checkpoint$ | async)?.phase === 'new-native' ? 'Finish character' : 'Enter world' }}</button>
+        <button *ngIf="inGame$ | async" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'ready' && (checkpoint$ | async)?.phase !== 'staged'" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
         <button *ngIf="!(inGame$ | async)" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'new' && (checkpoint$ | async)?.phase !== 'new-native' && (checkpoint$ | async)?.phase !== 'staged'" data-style-ornament="inverted" (click)="returnToNativeMenu()">Return to Skyrim</button>
         <button data-style-ornament="inverted" (click)="setView(RootView.DISCONNECT)">Leave lobby</button>
       </ng-container>
@@ -137,6 +137,7 @@
             <code>{{ checkpoint.revision === '0' ? 'save ' : 'load ' }}{{ checkpoint.name }}</code>
             <small>Press F2 again after loading. Named saves upload automatically once the files are stable.</small>
           </ng-container>
+          <p *ngIf="checkpoint.phase === 'new-native'">Choose Skyrim's New Game and complete the normal character creation screen. Your first server checkpoint is created automatically when RaceMenu closes and Skyrim is ready.</p>
           <p *ngIf="checkpoint.phase === 'ready'">The selected checkpoint is ready for world entry.</p>
         </ng-container>
         <ng-template #legacyLobby>

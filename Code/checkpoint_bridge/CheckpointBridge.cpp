@@ -41,7 +41,7 @@ using namespace STCheckpointBridge;
 
 std::mutex s_mutex;
 bool s_registered{};
-uint64_t s_loadGeneration{};
+uint64_t s_loadGeneration{}, s_newGameGeneration{};
 struct PendingOperation
 {
     uint64_t Token{};
@@ -98,6 +98,7 @@ void OnMessage(Messaging::Message* apMessage)
     const auto& msg = *apMessage;
     std::lock_guard lock(s_mutex);
     if (msg.type == kPreLoad || msg.type == kNewGame) ++s_loadGeneration;
+    if (msg.type == kNewGame) ++s_newGameGeneration;
     if (!s_op.Token) return;
     if (msg.type == kNewGame)
     {
@@ -162,7 +163,12 @@ uint64_t LoadGeneration() noexcept
     std::lock_guard lock(s_mutex);
     return s_loadGeneration;
 }
-const Api s_api{sizeof(Api), Version, &Arm, &Returned, &Poll, &Abandon, &LoadGeneration};
+uint64_t NewGameGeneration() noexcept
+{
+    std::lock_guard lock(s_mutex);
+    return s_newGameGeneration;
+}
+const Api s_api{sizeof(Api), Version, &Arm, &Returned, &Poll, &Abandon, &LoadGeneration, &NewGameGeneration};
 }
 
 extern "C"

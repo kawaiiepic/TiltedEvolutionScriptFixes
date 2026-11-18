@@ -5,6 +5,8 @@
 #include <Messages/CharacterSave.h>
 #include <Services/TransportService.h>
 #include <Services/OverlayService.h>
+#include <Services/InputService.h>
+#include <Games/Skyrim/Interface/UI.h>
 #include <ScriptExtender.h>
 #include <World.h>
 #include <OverlayApp.hpp>
@@ -40,6 +42,9 @@ struct State
     Phase Step{Phase::Disabled};
     bool Required{}, Pending{}, NeedsBegin{};
     bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
+    bool AwaitCharacterCreation{}, SawRaceMenu{};
+    uint64_t InitialNewGame{}, InitialLoadGeneration{};
+    Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
     Clock::time_point NativeDeadline{}, NextAutoSave{}, EnterDeadline{};
@@ -305,7 +310,7 @@ bool FinishCharacter(TransportService& aTransport) noexcept
 {
     if (!s.NativeEnabled || s.Step != Phase::NewCharacter)
         return false;
-    if (!aTransport.IsInLobby() || !aTransport.CanEnterWorld() || s.Pending)
+    if (!s.SawRaceMenu || !aTransport.IsInLobby() || !aTransport.CanEnterWorld() || s.Pending)
         return true;
     if (s.Operation != NativeOperation::None || s.CaptureReady) return true;
     const auto result = StartNative(NativeOperation::Save);
@@ -313,8 +318,7 @@ bool FinishCharacter(TransportService& aTransport) noexcept
         s.AutoEnter = true; // only after the initial checkpoint is committed
     else if (result == NativeStart::Busy)
     {
-        s.Detail = "Skyrim is not ready to save. Finish character creation and try again.";
-        PublishState();
+        s.NextPoll = Clock::now() + std::chrono::seconds(5);
     }
     else
         Fail("Skyrim rejected the initial save request.");
@@ -384,7 +388,22 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Revision = acReply.Revision;
             if (!s.Revision)
             {
-                Change(Phase::NewCharacter, s.NativeEnabled ? "Create your character in Skyrim, then select Finish character." : "Create your character in Skyrim, then make the named checkpoint save. It uploads automatically.");
+                if (s.NativeEnabled)
+                {
+                    auto* ui = UI::Get();
+                    if (!ui || !ui->GetMenuOpen("Main Menu"))
+                    {
+                        Fail("Create a new server character from Skyrim's main menu.");
+                        return;
+                    }
+                    s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
+                    s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
+                    s.AwaitCharacterCreation = true;
+                    Change(Phase::NewCharacter, "Choose New Game in Skyrim. Your character will be saved automatically after RaceMenu.");
+                    InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                }
+                else
+                    Change(Phase::NewCharacter, "Create your character in Skyrim, then make the named checkpoint save. It uploads automatically.");
                 return;
             }
             if (acReply.EssSize < 13 || acReply.EssSize > P::MaxSize ||
@@ -476,6 +495,34 @@ void Tick(TransportService& aTransport) noexcept
             s.NativeDeadline = now + kNativeTimeout;
         }
 
+        if (s.NativeEnabled && s.Step == Phase::NewCharacter && s.AwaitCharacterCreation &&
+            !s.CaptureReady && s.Operation == NativeOperation::None)
+        {
+            const auto newGames = NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame;
+            const auto loads = NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration;
+            if (loads != newGames || newGames > 1)
+            {
+                Fail("An unrelated save or new game was opened during character creation.");
+                return;
+            }
+            auto* ui = UI::Get();
+            if (newGames == 1 && ui && ui->GetMenuOpen("RaceSex Menu"))
+            {
+                s.SawRaceMenu = true;
+                s.CharacterReadySince = {};
+                return;
+            }
+            if (newGames != 1 || !s.SawRaceMenu || !aTransport.CanEnterWorld())
+            {
+                s.CharacterReadySince = {};
+                return;
+            }
+            if (s.CharacterReadySince == Clock::time_point{})
+                s.CharacterReadySince = now;
+            if (now - s.CharacterReadySince >= std::chrono::seconds(5) && now >= s.NextPoll)
+                FinishCharacter(aTransport);
+            return;
+        }
         if (s.NativeEnabled && s.Step == Phase::Staged)
         {
             if (now >= s.EnterDeadline) { Fail("Skyrim did not become ready for the checkpoint load."); return; }

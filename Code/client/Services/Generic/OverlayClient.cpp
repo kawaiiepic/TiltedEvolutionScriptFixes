@@ -4,6 +4,7 @@
 #include <DInputHook.hpp>
 
 #include <Services/OverlayClient.h>
+#include <Services/InputService.h>
 #include <Services/OverlayService.h>
 #include <Services/TransportService.h>
 #include <ModCompat/CharacterCheckpoints.h>
@@ -44,7 +45,9 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         LOG(INFO) << "event=ui_event name=" << eventName;
 #endif
 
-        if (eventName == "connect")
+        if (eventName == "uiReady")
+            World::Get().GetRunner().Queue([]() { World::Get().GetOverlayService().OnBrowserReady(); });
+        else if (eventName == "connect")
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")
             ProcessDisconnectMessage();
@@ -67,7 +70,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             });
         }
         else if (eventName == "deactivate")
-            SetUIVisible(false);
+            World::Get().GetRunner().Queue([]() { InputService::SetOverlayActive(World::Get().GetOverlayService(), false); });
         else if (!m_transport.IsOnline() && eventName != "openPlayGuide")
             return true;
         else if (eventName == "revealPlayers")

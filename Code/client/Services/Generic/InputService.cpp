@@ -114,6 +114,31 @@ void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
         ;
 }
 
+bool InputService::SetOverlayActive(OverlayService& aOverlay, bool aActive) noexcept
+{
+    const auto app = aOverlay.GetOverlayApp();
+    if (!app || !aOverlay.IsBrowserReady()) return false;
+    const auto client = app->GetClient();
+    if (!client || !client->GetBrowser()) return false;
+    const auto renderer = client->GetOverlayRenderHandler();
+    if (!renderer || (aActive && !aOverlay.GetInGame() && !aOverlay.GetMainMenu())) return false;
+    SetUIActive(aOverlay, renderer, aActive);
+    spdlog::info("Skyrim Together overlay {} (main menu: {})", aActive ? "opened" : "closed", aOverlay.GetMainMenu());
+    return true;
+}
+
+void InputService::PollMainMenuHotkey(OverlayService& aOverlay, HWND aWindow) noexcept
+{
+    static bool s_wasDown = false;
+    static bool s_wasFocused = false;
+    const bool focused = aWindow && GetForegroundWindow() == aWindow;
+    const bool down = (GetAsyncKeyState(VK_F2) & 0x8000) || (GetAsyncKeyState(VK_RCONTROL) & 0x8000);
+    if (focused && s_wasFocused && s_wasDown && !down)
+        SetOverlayActive(aOverlay, !aOverlay.GetActive());
+    s_wasDown = down;
+    s_wasFocused = focused;
+}
+
 void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aType, bool aE0, bool aE1)
 {
     if (aType != KEYEVENT_CHAR)
@@ -200,6 +225,8 @@ void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aTy
 
     if (aType != KEYEVENT_CHAR && (IsToggleKey(aKey) || (IsDisableKey(aKey) && active)))
     {
+        if (overlay.GetMainMenu() && IsToggleKey(aKey)) return;
+        if (!overlay.IsBrowserReady()) return;
         if (!overlay.GetInGame() && !overlay.GetMainMenu())
         {
             TiltedPhoques::DInputHook::Get().SetEnabled(false);
@@ -307,6 +334,7 @@ UINT GetRealACP()
 
 LRESULT CALLBACK InputService::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if (!s_pOverlay) return 0;
     const auto pApp = s_pOverlay->GetOverlayApp();
     if (!pApp)
         return 0;

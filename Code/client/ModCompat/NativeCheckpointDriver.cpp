@@ -171,7 +171,7 @@ bool TryRegister() noexcept
     if (!get) return false;
     const auto* api = get(Bridge::Version);
     if (!api || api->Size < sizeof(Bridge::Api) || api->Version != Bridge::Version ||
-        !api->Arm || !api->Returned || !api->Poll || !api->Abandon || !api->LoadGeneration) return false;
+        !api->Arm || !api->Returned || !api->Poll || !api->Abandon || !api->LoadGeneration || !api->NewGameGeneration) return false;
     // IDs from CommonLibSSE-NG, not fixed process addresses.
     void* manager = db.FindAddressById(403340);
     void* load = db.FindAddressById(35728);
@@ -191,6 +191,9 @@ bool TryRegister() noexcept
         spdlog::warn("Experimental native checkpoint adapter enabled; engine ABI is not binary-verified");
     return s_registered;
 }
+
+uint64_t NewGameGeneration() noexcept { return s_bridge ? s_bridge->NewGameGeneration() : 0; }
+uint64_t LoadGeneration() noexcept { return s_bridge ? s_bridge->LoadGeneration() : 0; }
 
 void CheckForUnexpectedLoad() noexcept
 {

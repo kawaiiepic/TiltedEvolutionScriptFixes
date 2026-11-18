@@ -113,6 +113,7 @@ export class RootComponent implements OnInit {
     this.onInGameStateSubscription();
     this.onActivationStateSubscription();
     this.onFontSizeSubscription();
+    this.client.uiReady();
   }
 
   public onInGameStateSubscription() {
