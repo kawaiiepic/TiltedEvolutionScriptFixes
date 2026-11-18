@@ -29,6 +29,13 @@ static TESQuest* FindQuestByNameId(const String& name)
 
 using HeldStages = QuestService::HeldStages;
 
+static bool GetPluginBackedId(World& aWorld, uint32_t aFormId, GameId& aId) noexcept
+{
+    auto& modSystem = aWorld.GetModSystem();
+    return (aFormId >> 24) != 0xFF && modSystem.GetServerModId(aFormId, aId) && aId.BaseId &&
+           modSystem.GetGameId(aId) == aFormId;
+}
+
 static void ReleaseStagesForWaitingPhases(TESQuest* apQuest, HeldStages& aHeld) noexcept;
 static void ReleaseUncheckedStages(TESQuest* apQuest, HeldStages& aHeld) noexcept;
 
@@ -188,8 +195,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
             [&, formId = pQuest->formID, stageId = pQuest->currentStage, stopped = !apEvent->started, type = pQuest->type]()
             {
                 GameId Id;
-                auto& modSys = m_world.GetModSystem();
-                if (m_world.GetTransport().IsOnline() && modSys.GetServerModId(formId, Id))
+                if (m_world.GetTransport().IsOnline() && GetPluginBackedId(m_world, formId, Id))
                 {
                     RequestQuestUpdate update;
                     update.Id = Id;
@@ -241,8 +247,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
             [&, formId = apEvent->formId, stageId = apEvent->stageId, type = pQuest->type]()
             {
                 GameId Id;
-                auto& modSys = m_world.GetModSystem();
-                if (m_world.GetTransport().IsOnline() && modSys.GetServerModId(formId, Id))
+                if (m_world.GetTransport().IsOnline() && GetPluginBackedId(m_world, formId, Id))
                 {
                     RequestQuestUpdate update;
                     update.Id = Id;
@@ -349,7 +354,6 @@ std::vector<SceneReferenceAlias> QuestService::CaptureSceneAliases(BGSScene* apS
     if (!apScene || !apScene->owningQuest)
         return aliases;
 
-    auto& modSystem = m_world.GetModSystem();
     for (uint32_t aliasId : apScene->actorIds)
     {
         if (aliases.size() >= 255)
@@ -365,8 +369,7 @@ std::vector<SceneReferenceAlias> QuestService::CaptureSceneAliases(BGSScene* apS
             continue;
 
         GameId reference{};
-        if (!modSystem.GetServerModId(pReference->formID, reference) ||
-            !reference.BaseId || modSystem.GetGameId(reference) != pReference->formID)
+        if (!GetPluginBackedId(m_world, pReference->formID, reference))
             continue;
 
         aliases.push_back({aliasId, reference});
@@ -444,8 +447,8 @@ void QuestService::RefreshSceneStates() noexcept
         }
 
         RequestSceneState request{};
-        if (!m_world.GetModSystem().GetServerModId(pScene->formID, request.State.Id) ||
-            !m_world.GetModSystem().GetServerModId(pScene->owningQuest->formID, request.State.Quest))
+        if (!GetPluginBackedId(m_world, pScene->formID, request.State.Id) ||
+            !GetPluginBackedId(m_world, pScene->owningQuest->formID, request.State.Quest))
         {
             ++it;
             continue;
@@ -838,7 +841,6 @@ bool QuestService::StopQuest(uint32_t aformId)
 
 static constexpr std::array kNonSyncableQuestIds = std::to_array<uint32_t>({
     0x2BA16,   // Werewolf transformation quest
-    0x20071D0, // Vampire transformation quest
     0x3AC44,   // MS13BleakFallsBarrowLeverScene
     // 0xFE014801,  // Unknown dynamic ID, kept as note, maybe lookup correct ID this game?
     0xF2593 // Skill experience quest
@@ -852,9 +854,18 @@ bool QuestService::IsNonSyncableQuest(TESQuest* apQuest)
     const char* pName = apQuest->idName.AsAscii();
     const bool cPersonal = pName && (std::strncmp(pName, "RelationshipMarriage", 20) == 0 ||
         std::strcmp(pName, "PlayerWerewolfQuest") == 0 || std::strcmp(pName, "PlayerVampireQuest") == 0);
-    return apQuest->stages.Empty() || (apQuest->formID >> 24) == 0xFF ||
-           (apQuest->flags & TESQuest::Flags::AllowRepeatStages) || cPersonal ||
-           std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
+    if (apQuest->stages.Empty() || (apQuest->formID >> 24) == 0xFF ||
+        (apQuest->flags & TESQuest::Flags::AllowRepeatStages) || cPersonal)
+        return true;
+
+    const auto* pMods = ModManager::Get();
+    const auto* pSkyrim = pMods->GetByName("Skyrim.esm");
+    const auto* pDawnguard = pMods->GetByName("Dawnguard.esm");
+    const uint32_t cModIndex = apQuest->formID >> 24;
+    const uint32_t cBaseId = apQuest->formID & 0xFFFFFF;
+    return (pSkyrim && cModIndex == pSkyrim->GetId() &&
+            std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), cBaseId) != kNonSyncableQuestIds.end()) ||
+           (pDawnguard && cModIndex == pDawnguard->GetId() && cBaseId == 0x71D0);
 }
 
 void QuestService::DebugDumpQuests()

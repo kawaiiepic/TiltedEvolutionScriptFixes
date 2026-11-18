@@ -21,6 +21,7 @@ Console::Setting bEnableMiscQuestSync{"Gameplay:bEnableMiscQuestSync", "Share mi
 constexpr const char* kJournalPath = "shared-quests.log";
 constexpr const char* kJournalBackupPath = "shared-quests.log.backup";
 constexpr const char* kPoliciesPath = "shared-quest-policies.conf";
+constexpr auto kSceneObserverTimeout = std::chrono::seconds(20);
 static_assert(Campaign::QuestEvent::StageUpdate == static_cast<int>(RequestQuestUpdate::StageUpdate) &&
               Campaign::QuestEvent::Started == static_cast<int>(RequestQuestUpdate::Started) &&
               Campaign::QuestEvent::Stopped == static_cast<int>(RequestQuestUpdate::Stopped));
@@ -172,9 +173,8 @@ void QuestService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
 {
     for (const auto& [id, scene] : m_scenes)
     {
-        const auto& state = scene.Canonical;
-        if (!scene.Ended && acEvent.pPlayer->HasModId(state.State.Id.ModId) && acEvent.pPlayer->HasModId(state.State.Quest.ModId))
-            acEvent.pPlayer->Send(state);
+        if (!scene.Ended)
+            SendScene(scene.Canonical, *acEvent.pPlayer);
     }
     if (m_journal.IsHealthy() && m_policies.IsHealthy())
         m_questSync.try_emplace(acEvent.pPlayer->GetId());
@@ -218,20 +218,42 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
         spdlog::debug("Shared quest {}:{:X} stage {} status {}", entry.Quest.Plugin, entry.Quest.BaseId, entry.Stage, entry.Status);
 }
 
+void QuestService::SendScene(const NotifySceneState& acState, const Player& acPlayer) noexcept
+{
+    if (!acPlayer.HasModId(acState.State.Id.ModId) || !acPlayer.HasModId(acState.State.Quest.ModId))
+        return;
+
+    const auto missingPlugin = [&](const auto& alias) { return !acPlayer.HasModId(alias.Reference.ModId); };
+    if (!std::any_of(acState.State.ReferenceAliases.begin(), acState.State.ReferenceAliases.end(), missingPlugin))
+    {
+        acPlayer.Send(acState);
+        return;
+    }
+
+    auto filtered = acState;
+    std::erase_if(filtered.State.ReferenceAliases, missingPlugin);
+    acPlayer.Send(filtered);
+}
+
 void QuestService::BroadcastScene(const NotifySceneState& acState) noexcept
 {
     for (const Player* pPlayer : m_world.GetPlayerManager())
-    {
-        if (pPlayer->HasModId(acState.State.Id.ModId) && pPlayer->HasModId(acState.State.Quest.ModId))
-            pPlayer->Send(acState);
-    }
+        SendScene(acState, *pPlayer);
 }
 
 void QuestService::RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept
 {
-    aScene.Observers.erase(aPlayerId);
-    if (aScene.Ended || aScene.Canonical.Owner != aPlayerId)
+    if (!aScene.Observers.erase(aPlayerId) || aScene.Ended || aScene.Canonical.Owner != aPlayerId)
         return;
+
+    if (!aFinished)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(aScene.Observers, [&](const auto& observer)
+        {
+            return now - observer.second.LastSeen > kSceneObserverTimeout;
+        });
+    }
 
     if (!aFinished && !aScene.Observers.empty())
     {
@@ -362,7 +384,7 @@ void QuestService::OnSceneTick(const UpdateEvent&) noexcept
         std::vector<uint32_t> expired;
         for (const auto& [playerId, observer] : scene.Observers)
         {
-            if (now - observer.LastSeen > std::chrono::seconds(20))
+            if (now - observer.LastSeen > kSceneObserverTimeout)
                 expired.push_back(playerId);
         }
         // Remove expired followers before migrating an expired owner.

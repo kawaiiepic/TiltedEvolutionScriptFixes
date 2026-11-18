@@ -59,6 +59,7 @@ private:
     void OnSceneTick(const UpdateEvent&) noexcept;
     void RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept;
     void BroadcastScene(const NotifySceneState& acState) noexcept;
+    static void SendScene(const NotifySceneState& acState, const Player& acPlayer) noexcept;
 
     std::map<uint64_t, SharedScene> m_scenes;
     uint32_t m_nextSceneGeneration{};
