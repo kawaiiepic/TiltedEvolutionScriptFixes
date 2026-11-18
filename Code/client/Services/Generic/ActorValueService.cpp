@@ -257,8 +257,6 @@ void ActorValueService::RunDeathStateUpdates() noexcept
         bool isDead = pActor->IsDead();
         if (isDead != localComponent.IsDead)
         {
-            localComponent.IsDead = isDead;
-
             spdlog::info("Sending death state {} for local actor {:X}, server id: {:X}", isDead, pActor->formID, localComponent.Id);
 
             RequestDeathStateChange requestChange;
@@ -266,7 +264,8 @@ void ActorValueService::RunDeathStateUpdates() noexcept
             requestChange.OwnershipEpoch = localComponent.OwnershipEpoch;
             requestChange.IsDead = isDead;
 
-            m_transport.Send(requestChange);
+            if (m_transport.Send(requestChange))
+                localComponent.IsDead = isDead;
         }
     }
 }

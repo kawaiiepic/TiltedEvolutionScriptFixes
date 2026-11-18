@@ -1,4 +1,5 @@
 #include "../server/Campaign/QuestJournal.h"
+#include "../server/Campaign/NpcLifeJournal.h"
 #include "../server/Campaign/FormSyncPolicies.h"
 #include "../server/Campaign/LockJournal.h"
 
@@ -221,4 +222,26 @@ TEST_CASE("A matching completion may follow the native stop", "[campaign]")
     event.Stage = 20;
     REQUIRE(journal.Append(event, 2) == QuestJournal::Result::Committed);
     REQUIRE_FALSE(journal.Records().back().ApplyStageBeforeOutcome);
+}
+
+TEST_CASE("Persisted NPC resurrection overrides a previously recorded death", "[campaign]")
+{
+    TestJournalFile file;
+    const Campaign::PluginFormKey key{"Adventure.esl", true, 0x824};
+    {
+        Campaign::NpcLifeJournal journal(file.Path);
+        REQUIRE_FALSE(journal.GetDeathState(key).has_value());
+        REQUIRE(journal.SetDeathState(key, true));
+    }
+    {
+        Campaign::NpcLifeJournal journal(file.Path);
+        REQUIRE(journal.GetDeathState(key) == true);
+        REQUIRE(journal.SetDeathState(key, false));
+        const auto cSize = std::filesystem::file_size(file.Path);
+        REQUIRE(journal.SetDeathState(key, false));
+        REQUIRE(std::filesystem::file_size(file.Path) == cSize);
+    }
+    Campaign::NpcLifeJournal journal(file.Path);
+    REQUIRE(journal.GetDeathState(key) == false);
+    REQUIRE_FALSE(journal.GetDeathState({"Another.esl", true, key.BaseId}).has_value());
 }

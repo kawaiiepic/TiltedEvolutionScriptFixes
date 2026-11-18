@@ -24,5 +24,5 @@ struct OwnerComponent
 
     Player* pOwner;
     uint32_t OwnershipEpoch;
-    Vector<const Player*> InvalidOwners{};
+    Vector<uint32_t> InvalidOwners{};
 };

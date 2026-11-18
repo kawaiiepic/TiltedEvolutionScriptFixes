@@ -39,5 +39,6 @@ struct AssignCharacterResponse final : ServerMessage
     uint32_t OwnershipEpoch{};
     bool Owner{false};
     bool IsDead{};
+    bool HasCampaignDeath{};
     bool IsWeaponDrawn{};
 };

@@ -129,6 +129,18 @@ void CharacterService::DeclineOwnership(const uint32_t aServerId, const uint32_t
     m_transport.Send(request);
 }
 
+static void RestoreCampaignDeath(Actor& aActor, bool aDead) noexcept
+{
+    if (aActor.IsDead() == aDead)
+        return;
+    if (aDead)
+        aActor.Kill();
+    else
+        aActor.Resurrect(false);
+    if (aActor.IsDead() != aDead)
+        spdlog::warn("Skyrim could not restore campaign death state for {:X}", aActor.formID);
+}
+
 void CharacterService::ReconcileActorData(
     const entt::entity aEntity, Actor* apActor, const uint32_t aOwnershipEpoch, const ActorData& acActorData, const bool aApplyInventory, const bool aIsLocalOwner) noexcept
 {
@@ -153,7 +165,9 @@ void CharacterService::ReconcileActorData(
             apActor->SetActorInventory(acActorData.InitialInventory);
     }
 
-    if (apActor->IsDead() != acActorData.IsDead)
+    if (acActorData.HasCampaignDeath)
+        RestoreCampaignDeath(*apActor, acActorData.IsDead);
+    else if (apActor->IsDead() != acActorData.IsDead)
     {
         if (acActorData.IsDead)
         {
@@ -438,6 +452,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
     actorData.InitialActorValues = acMessage.AllActorValues;
     actorData.InitialInventory = acMessage.CurrentInventory;
     actorData.IsDead = acMessage.IsDead;
+    actorData.HasCampaignDeath = acMessage.HasCampaignDeath;
     actorData.IsWeaponDrawn = acMessage.IsWeaponDrawn;
 
     if (acMessage.Owner)
@@ -448,7 +463,9 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         // Applying it would e.g. Respawn() (Resurrect + Reset) an actor that was killed while the request was in flight,
         // which re-rolls leveled temporary actors, removes them, and makes them get rediscovered as new entities endlessly.
         // Any local change since the request (e.g. death) is picked up by the usual LocalComponent diffing instead.
-        if (pActor->IsDead() != acMessage.IsDead)
+        if (acMessage.HasCampaignDeath)
+            RestoreCampaignDeath(*pActor, acMessage.IsDead);
+        else if (pActor->IsDead() != acMessage.IsDead)
             spdlog::info("Local actor {:X} death state changed while its assignment was in flight (server: {}, local: {}), keeping local state", pActor->formID, acMessage.IsDead, pActor->IsDead());
 
         m_weaponDrawUpdates.erase(pActor->formID);
@@ -465,7 +482,7 @@ void CharacterService::OnAssignCharacter(const AssignCharacterResponse& acMessag
         m_world.remove<EarlyAnimationBufferComponent>(cEntity);
 
         auto& localComponent = m_world.emplace_or_replace<LocalComponent>(cEntity, acMessage.ServerId, acMessage.OwnershipEpoch);
-        localComponent.IsDead = acMessage.IsDead;
+        localComponent.IsDead = acMessage.HasCampaignDeath ? pActor->IsDead() : acMessage.IsDead;
         localComponent.IsWeaponDrawn = acMessage.IsWeaponDrawn;
         pActor->GetExtension()->SetRemote(false);
     }
@@ -829,7 +846,7 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
         CacheSystem::Setup(m_world, cEntity, pActor);
         m_world.emplace_or_replace<LocalAnimationComponent>(cEntity);
         auto& localComponent = m_world.emplace_or_replace<LocalComponent>(cEntity, acMessage.ServerId, acMessage.OwnershipEpoch);
-        localComponent.IsDead = acMessage.CurrentActorData.IsDead;
+        localComponent.IsDead = acMessage.CurrentActorData.HasCampaignDeath ? pActor->IsDead() : acMessage.CurrentActorData.IsDead;
         localComponent.IsWeaponDrawn = acMessage.CurrentActorData.IsWeaponDrawn;
 
         // LocalComponent is installed only after canonical reconciliation is complete.
@@ -892,7 +909,11 @@ void CharacterService::OnRemoveCharacter(const NotifyRemoveCharacter& acMessage)
 void CharacterService::OnNotifyRespawn(const NotifyRespawn& acMessage) const noexcept
 {
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
-    const auto entityIt = std::find_if(view.begin(), view.end(), [view, id = acMessage.ActorId](auto aEntity) { return view.get<RemoteComponent>(aEntity).Id == id; });
+    const auto entityIt = std::find_if(view.begin(), view.end(), [view, &acMessage](auto aEntity)
+    {
+        const auto& remote = view.get<RemoteComponent>(aEntity);
+        return acMessage.OwnershipEpoch != 0 && remote.Id == acMessage.ActorId && remote.OwnershipEpoch == acMessage.OwnershipEpoch;
+    });
 
     if (entityIt == view.end())
     {
@@ -915,6 +936,7 @@ void CharacterService::OnNotifyRespawn(const NotifyRespawn& acMessage) const noe
 
     RequestRespawn request;
     request.ActorId = acMessage.ActorId;
+    request.OwnershipEpoch = acMessage.OwnershipEpoch;
 
     m_transport.Send(request);
 }
@@ -925,29 +947,27 @@ void CharacterService::OnBeastFormChange(const BeastFormChangeEvent& acEvent) co
 
     const auto it = std::find_if(view.begin(), view.end(), [view](auto entity) { return view.get<FormIdComponent>(entity).Id == 0x14; });
 
-    std::optional<uint32_t> serverIdRes = Utils::GetServerId(*it);
-    if (!serverIdRes.has_value())
-    {
-        spdlog::error("{}: failed to find server id", __FUNCTION__);
+    if (it == view.end())
         return;
-    }
+    const auto* pLocal = m_world.try_get<LocalComponent>(*it);
+    if (!pLocal)
+        return;
 
-    uint32_t serverId = serverIdRes.value();
+    RequestRespawn request{};
+    request.ActorId = pLocal->Id;
+    request.OwnershipEpoch = pLocal->OwnershipEpoch;
 
-    RequestRespawn request;
-    request.ActorId = serverId;
-
-    Actor* pActor = Utils::GetByServerId<Actor>(serverId);
+    Actor* pActor = Utils::GetByServerId<Actor>(pLocal->Id);
     if (!pActor)
     {
-        spdlog::warn(__FUNCTION__ ": could not find actor for server id {:X}", serverId);
+        spdlog::warn(__FUNCTION__ ": could not find actor for server id {:X}", pLocal->Id);
         return;
     }
 
     TESNPC* pNpc = Cast<TESNPC>(pActor->baseForm);
     if (!pNpc)
     {
-        spdlog::warn(__FUNCTION__ ": could not find actor baseform for server id {:X}", serverId);
+        spdlog::warn(__FUNCTION__ ": could not find actor baseform for server id {:X}", pLocal->Id);
         return;
     }
 

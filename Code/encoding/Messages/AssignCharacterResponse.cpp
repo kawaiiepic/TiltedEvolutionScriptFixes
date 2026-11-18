@@ -14,6 +14,7 @@ void AssignCharacterResponse::SerializeRaw(TiltedPhoques::Buffer::Writer& aWrite
     Serialization::WriteVarInt(aWriter, OwnershipEpoch);
     Serialization::WriteBool(aWriter, Owner);
     Serialization::WriteBool(aWriter, IsDead);
+    Serialization::WriteBool(aWriter, HasCampaignDeath);
     Serialization::WriteBool(aWriter, IsWeaponDrawn);
     LeveledNpcPickId.Serialize(aWriter);
 }
@@ -32,6 +33,7 @@ void AssignCharacterResponse::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRea
     OwnershipEpoch = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
     Owner = Serialization::ReadBool(aReader);
     IsDead = Serialization::ReadBool(aReader);
+    HasCampaignDeath = Serialization::ReadBool(aReader);
     IsWeaponDrawn = Serialization::ReadBool(aReader);
     LeveledNpcPickId.Deserialize(aReader);
 }

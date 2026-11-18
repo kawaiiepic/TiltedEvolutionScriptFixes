@@ -4,6 +4,7 @@
 #error Include Components.h instead
 #endif
 
+#include <Campaign/PluginFormKey.h>
 #include <Structs/Tints.h>
 #include <Structs/Factions.h>
 
@@ -86,4 +87,6 @@ struct CharacterComponent
     Factions FactionsContent{};
     uint16_t Flags{};
     int32_t PlayerId{};
+    std::optional<Campaign::PluginFormKey> CampaignDeathKey;
+    bool HasCampaignDeath{};
 };

@@ -111,6 +111,9 @@ void ActorValueService::OnDeathStateChange(const PacketEvent<RequestDeathStateCh
         return;
 
     auto& characterComponent = characterView.get<CharacterComponent>(*it);
+    if (characterComponent.IsDead() == message.IsDead ||
+        !m_world.GetCharacterService().CommitNpcDeath(characterComponent, message.IsDead))
+        return;
     characterComponent.SetDead(message.IsDead);
     spdlog::debug("Updating death state {:x}:{}", message.Id, message.IsDead);
 

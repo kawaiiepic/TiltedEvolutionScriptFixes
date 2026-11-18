@@ -45,6 +45,8 @@
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
+    , m_npcLifePolicies("shared-npc-life-policies.conf")
+    , m_npcLife("shared-npc-life.log")
     , m_updateConnection(aDispatcher.sink<UpdateEvent>().connect<&CharacterService::OnUpdate>(this))
     , m_interiorCellChangeEventConnection(aDispatcher.sink<CharacterInteriorCellChangeEvent>().connect<&CharacterService::OnCharacterInteriorCellChange>(this))
     , m_exteriorCellChangeEventConnection(aDispatcher.sink<CharacterExteriorCellChangeEvent>().connect<&CharacterService::OnCharacterExteriorCellChange>(this))
@@ -64,6 +66,8 @@ CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher)
     , m_dialogueConnection(aDispatcher.sink<PacketEvent<DialogueRequest>>().connect<&CharacterService::OnDialogueRequest>(this))
     , m_subtitleConnection(aDispatcher.sink<PacketEvent<SubtitleRequest>>().connect<&CharacterService::OnSubtitleRequest>(this))
 {
+    if (!m_npcLifePolicies.IsHealthy() || !m_npcLife.IsHealthy())
+        spdlog::error("Could not load NPC life policies or shared-npc-life.log");
 }
 
 void CharacterService::Serialize(World& aRegistry, entt::entity aEntity, CharacterSpawnRequest* apSpawnRequest) noexcept
@@ -308,7 +312,7 @@ void CharacterService::OnOwnershipTransferRequest(const PacketEvent<RequestOwner
     if (message.Reason == OwnershipReleaseReason::Relinquish)
         ownerComponent.InvalidOwners.clear();
 
-    ownerComponent.InvalidOwners.push_back(acMessage.pPlayer);
+    ownerComponent.InvalidOwners.push_back(acMessage.pPlayer->GetId());
 
     TransferToNextOwner(cEntity, OwnershipTransferReason::Relinquish);
 }
@@ -544,12 +548,14 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
 
     auto& ownerComponent = view.get<OwnerComponent>(*it);
 
-    // Replay cache needs to be cleared when a character respawns
-    if (auto* pAnimationComponent = m_world.try_get<AnimationComponent>(*it))
-        pAnimationComponent->ActionsReplayCache.Clear();
+    if (!acMessage.Packet.OwnershipEpoch || acMessage.Packet.OwnershipEpoch != ownerComponent.OwnershipEpoch)
+        return;
 
     if (ownerComponent.GetOwner() == acMessage.pPlayer)
     {
+        if (auto* pAnimation = m_world.try_get<AnimationComponent>(*it))
+            pAnimation->ActionsReplayCache.Clear();
+
         if (!acMessage.Packet.AppearanceBuffer.empty())
         {
             auto& characterComponent = view.get<CharacterComponent>(*it);
@@ -557,17 +563,19 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
             characterComponent.ChangeFlags = acMessage.Packet.ChangeFlags;
         }
 
-        NotifyRespawn notify;
+        NotifyRespawn notify{};
         notify.ActorId = acMessage.Packet.ActorId;
-
+        notify.OwnershipEpoch = ownerComponent.OwnershipEpoch;
         if (!GameServer::Get()->SendToPlayersInRange(notify, *it, acMessage.GetSender()))
             spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
     }
     else
     {
-        CharacterSpawnRequest message;
+        const auto* pCell = m_world.try_get<CellIdComponent>(*it);
+        if (!pCell || !pCell->IsInRange(acMessage.pPlayer->GetCellComponent(), view.get<CharacterComponent>(*it).IsDragon()))
+            return;
+        CharacterSpawnRequest message{};
         Serialize(m_world, *it, &message);
-
         acMessage.GetSender()->Send(message);
     }
 }
@@ -675,6 +683,20 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     characterComponent.SetMount(message.IsMount);
     characterComponent.SetPlayerSummon(message.IsPlayerSummon);
 
+    if (!isCustom && !message.IsMount && !message.IsPlayerSummon && !message.LeveledNpcPickId)
+    {
+        const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(gameId, *acMessage.pPlayer);
+        if (key && m_npcLifePolicies.IsShared(*key, false))
+        {
+            characterComponent.CampaignDeathKey = key;
+            if (const auto dead = m_npcLife.GetDeathState(*key))
+            {
+                characterComponent.SetDead(*dead);
+                characterComponent.HasCampaignDeath = true;
+            }
+        }
+    }
+
     auto& inventoryComponent = m_world.emplace<InventoryComponent>(cEntity);
     inventoryComponent.Content = message.CurrentActorData.InitialInventory;
 
@@ -714,6 +736,19 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     dispatcher.trigger(CharacterSpawnedEvent(cEntity));
 }
 
+bool CharacterService::CommitNpcDeath(CharacterComponent& aCharacter, bool aDead) noexcept
+{
+    if (!aCharacter.CampaignDeathKey)
+        return true;
+    if (!m_npcLife.SetDeathState(*aCharacter.CampaignDeathKey, aDead))
+    {
+        spdlog::warn("Could not record NPC life state in shared-npc-life.log");
+        return false;
+    }
+    aCharacter.HasCampaignDeath = true;
+    return true;
+}
+
 void CharacterService::PopulateAssignmentResponse(const entt::entity aEntity, AssignCharacterResponse& aResponse) const noexcept
 {
     aResponse.ServerId = World::ToInteger(aEntity);
@@ -731,6 +766,7 @@ void CharacterService::PopulateAssignmentResponse(const entt::entity aEntity, As
     {
         aResponse.PlayerId = pCharacterComponent->PlayerId;
         aResponse.IsDead = pCharacterComponent->IsDead();
+        aResponse.HasCampaignDeath = pCharacterComponent->HasCampaignDeath;
         aResponse.IsWeaponDrawn = pCharacterComponent->IsWeaponDrawn();
         aResponse.LeveledNpcPickId = pCharacterComponent->LeveledNpcPickId.Id;
 
@@ -895,7 +931,7 @@ void CharacterService::TransferToNextOwner(const entt::entity aEntity, const Own
         if (pPlayer == ownerComponent.GetOwner())
             continue;
 
-        if (std::find(ownerComponent.InvalidOwners.begin(), ownerComponent.InvalidOwners.end(), pPlayer) != ownerComponent.InvalidOwners.end())
+        if (std::find(ownerComponent.InvalidOwners.begin(), ownerComponent.InvalidOwners.end(), pPlayer->GetId()) != ownerComponent.InvalidOwners.end())
             continue;
 
         if (!pPlayer->GetCellComponent().IsInRange(cellIdComponent, characterComponent.IsDragon()))
@@ -931,6 +967,7 @@ ActorData CharacterService::BuildActorData(const entt::entity acEntity) const no
     if (pCharacterComponent)
     {
         actorData.IsDead = pCharacterComponent->IsDead();
+        actorData.HasCampaignDeath = pCharacterComponent->HasCampaignDeath;
         actorData.IsWeaponDrawn = pCharacterComponent->IsWeaponDrawn();
     }
 
