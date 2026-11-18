@@ -2,6 +2,7 @@
 #include "Events/CharacterExteriorCellChangeEvent.h"
 #include "Events/PlayerLeaveCellEvent.h"
 #include "Events/PlayerLeaveEvent.h"
+#include "Events/PlayerJoinEvent.h"
 
 #include <Services/PlayerService.h>
 #include <Services/CharacterService.h>
@@ -13,6 +14,7 @@
 #include <Messages/CharacterSpawnRequest.h>
 #include <Messages/PlayerRespawnRequest.h>
 #include <Messages/NotifyInventoryChanges.h>
+#include <Messages/NotifyPlayerDowned.h>
 #include <Messages/NotifyPlayerRespawn.h>
 #include <Messages/NotifyRespawn.h>
 #include <Messages/PlayerLevelRequest.h>
@@ -21,22 +23,38 @@
 #include <Messages/NotifyTeleport.h>
 #include <Messages/RequestCarriageTravel.h>
 #include <Structs/CarriageTravel.h>
+#include <Structs/PlayerRevive.h>
 
+#include <algorithm>
+#include <cmath>
 #include <Setting.h>
+
 namespace
 {
-Console::Setting fGoldLossFactor{"Gameplay:fGoldLossFactor", "How much of their gold players lose on death, from 0 to 1 (e.g. 0.05 loses 5%, 0 loses nothing)", 0.0f};
+constexpr float kDefaultGoldLossFactor = 0.10f;
+using RecoveryState = CharacterComponent::RecoveryState;
+
+Console::Setting fGoldLossFactor{"Gameplay:fGoldLossFactor", "Gold lost on self-respawn. Values up to 1 are fractions of carried gold, values above 1 are flat amounts, and 0 disables the fee.", kDefaultGoldLossFactor};
+
+void BroadcastDowned(entt::entity aCharacter, uint32_t aDownId, const Player* apExcept = nullptr) noexcept
+{
+    NotifyPlayerDowned notify{};
+    notify.ActorId = World::ToInteger(aCharacter);
+    notify.DownId = aDownId;
+    GameServer::Get()->SendToPlayers(notify, apExcept);
+}
 }
 
 PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
-    , m_interiorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterInteriorCellRequest>>().connect<&PlayerService::HandleInteriorCellEnter>(this))
     , m_gridCellShiftConnection(aDispatcher.sink<PacketEvent<ShiftGridCellRequest>>().connect<&PlayerService::HandleGridCellShift>(this))
     , m_exteriorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterExteriorCellRequest>>().connect<&PlayerService::HandleExteriorCellEnter>(this))
+    , m_interiorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterInteriorCellRequest>>().connect<&PlayerService::HandleInteriorCellEnter>(this))
     , m_playerRespawnConnection(aDispatcher.sink<PacketEvent<PlayerRespawnRequest>>().connect<&PlayerService::OnPlayerRespawnRequest>(this))
     , m_playerLevelConnection(aDispatcher.sink<PacketEvent<PlayerLevelRequest>>().connect<&PlayerService::OnPlayerLevelRequest>(this))
     , m_carriageTravelConnection(aDispatcher.sink<PacketEvent<RequestCarriageTravel>>().connect<&PlayerService::OnCarriageTravel>(this))
     , m_playerLeaveConnection(aDispatcher.sink<PlayerLeaveEvent>().connect<&PlayerService::OnPlayerLeave>(this))
+    , m_playerJoinConnection(aDispatcher.sink<PlayerJoinEvent>().connect<&PlayerService::OnPlayerJoin>(this))
 {
 }
 
@@ -101,6 +119,34 @@ void PlayerService::OnCarriageTravel(const PacketEvent<RequestCarriageTravel>& a
 void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
     m_carriageBoardings.erase(acEvent.pPlayer->GetId());
+    if (const auto character = acEvent.pPlayer->GetCharacter())
+    {
+        auto* pCharacter = m_world.try_get<CharacterComponent>(*character);
+        if (pCharacter && pCharacter->Recovery == RecoveryState::Downed)
+        {
+            pCharacter->Recovery = RecoveryState::Standing;
+            BroadcastDowned(*character, 0, acEvent.pPlayer);
+        }
+    }
+}
+
+void PlayerService::OnPlayerJoin(const PlayerJoinEvent& acEvent) const noexcept
+{
+    if (!GameServer::Get()->HasDeathSystem())
+        return;
+
+    const auto characters = m_world.view<const CharacterComponent>();
+    for (const auto entity : characters)
+    {
+        const auto& character = characters.get<const CharacterComponent>(entity);
+        if (character.Recovery == RecoveryState::Downed)
+        {
+            NotifyPlayerDowned notify{};
+            notify.ActorId = World::ToInteger(entity);
+            notify.DownId = character.DownId;
+            acEvent.pPlayer->Send(notify);
+        }
+    }
 }
 
 void SendPlayerCellChanged(const Player* apPlayer) noexcept
@@ -214,57 +260,121 @@ void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellR
 
 void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnRequest>& acMessage) const noexcept
 {
-    float goldLossFactor = fGoldLossFactor.as_float();
-
-    auto character = acMessage.pPlayer->GetCharacter();
-    if (!character)
+    const auto& request = acMessage.Packet;
+    const Player& sender = *acMessage.pPlayer;
+    const auto entity = sender.GetCharacter();
+    if (!entity || !request.DownId)
+        return;
+    if (!GameServer::Get()->HasDeathSystem() && request.Action != PlayerRespawnRequest::Recovered)
         return;
 
-    auto view = m_world.view<InventoryComponent>();
+    auto* pSenderCharacter = m_world.try_get<CharacterComponent>(*entity);
+    const auto* pSenderOwner = m_world.try_get<OwnerComponent>(*entity);
+    if (!pSenderCharacter || !pSenderCharacter->IsPlayer() || !pSenderOwner || pSenderOwner->GetOwner() != &sender)
+        return;
 
-    const auto it = view.find(static_cast<entt::entity>(*character));
-
-    if (it != view.end())
+    if (request.Action == PlayerRespawnRequest::Revive)
     {
-        if (goldLossFactor != 0.0)
-        {
-            auto& inventoryComponent = view.get<InventoryComponent>(*it);
+        const auto target = static_cast<entt::entity>(request.TargetId);
+        if (target == *entity || pSenderCharacter->IsDead() || pSenderCharacter->Recovery != RecoveryState::Standing)
+            return;
 
-            GameId goldId(0, 0xF);
-            int32_t goldCount = inventoryComponent.Content.GetEntryCountById(goldId);
-            int32_t goldToRemove = static_cast<int32_t>(goldCount * goldLossFactor);
+        auto* pDowned = m_world.try_get<CharacterComponent>(target);
+        const auto* pOwner = m_world.try_get<OwnerComponent>(target);
+        const Player* pTargetPlayer = pOwner ? pOwner->GetOwner() : nullptr;
+        if (!pDowned || !pDowned->IsPlayer() || pDowned->Recovery != RecoveryState::Downed || pDowned->DownId != request.DownId ||
+            !pTargetPlayer || pTargetPlayer->GetCharacter() != target)
+            return;
 
-            Inventory::Entry entry{};
-            entry.BaseId = goldId;
-            entry.Count = -goldToRemove;
+        const auto& senderCell = sender.GetCellComponent();
+        const auto& targetCell = pTargetPlayer->GetCellComponent();
+        if (!senderCell.Cell || senderCell.Cell != targetCell.Cell || senderCell.WorldSpaceId != targetCell.WorldSpaceId)
+            return;
 
-            inventoryComponent.Content.AddOrRemoveEntry(entry);
+        const auto* pSenderMove = m_world.try_get<MovementComponent>(*entity);
+        const auto* pTargetMove = m_world.try_get<MovementComponent>(target);
+        if (!pSenderMove || !pTargetMove)
+            return;
+        const auto delta = pSenderMove->Position - pTargetMove->Position;
+        if (!(glm::dot(delta, delta) <= PlayerRevive::kDistance * PlayerRevive::kDistance))
+            return;
 
-            NotifyInventoryChanges notifyInventoryChanges{};
-            notifyInventoryChanges.ServerId = World::ToInteger(*character);
-            if (const auto* pOwnerComponent = m_world.try_get<OwnerComponent>(*character))
-                notifyInventoryChanges.OwnershipEpoch = pOwnerComponent->OwnershipEpoch;
-            notifyInventoryChanges.Item = entry;
-            notifyInventoryChanges.Drop = false;
-
-            // Exclude respawned player from inventory changes notification...
-            if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
-                spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
-
-            // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
-            NotifyPlayerRespawn notifyPlayerRespawn{};
-            notifyPlayerRespawn.GoldLost = goldToRemove;
-
-            acMessage.pPlayer->Send(notifyPlayerRespawn);
-        }
-
-        // Let all other players in cell respawn this player, since the body state seems to be bugged otherwise
-        NotifyRespawn notifyRespawn{};
-        notifyRespawn.ActorId = World::ToInteger(*character);
-
-        if (!GameServer::Get()->SendToPlayersInRange(notifyRespawn, *character, acMessage.GetSender()))
-            spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+        pDowned->Recovery = RecoveryState::Recovering;
+        GrantRecovery(*pTargetPlayer, target, request.DownId, true);
+        return;
     }
+
+    switch (request.Action)
+    {
+    case PlayerRespawnRequest::Downed:
+        if (pSenderCharacter->Recovery != RecoveryState::Standing || request.DownId <= pSenderCharacter->DownId)
+            return;
+        pSenderCharacter->DownId = request.DownId;
+        pSenderCharacter->DownedAt = std::chrono::steady_clock::now();
+        pSenderCharacter->Recovery = RecoveryState::Downed;
+        BroadcastDowned(*entity, request.DownId);
+        break;
+    case PlayerRespawnRequest::Respawn:
+        if (pSenderCharacter->Recovery != RecoveryState::Downed || pSenderCharacter->DownId != request.DownId ||
+            std::chrono::steady_clock::now() - pSenderCharacter->DownedAt < std::chrono::seconds(GameServer::GetPlayerRespawnDelay()))
+            return;
+        pSenderCharacter->Recovery = RecoveryState::Recovering;
+        GrantRecovery(sender, *entity, request.DownId, false);
+        break;
+    case PlayerRespawnRequest::Recovered:
+        if (pSenderCharacter->Recovery == RecoveryState::Standing || pSenderCharacter->DownId != request.DownId)
+            return;
+        if (pSenderCharacter->Recovery == RecoveryState::Downed)
+            BroadcastDowned(*entity, 0);
+        pSenderCharacter->Recovery = RecoveryState::Standing;
+        if (auto* pAnimation = m_world.try_get<AnimationComponent>(*entity))
+            pAnimation->ActionsReplayCache.Clear();
+
+        // Refresh observers after the owner has left native bleedout.
+        {
+            NotifyRespawn notify{};
+            notify.ActorId = World::ToInteger(*entity);
+            notify.OwnershipEpoch = pSenderOwner->OwnershipEpoch;
+            GameServer::Get()->SendToPlayersInRange(notify, *entity, &sender);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void PlayerService::GrantRecovery(const Player& acPlayer, entt::entity aCharacter, uint32_t aDownId, bool aRevived) const noexcept
+{
+    NotifyPlayerRespawn grant{};
+    grant.DownId = aDownId;
+    grant.Revived = aRevived;
+
+    const double cGoldLossFactor = fGoldLossFactor.as_float();
+    if (!aRevived && std::isfinite(cGoldLossFactor) && cGoldLossFactor > 0.0)
+    {
+        const auto& mods = m_world.ctx().at<ModsComponent>();
+        auto goldId = mods.FindFormId({"Skyrim.esm", false, 0xF});
+        auto* pInventory = m_world.try_get<InventoryComponent>(aCharacter);
+        if (goldId && pInventory)
+        {
+            const int32_t cGoldCount = pInventory->Content.GetEntryCountById(*goldId);
+            if (cGoldCount > 0)
+            {
+                const double cLoss = cGoldLossFactor <= 1.0 ? cGoldCount * cGoldLossFactor : cGoldLossFactor;
+                grant.GoldLost = std::max(1, static_cast<int32_t>(std::min<double>(cGoldCount, cLoss)));
+                NotifyInventoryChanges notify{};
+                notify.ServerId = World::ToInteger(aCharacter);
+                notify.OwnershipEpoch = m_world.get<OwnerComponent>(aCharacter).OwnershipEpoch;
+                notify.Item.BaseId = *goldId;
+                notify.Item.Count = -grant.GoldLost;
+                pInventory->Content.AddOrRemoveEntry(notify.Item);
+                GameServer::Get()->SendToPlayersInRange(notify, aCharacter, &acPlayer);
+            }
+        }
+    }
+
+    BroadcastDowned(aCharacter, 0);
+    acPlayer.Send(grant);
 }
 
 void PlayerService::OnPlayerLevelRequest(const PacketEvent<PlayerLevelRequest>& acMessage) const noexcept

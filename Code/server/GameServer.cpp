@@ -20,6 +20,8 @@
 #include <resources/ResourceCollection.h>
 #include <Services/QuestService.h>
 
+#include <algorithm>
+
 constexpr size_t kMaxServerNameLength = 128u;
 
 // -- Cvars --
@@ -39,6 +41,7 @@ Console::Setting bEnableGreetings{"Gameplay:bEnableGreetings", "Enables NPC gree
 Console::Setting bEnablePvp{"Gameplay:bEnablePvp", "Enables pvp", false};
 Console::Setting bSyncPlayerHomes{"Gameplay:bSyncPlayerHomes", "Sync chests and displays in player homes and other NoResetZones", false};
 Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the custom multiplayer death system. Only disable it if you use another mod that replaces death", true};
+Console::Setting uPlayerRespawnDelay{"Gameplay:uPlayerRespawnDelay", "Seconds to wait for a revive before automatically respawning (1 to 120)", 30u, Console::SettingsFlags::kLocked};
 Console::Setting uTimeScale{"Gameplay:uTimeScale", "How many seconds pass ingame for every real second (0 to 1000). Changing this can make the game unstable", 20u};
 Console::Setting bSyncPlayerCalendar{"Gameplay:bSyncPlayerCalendar", "Syncs up all player calendars to be the same day, month, and year. This uses the date of the player with the furthest ahead date at connection.", false};
 Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Share combat skill XP within a party", false, Console::SettingsFlags::kLocked};
@@ -141,6 +144,7 @@ ServerSettings GetSettings()
     settings.PvpEnabled = bEnablePvp;
     settings.SyncPlayerHomes = bSyncPlayerHomes;
     settings.DeathSystemEnabled = bEnableDeathSystem;
+    settings.PlayerRespawnDelay = GameServer::GetPlayerRespawnDelay();
     settings.SyncPlayerCalendar = bSyncPlayerCalendar;
     settings.AutoPartyJoin = bAutoPartyJoin;
     settings.ShareCombatExperience = bEnableXpSync;
@@ -212,6 +216,16 @@ bool GameServer::IsPublicServer() const noexcept
 bool GameServer::SharesCombatExperience() const noexcept
 {
     return bEnableXpSync;
+}
+
+bool GameServer::HasDeathSystem() const noexcept
+{
+    return bEnableDeathSystem;
+}
+
+uint32_t GameServer::GetPlayerRespawnDelay() noexcept
+{
+    return std::clamp(uPlayerRespawnDelay.value_as<uint32_t>(), 1u, 120u);
 }
 
 bool GameServer::AllowsAutoPartyJoin() const noexcept

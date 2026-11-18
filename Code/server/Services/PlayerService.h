@@ -10,6 +10,8 @@ struct ShiftGridCellRequest;
 struct EnterInteriorCellRequest;
 struct EnterExteriorCellRequest;
 struct PlayerRespawnRequest;
+struct Player;
+struct PlayerJoinEvent;
 struct PlayerLevelRequest;
 struct PlayerLeaveEvent;
 struct RequestCarriageTravel;
@@ -32,6 +34,7 @@ protected:
     void OnPlayerLevelRequest(const PacketEvent<PlayerLevelRequest>& acMessage) const noexcept;
     void OnCarriageTravel(const PacketEvent<RequestCarriageTravel>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
+    void OnPlayerJoin(const PlayerJoinEvent& acEvent) const noexcept;
 
 private:
     struct CarriageBoarding
@@ -46,6 +49,8 @@ private:
     World& m_world;
     std::unordered_map<uint32_t, CarriageBoarding> m_carriageBoardings;
 
+    void GrantRecovery(const Player& acPlayer, entt::entity aCharacter, uint32_t aDownId, bool aRevived) const noexcept;
+
     entt::scoped_connection m_gridCellShiftConnection;
     entt::scoped_connection m_exteriorCellEnterConnection;
     entt::scoped_connection m_interiorCellEnterConnection;
@@ -53,4 +58,5 @@ private:
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_carriageTravelConnection;
     entt::scoped_connection m_playerLeaveConnection;
+    entt::scoped_connection m_playerJoinConnection;
 };

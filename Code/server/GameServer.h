@@ -67,6 +67,8 @@ struct GameServer final : Server
     [[nodiscard]] bool IsPublicServer() const noexcept;
     [[nodiscard]] bool AllowsAutoPartyJoin() const noexcept;
     [[nodiscard]] bool SharesCombatExperience() const noexcept;
+    [[nodiscard]] bool HasDeathSystem() const noexcept;
+    [[nodiscard]] static uint32_t GetPlayerRespawnDelay() noexcept;
 
     struct Uptime
     {

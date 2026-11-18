@@ -7,9 +7,17 @@
 #include <Campaign/PluginFormKey.h>
 #include <Structs/Tints.h>
 #include <Structs/Factions.h>
+#include <chrono>
 
 struct CharacterComponent
 {
+    enum class RecoveryState : uint8_t
+    {
+        Standing,
+        Downed,
+        Recovering
+    };
+
     enum
     {
         kIsDirtyFactions = 1 << 0,
@@ -87,6 +95,9 @@ struct CharacterComponent
     Factions FactionsContent{};
     uint16_t Flags{};
     int32_t PlayerId{};
+    uint32_t DownId{};
+    std::chrono::steady_clock::time_point DownedAt{};
+    RecoveryState Recovery{RecoveryState::Standing};
     std::optional<Campaign::PluginFormKey> CampaignDeathKey;
     bool HasCampaignDeath{};
 };
