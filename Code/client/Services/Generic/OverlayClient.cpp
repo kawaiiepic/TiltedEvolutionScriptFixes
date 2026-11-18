@@ -29,6 +29,12 @@ OverlayClient::~OverlayClient() noexcept
 {
 }
 
+void OverlayClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
+    TiltedPhoques::OverlayClient::OnAfterCreated(browser);
+    spdlog::info("Skyrim Together CEF browser created");
+}
+
 bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source_process, CefRefPtr<CefProcessMessage> message)
 {
     if (message->GetName() == "ui-event")
@@ -46,7 +52,10 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 #endif
 
         if (eventName == "uiReady")
+        {
+            spdlog::info("Skyrim Together frontend uiReady received");
             World::Get().GetRunner().Queue([]() { World::Get().GetOverlayService().OnBrowserReady(); });
+        }
         else if (eventName == "connect")
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")

@@ -25,6 +25,7 @@
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
 
+#include <Games/Skyrim/Interface/UI.h>
 #include <ModCompat/BehaviorVar.h>  
 
 World::World()
@@ -32,6 +33,7 @@ World::World()
     , m_transport(*this, m_dispatcher)
     , m_modSystem(m_dispatcher)
     , m_lastFrameTime{std::chrono::high_resolution_clock::now()}
+    , m_gameThreadId{GetCurrentThreadId()}
 {
     ctx().emplace<ImguiService>();
     ctx().emplace<DiscoveryService>(*this, m_dispatcher);
@@ -60,8 +62,20 @@ World::World()
 
 World::~World() = default;
 
+namespace
+{
+struct UpdateGuard
+{
+    std::atomic_flag& Flag;
+    ~UpdateGuard() { Flag.clear(std::memory_order_release); }
+};
+}
+
 void World::Update() noexcept
 {
+    m_lastRegularUpdate.store(GetTickCount64(), std::memory_order_relaxed);
+    if (m_updating.test_and_set(std::memory_order_acquire)) return;
+    const UpdateGuard guard{m_updating};
     const auto cNow = std::chrono::high_resolution_clock::now();
     const auto cDelta = cNow - m_lastFrameTime;
     m_lastFrameTime = cNow;
@@ -73,6 +87,43 @@ void World::Update() noexcept
     // Force run this before so we get the tasks scheduled to run
     m_runner.OnUpdate(UpdateEvent(cDeltaSeconds));
     m_dispatcher.trigger(UpdateEvent(cDeltaSeconds));
+}
+
+void World::PumpMainMenu() noexcept
+{
+    if (entt::locator<World>::has_value())
+        Get().UpdateMainMenu();
+}
+
+void World::UpdateMainMenu() noexcept
+{
+    // Use only the game thread. A window/engine callback may be nested
+    // inside the normal VM update, so serialize the two paths.
+    if (GetCurrentThreadId() != m_gameThreadId) return;
+    const uint64_t now = GetTickCount64();
+    if (now - m_lastRegularUpdate.load(std::memory_order_relaxed) < 100 ||
+        now - m_lastMenuUpdate < 30) return;
+    if (m_updating.test_and_set(std::memory_order_acquire)) return;
+    const UpdateGuard guard{m_updating};
+    auto& overlay = GetOverlayService();
+    if (!overlay.GetOverlayApp() || m_transport.IsOnline()) return;
+    const auto* ui = UI::Get();
+    if (!ui || (!ui->GetMenuOpen("Main Menu") && !overlay.GetMainMenu())) return;
+
+    m_lastMenuUpdate = now;
+    const auto frame = std::chrono::high_resolution_clock::now();
+    const double delta = std::chrono::duration<double>(frame - m_lastFrameTime).count();
+    m_lastFrameTime = frame;
+    if (!m_loggedMenuPump)
+    {
+        m_loggedMenuPump = true;
+        spdlog::info("Skyrim Together pre-game lobby pump running without Papyrus VM updates");
+    }
+    // Only pump queued work, lobby/checkpoint packets and menu UI.
+    // Gameplay PreUpdateEvent/UpdateEvent subscribers require a loaded world.
+    m_runner.OnUpdate(UpdateEvent(delta));
+    m_transport.Poll();
+    overlay.UpdateMainMenu();
 }
 
 RunnerService& World::GetRunner() noexcept

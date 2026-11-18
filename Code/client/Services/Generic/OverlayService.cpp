@@ -51,6 +51,27 @@
 using TiltedPhoques::OverlayRenderHandler;
 using TiltedPhoques::OverlayRenderHandlerD3D11;
 
+namespace
+{
+struct SkyrimOverlayApp final : OverlayApp
+{
+    using OverlayApp::OverlayApp;
+
+    void OnBeforeCommandLineProcessing(const CefString& aProcessType, CefRefPtr<CefCommandLine> aCommandLine) override
+    {
+        OverlayApp::OnBeforeCommandLineProcessing(aProcessType, aCommandLine);
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        if (ntdll && GetProcAddress(ntdll, "wine_get_version"))
+        {
+            aCommandLine->AppendSwitch("disable-gpu");
+            aCommandLine->AppendSwitch("disable-gpu-compositing");
+            if (aProcessType.empty())
+                spdlog::info("Overlay: CEF draws the UI on the CPU under Wine");
+        }
+    }
+};
+}
+
 struct D3D11RenderProvider final : OverlayApp::RenderProvider, OverlayRenderHandlerD3D11::Renderer
 {
     explicit D3D11RenderProvider(RenderSystemD3D11* apRenderSystem)
@@ -146,7 +167,7 @@ OverlayService::~OverlayService() noexcept
 void OverlayService::Create(RenderSystemD3D11* apRenderSystem) noexcept
 {
     m_pProvider = TiltedPhoques::MakeUnique<D3D11RenderProvider>(apRenderSystem);
-    m_pOverlay = new OverlayApp(m_pProvider.get(), new ::OverlayClient(m_transport, m_pProvider->Create()));
+    m_pOverlay = new SkyrimOverlayApp(m_pProvider.get(), new ::OverlayClient(m_transport, m_pProvider->Create()));
 
     spdlog::info("Initializing Skyrim Together browser overlay");
     m_browserReady = false;
@@ -159,7 +180,11 @@ void OverlayService::Create(RenderSystemD3D11* apRenderSystem) noexcept
         }
     }
 
+    else
+        spdlog::info("Skyrim Together browser creation requested");
+
     m_pOverlay->GetClient()->Create();
+    spdlog::info("Skyrim Together overlay render resources initialized");
 }
 
 void OverlayService::Render() noexcept
@@ -296,7 +321,7 @@ void OverlayService::SetPlayerHealthPercentage(uint32_t aFormId) const noexcept
 
 void OverlayService::OnBrowserReady() noexcept
 {
-    if (!m_pOverlay) return;
+    if (!m_pOverlay || m_browserReady) return;
     m_browserReady = true;
     spdlog::info("Skyrim Together frontend ready");
     Initialize();
@@ -337,7 +362,7 @@ void OverlayService::OnServerLobbyEvent(const ServerLobbyEvent& acEvent) noexcep
         m_pOverlay->ExecuteAsync("disconnect");
 }
 
-void OverlayService::OnUpdate(const UpdateEvent&) noexcept
+void OverlayService::UpdateMainMenu() noexcept
 {
     if (!m_pOverlay)
         return;
@@ -346,6 +371,9 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
     if (m_mainMenu != mainMenu)
     {
         m_mainMenu = mainMenu;
+        m_menuOpenRequested = false;
+        m_browserWaitLogged = false;
+        m_mainMenuSince = std::chrono::steady_clock::now();
         spdlog::info("Skyrim Together main menu: {}", m_mainMenu);
         auto args = CefListValue::Create();
         args->SetBool(0, m_mainMenu);
@@ -360,15 +388,34 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
         }
     }
     MainMenuBridge::Tick(m_mainMenu);
-    if (m_mainMenu && m_browserReady)
+    if (m_mainMenu)
     {
-        const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
         if (MainMenuBridge::ConsumePlayRequest())
-            InputService::SetOverlayActive(*this, true);
-        InputService::PollMainMenuHotkey(*this, window);
+        {
+            m_menuOpenRequested = true;
+            spdlog::info("Native Play request queued");
+        }
+        if (m_browserReady)
+        {
+            const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
+            if (m_menuOpenRequested && InputService::SetOverlayActive(*this, true))
+                m_menuOpenRequested = false;
+            InputService::PollMainMenuHotkey(*this, window);
+        }
+        else if (!m_browserWaitLogged && std::chrono::steady_clock::now() - m_mainMenuSince >= std::chrono::seconds(5))
+        {
+            m_browserWaitLogged = true;
+            spdlog::warn("Main menu is open but the frontend has not sent uiReady; check logs/cef_debug.log and the packaged UI/TPProcess.exe");
+        }
     }
     else
         InputService::PollMainMenuHotkey(*this, nullptr);
+}
+
+void OverlayService::OnUpdate(const UpdateEvent&) noexcept
+{
+    if (!m_pOverlay) return;
+    UpdateMainMenu();
     if (m_mainMenu && !m_transport.IsOnline()) return;
     RefreshDialogueSession();
     PublishDialogueOptions();

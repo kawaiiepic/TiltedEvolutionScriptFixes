@@ -18,6 +18,8 @@ namespace
 static RenderSystemD3D11* g_sRs = nullptr;
 static WNDPROC RealWndProc = nullptr;
 static RendererWindow* g_RenderWindow = nullptr;
+static HWND s_menuPumpWindow = nullptr;
+static UINT_PTR s_menuPumpTimer = 0;
 
 static constexpr char kTogetherWindowName[]{"Skyrim Together"};
 
@@ -37,6 +39,20 @@ void (*Renderer_Init)(Renderer*, BSGraphics::RendererInitOSData*, const BSGraphi
 // WNDPROC seems to be part of the renderer
 LRESULT CALLBACK Hook_WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if (hwnd == s_menuPumpWindow && s_menuPumpTimer)
+    {
+        if (uMsg == WM_TIMER && wParam == s_menuPumpTimer)
+        {
+            World::PumpMainMenu();
+            return 0;
+        }
+        if (uMsg == WM_NCDESTROY)
+        {
+            KillTimer(hwnd, s_menuPumpTimer);
+            s_menuPumpTimer = 0;
+            s_menuPumpWindow = nullptr;
+        }
+    }
     if (InputService::WndProc(hwnd, uMsg, wParam, lParam) != 0)
         return 0;
 
@@ -63,6 +79,19 @@ void Hook_Renderer_Init(Renderer* self, BSGraphics::RendererInitOSData* aOSData,
     const BSGraphics::RendererData& renderer = self->Data;
 
     g_sRs->OnDeviceCreation(renderer.RenderWindowA[0].pSwapChain, renderer.pForwarder, renderer.pContext);
+
+    // Some title-screen loops do not invoke the VM hook. A window timer
+    // uses the existing window procedure rather than a render/worker thread.
+    if (s_menuPumpTimer && s_menuPumpWindow)
+        KillTimer(s_menuPumpWindow, s_menuPumpTimer);
+    s_menuPumpWindow = g_RenderWindow->hWnd;
+    s_menuPumpTimer = s_menuPumpWindow
+        ? SetTimer(s_menuPumpWindow, reinterpret_cast<UINT_PTR>(&s_menuPumpTimer), 50, nullptr)
+        : 0;
+    if (s_menuPumpTimer)
+        spdlog::info("Skyrim Together main-menu window timer installed");
+    else
+        spdlog::warn("Skyrim Together main-menu window timer unavailable");
 }
 
 void (*StopTimer)(int) = nullptr;

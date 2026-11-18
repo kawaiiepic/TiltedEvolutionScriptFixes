@@ -32,6 +32,8 @@ struct TransportService : Client
     void OnConnected() override;
     void OnDisconnected(EDisconnectReason aReason) override;
     void OnUpdate() override;
+    // Poll the same transport/checkpoint path before a character is loaded.
+    void Poll() noexcept;
 
     // The base transport may be connected while the character lobby is
     // open. Gameplay must only observe a completed world entry.

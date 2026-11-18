@@ -245,7 +245,12 @@ double TransportService::GetMessageReceiveTime() const noexcept
     return static_cast<double>(GetCurrentMessageReceiveTime()) / 1000.0;
 }
 
-void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
+void TransportService::HandleUpdate(const UpdateEvent&) noexcept
+{
+    Poll();
+}
+
+void TransportService::Poll() noexcept
 {
     // Taken before polling, so that every message that arrived before this time gets handled by this update
     m_lastPollTime = static_cast<double>(SteamNetworkingUtils()->GetLocalTimestamp()) / 1000.0;

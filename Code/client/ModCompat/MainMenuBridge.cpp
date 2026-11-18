@@ -44,6 +44,8 @@ std::atomic<StartState> s_start{StartState::Idle};
 InvokeNoReturn s_invoke{};
 void** s_slot{};
 bool s_attempted{};
+unsigned int s_protocolProbeFrames{};
+bool s_playResetWarned{};
 std::mutex s_movieLock;
 
 bool Accessible(const void* p, size_t size, bool executable = false) noexcept
@@ -71,9 +73,8 @@ template <typename T> T MovieFunction(void* pMovie, size_t aIndex) noexcept
 
 bool ReadBool(void* pMovie, const char* name, bool& result) noexcept
 {
-    const auto available = MovieFunction<IsAvailable>(pMovie, kIsAvailable);
     const auto get = MovieFunction<GetVariable>(pMovie, kGetVariable);
-    if (!available || !get || !available(pMovie, name)) return false;
+    if (!get) return false;
     PrimitiveValue value{};
     value.Type = 0x82; // GFxValue::kConvertBoolean: never acquire a managed string/object.
     if (!get(pMovie, &value, name) || value.Type != 2 || value.Interface) return false;
@@ -105,13 +106,26 @@ void HookAdvance(IMenu* pMenu, float interval, uint32_t time)
     if (!ReadBool(movie, kProtocol, patched) || !patched)
     {
         s_ready.store(false);
+        if (s_protocolProbeFrames < 120 && ++s_protocolProbeFrames == 120)
+            spdlog::warn("Native Play menu protocol was not readable after 120 advances");
         return;
     }
     if (!s_ready.exchange(true))
         spdlog::info("Native Play menu protocol detected");
     bool play = false;
-    if (ReadBool(movie, kPlay, play) && play && WriteBool(movie, kPlay, false))
-        s_play.store(true);
+    if (ReadBool(movie, kPlay, play) && play)
+    {
+        if (WriteBool(movie, kPlay, false))
+        {
+            s_playResetWarned = false;
+            s_play.store(true);
+        }
+        else if (!s_playResetWarned)
+        {
+            s_playResetWarned = true;
+            spdlog::warn("Native Play request was read but could not be cleared");
+        }
+    }
     if (s_start.load() != StartState::Pending) return;
     const auto available = MovieFunction<IsAvailable>(movie, kIsAvailable);
     if (!available || !available(movie, kStart) || !s_invoke)
@@ -134,13 +148,22 @@ bool Install(IMenu* menu) noexcept
 {
     if (!Accessible(menu, 0x18)) return false;
     const auto& db = VersionDb::Get();
-    if (db.GetLoadedVersionString() != "1.6.1170.0" && db.GetLoadedVersionString() != "1.7.104.0") return false;
+    if (db.GetLoadedVersionString() != "1.6.1170.0" && db.GetLoadedVersionString() != "1.7.104.0")
+    {
+        spdlog::warn("Native Play adapter rejected game version {}", db.GetLoadedVersionString());
+        return false;
+    }
     auto** table = *reinterpret_cast<void***>(menu);
     if (!Accessible(table, (kAdvanceMovie + 1) * sizeof(void*))) return false;
     auto** slot = table + kAdvanceMovie;
     const auto original = *slot;
     auto* invoke = db.FindAddressById(82665); // GFxMovieView::InvokeNoReturn, AE Address Library ID.
-    if (!Accessible(original, 1, true) || !Accessible(invoke, 1, true)) return false;
+    if (!Accessible(original, 1, true)) return false;
+    if (!Accessible(invoke, 1, true))
+    {
+        spdlog::warn("Native Play adapter: New Game invoke address unavailable; connection requests remain supported");
+        invoke = nullptr;
+    }
     // Do not stack on an unknown third-party detour or vtable.
     unsigned long long id{};
     if (!db.FindIdByAddress(original, id))
@@ -195,6 +218,8 @@ void Tick(bool aMainMenu) noexcept
         std::lock_guard guard(s_movieLock);
         s_ready.store(false);
         s_play.store(false);
+        s_protocolProbeFrames = 0;
+        s_playResetWarned = false;
         s_menu.store(menu);
     }
 }
@@ -206,7 +231,7 @@ bool ConsumePlayRequest() noexcept
 }
 bool RequestNewGame() noexcept
 {
-    if (!s_ready.load() || !s_menu.load()) return false;
+    if (!s_ready.load() || !s_menu.load() || !s_invoke) return false;
     auto idle = StartState::Idle;
     return s_start.compare_exchange_strong(idle, StartState::Pending);
 }

@@ -1,5 +1,6 @@
 #include <TiltedOnlinePCH.h>
 #include "TiltedOnlineApp.h"
+#include <World.h>
 #include <Misc/GameVM.h>
 
 extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
@@ -24,8 +25,8 @@ int TP_MAKE_THISCALL(HookVMUpdate, GameVM, float a2)
 
 short TP_MAKE_THISCALL(HookMainLoop, Main)
 {
-    TP_EMPTY_HOOK_PLACEHOLDER
-
+    // The existing game main-loop detour runs independently of Papyrus.
+    World::PumpMainMenu();
     return TiltedPhoques::ThisCall(MainLoop, apThis);
 }
 

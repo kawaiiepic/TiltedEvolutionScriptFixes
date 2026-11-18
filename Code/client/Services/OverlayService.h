@@ -59,6 +59,7 @@ struct OverlayService
     [[nodiscard]] bool GetInGame() const noexcept;
     [[nodiscard]] bool GetMainMenu() const noexcept { return m_mainMenu; }
     void RefreshMenuPresentation() noexcept;
+    void UpdateMainMenu() noexcept;
     void OnBrowserReady() noexcept;
     bool IsBrowserReady() const noexcept { return m_browserReady; }
 
@@ -111,6 +112,9 @@ private:
     bool m_inGame = false;
     bool m_mainMenu = false;
     bool m_browserReady = false;
+    bool m_menuOpenRequested = false;
+    bool m_browserWaitLogged = false;
+    std::chrono::steady_clock::time_point m_mainMenuSince{};
 
     uint32_t m_dialogueActorId{};
     uint32_t m_dialogueToken{};

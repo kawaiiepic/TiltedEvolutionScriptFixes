@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <Services/RunnerService.h>
 #include <Services/TransportService.h>
 #include <Services/PartyService.h>
@@ -19,6 +21,8 @@ struct World : entt::registry
     ~World();
 
     void Update() noexcept;
+    // The VM can be inactive while the title screen is running.
+    static void PumpMainMenu() noexcept;
 
     RunnerService& GetRunner() noexcept;
     TransportService& GetTransport() noexcept;
@@ -46,6 +50,7 @@ struct World : entt::registry
     [[nodiscard]] static World& Get() noexcept;
 
 private:
+    void UpdateMainMenu() noexcept;
     entt::dispatcher m_dispatcher;
     RunnerService m_runner;
     TransportService m_transport;
@@ -53,4 +58,9 @@ private:
     ServerSettings m_serverSettings{};
 
     std::chrono::high_resolution_clock::time_point m_lastFrameTime;
+    uint32_t m_gameThreadId{};
+    std::atomic<uint64_t> m_lastRegularUpdate{};
+    uint64_t m_lastMenuUpdate{};
+    std::atomic_flag m_updating = ATOMIC_FLAG_INIT;
+    bool m_loggedMenuPump{};
 };

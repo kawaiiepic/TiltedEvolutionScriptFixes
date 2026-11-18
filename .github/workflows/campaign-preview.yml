@@ -6,6 +6,7 @@ on:
     branches: [master]
     paths:
       - '.github/workflows/campaign-preview.yml'
+      - 'GameFiles/Skyrim/Interface/startmenu.swf'
 
 permissions:
   contents: read
