@@ -814,6 +814,47 @@ TEST_CASE("Carriage travel retains the boarding token", "[encoding.travel]")
     REQUIRE(*CastUnique<NotifyTeleport>(std::move(received)) == teleport);
 }
 
+TEST_CASE("Player revive keeps the target and downed episode", "[encoding.respawn]")
+{
+    PlayerRespawnRequest request;
+    request.Action = PlayerRespawnRequest::Revive;
+    request.DownId = 23;
+    request.TargetId = 0x10002;
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    request.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == PlayerRespawnRequest::Opcode);
+    REQUIRE(*CastUnique<PlayerRespawnRequest>(std::move(message)) == request);
+
+    NotifyPlayerDowned downed;
+    downed.ActorId = request.TargetId;
+    downed.DownId = request.DownId;
+    Buffer::Writer downedWriter(&buffer);
+    downed.Serialize(downedWriter);
+    Buffer::Reader downedReader(&buffer);
+    auto notice = ServerMessageFactory{}.Extract(downedReader);
+    REQUIRE(notice);
+    REQUIRE(notice->GetOpcode() == NotifyPlayerDowned::Opcode);
+    auto parsed = CastUnique<NotifyPlayerDowned>(std::move(notice));
+    REQUIRE(parsed->ActorId == request.TargetId);
+    REQUIRE(parsed->DownId == request.DownId);
+
+    NotifyPlayerRespawn resolved;
+    resolved.DownId = request.DownId;
+    resolved.Revived = true;
+    Buffer::Writer resolvedWriter(&buffer);
+    resolved.Serialize(resolvedWriter);
+    Buffer::Reader resolvedReader(&buffer);
+    auto grant = ServerMessageFactory{}.Extract(resolvedReader);
+    REQUIRE(grant);
+    REQUIRE(grant->GetOpcode() == NotifyPlayerRespawn::Opcode);
+    REQUIRE(*CastUnique<NotifyPlayerRespawn>(std::move(grant)) == resolved);
+}
+
 TEST_CASE("Dropping missing stock does not create a negative inventory row", "[encoding.campaign]")
 {
     Inventory inventory;

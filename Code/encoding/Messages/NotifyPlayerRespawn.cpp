@@ -3,6 +3,8 @@
 void NotifyPlayerRespawn::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
 {
     Serialization::WriteVarInt(aWriter, GoldLost);
+    Serialization::WriteVarInt(aWriter, DownId);
+    Serialization::WriteBool(aWriter, Revived);
 }
 
 void NotifyPlayerRespawn::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -10,4 +12,6 @@ void NotifyPlayerRespawn::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader)
     ServerMessage::DeserializeRaw(aReader);
 
     GoldLost = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    DownId = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    Revived = Serialization::ReadBool(aReader);
 }
