@@ -4,6 +4,7 @@
 #include <Games/Events.h>
 #include <Messages/NotifyTeleport.h>
 #include <optional>
+#include <unordered_map>
 
 struct World;
 struct TransportService;
@@ -20,6 +21,8 @@ struct PartyLeftEvent;
 struct ActivateEvent;
 
 struct NotifyPlayerRespawn;
+struct NotifyPlayerDowned;
+struct RevivePlayerEvent;
 
 /**
  * @brief Handles logic related to the local player.
@@ -36,7 +39,9 @@ protected:
     void OnConnected(const ConnectedEvent& acEvent) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
     void OnServerSettingsReceived(const ServerSettings& acSettings) noexcept;
-    void OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) const noexcept;
+    void OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) noexcept;
+    void OnNotifyPlayerDowned(const NotifyPlayerDowned& acMessage) noexcept;
+    void OnRevivePlayer(const RevivePlayerEvent&) noexcept;
     void OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) const noexcept;
     void OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept;
     void OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept;
@@ -52,6 +57,7 @@ private:
      */
     void RunRespawnUpdates() noexcept;
     void RunPostDeathUpdates() noexcept;
+    void RunRevivePrompt() noexcept;
     /**
      * @brief Make sure difficulty doesn't get changed while connected
      */
@@ -84,13 +90,36 @@ private:
     GameId m_reportedCell{};
     uint32_t m_nextCarriageToken{};
 
-    std::chrono::steady_clock::time_point m_respawnDeadline;
+    struct ReviveTarget
+    {
+        uint32_t ActorId;
+        uint32_t DownId;
+        bool operator==(const ReviveTarget&) const noexcept = default;
+    };
+    std::optional<ReviveTarget> FindNearbyReviveTarget() const noexcept;
+
+    struct LocalDownedState
+    {
+        uint32_t Id;
+        bool Reported{};
+        bool Resolved{};
+        std::chrono::steady_clock::time_point NextAttempt{};
+    };
+    std::optional<LocalDownedState> m_localDowned;
+    uint32_t m_nextDownId{};
+    uint32_t m_settlingDownId{};
+    uint32_t m_grantedDownId{};
+    uint32_t m_respawnDelay{30};
+    std::unordered_map<uint32_t, uint32_t> m_downedPlayers;
+    std::optional<ReviveTarget> m_promptTarget;
+    std::chrono::steady_clock::time_point m_nextRevivePrompt{};
     int32_t m_serverDifficulty = 6;
     int32_t m_previousDifficulty = 6;
 
-    bool m_isDeathSystemEnabled = true;
+    bool m_isDeathSystemEnabled = false;
 
     bool m_knockdownStart = false;
+    bool m_knockdownOnlyIfDown = false;
     std::chrono::steady_clock::time_point m_knockdownDeadline;
 
     bool m_godmodeStart = false;
@@ -105,6 +134,8 @@ private:
     entt::scoped_connection m_disconnectedConnection;
     entt::scoped_connection m_settingsConnection;
     entt::scoped_connection m_notifyRespawnConnection;
+    entt::scoped_connection m_notifyDownedConnection;
+    entt::scoped_connection m_reviveConnection;
     entt::scoped_connection m_gridCellChangeConnection;
     entt::scoped_connection m_cellChangeConnection;
     entt::scoped_connection m_playerLevelConnection;
