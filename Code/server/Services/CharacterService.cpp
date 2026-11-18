@@ -41,11 +41,7 @@
 #include <Messages/NotifySubtitle.h>
 #include <Messages/NotifyActorTeleport.h>
 
-#include <Setting.h>
-namespace
-{
-Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Syncs combat XP within the party", true};
-}
+#include <cmath>
 
 CharacterService::CharacterService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
@@ -578,14 +574,15 @@ void CharacterService::OnRequestRespawn(const PacketEvent<RequestRespawn>& acMes
 
 void CharacterService::OnSyncExperienceRequest(const PacketEvent<SyncExperienceRequest>& acMessage) const noexcept
 {
-    if (!bEnableXpSync)
+    auto* pServer = GameServer::Get();
+    const auto& party = acMessage.pPlayer->GetParty();
+    const float cExperience = acMessage.Packet.Experience;
+    if (!pServer->SharesCombatExperience() || !party.JoinedPartyId || !std::isfinite(cExperience) || cExperience <= 0.f)
         return;
 
     NotifySyncExperience notify;
-    notify.Experience = acMessage.Packet.Experience;
-
-    const auto& partyComponent = acMessage.pPlayer->GetParty();
-    GameServer::Get()->SendToParty(notify, partyComponent, acMessage.GetSender());
+    notify.Experience = cExperience;
+    pServer->SendToParty(notify, party, acMessage.GetSender());
 }
 
 void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acMessage) const noexcept

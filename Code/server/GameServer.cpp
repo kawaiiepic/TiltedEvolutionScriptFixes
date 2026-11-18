@@ -41,6 +41,7 @@ Console::Setting bSyncPlayerHomes{"Gameplay:bSyncPlayerHomes", "Sync chests and 
 Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the custom multiplayer death system. Only disable it if you use another mod that replaces death", true};
 Console::Setting uTimeScale{"Gameplay:uTimeScale", "How many seconds pass ingame for every real second (0 to 1000). Changing this can make the game unstable", 20u};
 Console::Setting bSyncPlayerCalendar{"Gameplay:bSyncPlayerCalendar", "Syncs up all player calendars to be the same day, month, and year. This uses the date of the player with the furthest ahead date at connection.", false};
+Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Share combat skill XP within a party", false, Console::SettingsFlags::kLocked};
 Console::Setting bAutoPartyJoin{"Gameplay:bAutoPartyJoin", "Join parties automatically, as long as there is only one party in the server", true};
 // ModPolicy Stuff
 Console::Setting bEnableModCheck{"ModPolicy:bEnableModCheck", "Refuse clients whose mods do not match Data/loadorder.txt", false, Console::SettingsFlags::kLocked};
@@ -142,6 +143,7 @@ ServerSettings GetSettings()
     settings.DeathSystemEnabled = bEnableDeathSystem;
     settings.SyncPlayerCalendar = bSyncPlayerCalendar;
     settings.AutoPartyJoin = bAutoPartyJoin;
+    settings.ShareCombatExperience = bEnableXpSync;
     return settings;
 }
 
@@ -205,6 +207,11 @@ GameServer* GameServer::Get() noexcept
 bool GameServer::IsPublicServer() const noexcept
 {
     return bAnnounceServer;
+}
+
+bool GameServer::SharesCombatExperience() const noexcept
+{
+    return bEnableXpSync;
 }
 
 bool GameServer::AllowsAutoPartyJoin() const noexcept

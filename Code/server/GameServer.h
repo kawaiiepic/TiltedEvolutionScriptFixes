@@ -66,6 +66,7 @@ struct GameServer final : Server
     bool IsPasswordProtected() const noexcept { return m_isPasswordProtected; }
     [[nodiscard]] bool IsPublicServer() const noexcept;
     [[nodiscard]] bool AllowsAutoPartyJoin() const noexcept;
+    [[nodiscard]] bool SharesCombatExperience() const noexcept;
 
     struct Uptime
     {

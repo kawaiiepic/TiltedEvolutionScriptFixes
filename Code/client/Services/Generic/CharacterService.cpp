@@ -330,8 +330,9 @@ void CharacterService::OnConnected(const ConnectedEvent& acConnectedEvent) const
     }
 }
 
-void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEvent) const noexcept
+void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEvent) noexcept
 {
+    m_cachedExperience = 0.f;
     auto remoteView = m_world.view<FormIdComponent, RemoteComponent>();
     for (auto entity : remoteView)
     {
@@ -1099,7 +1100,9 @@ void CharacterService::OnNotifyNewPackage(const NotifyNewPackage& acMessage) con
 
 void CharacterService::OnAddExperienceEvent(const AddExperienceEvent& acEvent) noexcept
 {
-    m_cachedExperience += acEvent.Experience;
+    if (m_transport.IsOnline() && m_world.GetServerSettings().ShareCombatExperience &&
+        m_world.GetPartyService().IsInParty() && std::isfinite(acEvent.Experience) && acEvent.Experience > 0.f)
+        m_cachedExperience += acEvent.Experience;
 }
 
 void CharacterService::OnNotifySyncExperience(const NotifySyncExperience& acMessage) noexcept
@@ -1275,6 +1278,7 @@ void CharacterService::OnNotifyActorTeleport(const NotifyActorTeleport& acMessag
 
 void CharacterService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept
 {
+    m_cachedExperience = 0.f;
     // Takes ownership of all actors
     if (acEvent.IsLeader)
     {
@@ -2079,8 +2083,11 @@ void CharacterService::RunExperienceUpdates() noexcept
     if (m_cachedExperience == 0.f)
         return;
 
-    if (!World::Get().GetPartyService().IsInParty())
+    if (!m_world.GetPartyService().IsInParty() || !m_world.GetServerSettings().ShareCombatExperience)
+    {
+        m_cachedExperience = 0.f;
         return;
+    }
 
     SyncExperienceRequest message;
     message.Experience = m_cachedExperience;
