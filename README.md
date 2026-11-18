@@ -25,7 +25,8 @@ This branch (`API-Together-1.8.7-8`, tag `v1.8.7-8`) is a community playtest bui
 ### New server settings
 - `Gameplay:bAllowConsoleCommands` (default `true`). When `false`, commands typed into the console are refused, but the console still opens for reading reference ids, and mods can still run commands. `ToggleConsoleCommands` switches it while the server runs.
 - `Voice:bVoip` (default `false`): proximity voice chat.
-- `Gameplay:fGoldLossFactor`: values above 1.0 are now a flat amount of gold lost on death.
+- `Gameplay:fGoldLossFactor` (default `0.10`): gold lost on self-respawn. Values up to `1.0` are fractions of carried gold, and values above `1.0` are a flat amount. A value of `0` disables gold loss.
+- `Gameplay:uPlayerRespawnDelay` (default `30` seconds): time for another player to revive you with **F10** before self-respawn.
 - Server settings can be overridden with environment variables (upstream #936).
 
 ### Sync and stability fixes to test

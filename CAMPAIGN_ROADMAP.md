@@ -98,6 +98,16 @@ The Linux server at `b384823a` built and passed 220 assertions in 24 cases. Loop
 
 Two-client Skyrim validation should cover one player buying a Whiterun-to-Riften trip, a second player activating the same carriage, and a third player staying near the driver without boarding. Check the second player's camera and controls after arrival. Also try cancellation, ordinary map fast travel and two players buying their own trips. The scripted loading fallback and the furniture-to-arrival timing require an in-game run.
 
+## Player revival and respawn
+
+With the multiplayer death system enabled, a downed player can be revived in place. A standing player in the same cell can press **F10** near them. This works without a party. The server accepts one recovery outcome per downed episode and checks that the helper is neither the downed player nor downed themselves. Revival carries no gold penalty.
+
+If nobody revives the player before `Gameplay:uPlayerRespawnDelay` (30 seconds by default), the existing respawn path becomes available automatically. The default `Gameplay:fGoldLossFactor` is `0.10`, with a minimum loss of one gold when the player has any. Values above `1.0` specify flat gold loss. An existing INI keeps its configured value, so an existing value of `0` leaves gold loss disabled.
+
+The Linux server at `ede745d3` built and passed 230 assertions in 25 cases. Loopback clients verified a partyless revive, one fallback gold deduction, and rejection of distant, self, early, stale and duplicate requests.
+
+The player client uses the existing bleedout recovery and respawn routines. Verify revive-in-place, recovery from ragdoll, observer animation, and the gold loss displayed by the Skyrim client with two game clients. Test a revive arriving when the fallback timer expires and confirm that one recovery applies.
+
 ## Validation checklist
 
 Run `xmake build TPTests` and `xmake run TPTests`. Build the Linux server and Windows client with the matching branch. Build the overlay with the pinned lockfile and pnpm 9. Each replay batch has at most 16 updates and only one batch can be outstanding per player. The server retries an unacknowledged batch after two seconds. Public dialogue panels send on change, and unchanged lock state does not append another disk record.

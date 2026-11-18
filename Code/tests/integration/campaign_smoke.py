@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     config = directory / "config"
     config.mkdir()
     (config / "STServer.ini").write_text(
-        f"[GameServer]\nuPort={port}\n[Gameplay]\nbAutoPartyJoin=false\n"
+        f"[GameServer]\nuPort={port}\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\n"
     )
     (directory / "shared-quest-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x8AC\n'
@@ -134,6 +134,18 @@ end)
         restarted.expect("Loaded 23 shared quest records")
         restarted.expect("CAMPAIGN_SMOKE_RESTORED")
         test_client("restarted")
+        with ExitStack() as rescuers:
+            clients = []
+            for role in ("death-helper", "death-distant"):
+                client = rescuers.enter_context(subprocess.Popen(
+                    [harness, role, version, f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True
+                ))
+                assert select.select([client.stdout], [], [], 12)[0]
+                assert client.stdout.readline().strip() == "DEATH_READY"
+                clients.append(client)
+            test_client("death-patient")
+            for client in clients:
+                assert client.wait(timeout=8) == 0
         with subprocess.Popen([harness, "animation-receiver", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as receiver:
             assert select.select([receiver.stdout], [], [], 12)[0]

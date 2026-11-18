@@ -32,6 +32,23 @@ public:
     void OnUpdate() override
     {
         const auto now = std::chrono::steady_clock::now();
+        if (DeathRequestAt && now >= *DeathRequestAt)
+        {
+            DeathRequestAt.reset();
+            if (Mode == "death-helper")
+            {
+                SendDeathRequest(PlayerRespawnRequest::Revive, kReviveDownId, DownedActorId);
+                SendDeathRequest(PlayerRespawnRequest::Revive, kReviveDownId, DownedActorId);
+            }
+            else if (CurrentDownId == kReviveDownId)
+                ReportDowned(kRespawnDownId);
+            else
+            {
+                assert(CurrentDownId == kRespawnDownId);
+                SendDeathRequest(PlayerRespawnRequest::Respawn, kRespawnDownId);
+                SendDeathRequest(PlayerRespawnRequest::Respawn, kRespawnDownId);
+            }
+        }
         if (DepartureAt && now >= *DepartureAt)
         {
             DepartureAt.reset();
@@ -92,6 +109,8 @@ public:
             }
             assert(reply->Type == AuthenticationResponse::ResponseType::kAccepted);
             assert(!reply->Settings.ShareCombatExperience);
+            if (Mode.starts_with("death-"))
+                assert(reply->Settings.DeathSystemEnabled && reply->Settings.PlayerRespawnDelay == 1);
             Authed = true;
             PlayerId = reply->PlayerId;
             for (const auto& mod : reply->UserMods.ModList)
@@ -146,7 +165,7 @@ public:
                 Transmit(cell);
                 AssignLock();
             }
-            if (Mode.starts_with("animation-") || Mode.starts_with("carriage-"))
+            if (Mode.starts_with("animation-") || Mode.starts_with("carriage-") || Mode.starts_with("death-"))
             {
                 EnterInteriorCellRequest cell{};
                 cell.CellId = GameId(VanillaMod, 0xA21);
@@ -154,10 +173,23 @@ public:
                 AssignCharacterRequest character{};
                 character.ReferenceId = GameId(0, 0x14);
                 character.CellId = cell.CellId;
+                if (Mode.starts_with("death-"))
+                {
+                    character.Position = glm::vec3(Mode == "death-distant" ? 1024.f : 0.f, 0.f, 0.f);
+                    if (Mode == "death-patient")
+                    {
+                        auto& gold = character.CurrentActorData.InitialInventory.Entries.emplace_back();
+                        gold.BaseId = GameId(VanillaMod, 0xF);
+                        gold.Count = 100;
+                    }
+                }
                 Transmit(character);
             }
             return;
         }
+
+        if (Mode.starts_with("death-") && ConsumeDeathPacket(message))
+            return;
 
         if (message->GetOpcode() == NotifyTeleport::Opcode && Mode.starts_with("carriage-"))
         {
@@ -348,7 +380,8 @@ public:
         }
 
         if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" ||
-            Mode.starts_with("weather") || Mode.starts_with("animation-") || Mode.starts_with("carriage-"))
+            Mode.starts_with("weather") || Mode.starts_with("animation-") || Mode.starts_with("carriage-") ||
+            Mode.starts_with("death-"))
         {
             if (message->GetOpcode() == NotifyQuestUpdate::Opcode)
             {
@@ -405,6 +438,139 @@ public:
             assert(Mode != "restarted" || QuestMod == 2);
             Done = true;
         }
+    }
+
+    bool ConsumeDeathPacket(UniquePtr<ServerMessage>& aMessage)
+    {
+        if (aMessage->GetOpcode() == AssignCharacterResponse::Opcode)
+        {
+            const auto assignment = CastUnique<AssignCharacterResponse>(std::move(aMessage));
+            assert(assignment->Owner);
+            if (Mode == "death-patient")
+            {
+                DownedActorId = assignment->ServerId;
+                ReportDowned(kReviveDownId);
+            }
+            else
+            {
+                std::puts("DEATH_READY");
+                std::fflush(stdout);
+            }
+            return true;
+        }
+
+        if (aMessage->GetOpcode() == NotifyPlayerRespawn::Opcode)
+        {
+            assert(Mode == "death-patient");
+            const auto grant = CastUnique<NotifyPlayerRespawn>(std::move(aMessage));
+            if (grant->DownId == kReviveDownId)
+            {
+                assert(grant->Revived && grant->GoldLost == 0);
+                if (!SawRevive)
+                {
+                    assert(std::chrono::steady_clock::now() - DownedAt >= 350ms);
+                    SawRevive = true;
+                    SendDeathRequest(PlayerRespawnRequest::Recovered, kReviveDownId);
+                    DeathRequestAt = std::chrono::steady_clock::now() + 150ms;
+                }
+            }
+            else
+            {
+                assert(SawRevive && grant->DownId == kRespawnDownId && !grant->Revived && grant->GoldLost == 10);
+                if (!SawPenalty)
+                {
+                    assert(std::chrono::steady_clock::now() - DownedAt >= 1s);
+                    SawPenalty = true;
+                    SendDeathRequest(PlayerRespawnRequest::Recovered, kRespawnDownId);
+                    SendDeathRequest(PlayerRespawnRequest::Respawn, kRespawnDownId);
+                    OwnerReady = true;
+                    ReadyAt = std::chrono::steady_clock::now() - 3s;
+                }
+            }
+            return true;
+        }
+
+        if (aMessage->GetOpcode() == NotifyPlayerDowned::Opcode)
+        {
+            const auto notice = CastUnique<NotifyPlayerDowned>(std::move(aMessage));
+            if (Mode == "death-patient")
+                return true;
+            if (notice->DownId == kReviveDownId && CurrentDownId == 0)
+            {
+                DownedActorId = notice->ActorId;
+                CurrentDownId = notice->DownId;
+                if (Mode == "death-helper")
+                {
+                    SendDeathRequest(PlayerRespawnRequest::Revive, kReviveDownId - 1, DownedActorId);
+                    DeathRequestAt = std::chrono::steady_clock::now() + 400ms;
+                }
+                else
+                    SendDeathRequest(PlayerRespawnRequest::Revive, kReviveDownId, DownedActorId);
+            }
+            else if (notice->ActorId == DownedActorId && !notice->DownId)
+            {
+                if (CurrentDownId == kReviveDownId)
+                    SawRevive = true;
+                else if (CurrentDownId == kRespawnDownId)
+                {
+                    assert(SawRevive);
+                    OwnerReady = true;
+                    ReadyAt = std::chrono::steady_clock::now() - 3s;
+                }
+            }
+            else if (notice->ActorId == DownedActorId && notice->DownId == kRespawnDownId)
+            {
+                assert(SawRevive);
+                CurrentDownId = notice->DownId;
+            }
+            return true;
+        }
+
+        if (aMessage->GetOpcode() == NotifyInventoryChanges::Opcode)
+        {
+            const auto change = CastUnique<NotifyInventoryChanges>(std::move(aMessage));
+            if (change->ServerId == DownedActorId && change->Item.BaseId == GameId(VanillaMod, 0xF))
+            {
+                assert(Mode != "death-patient" && !SawPenalty);
+                assert(CurrentDownId == kRespawnDownId && change->Item.Count == -10);
+                SawPenalty = true;
+            }
+            return true;
+        }
+        if (aMessage->GetOpcode() == NotifyRespawn::Opcode)
+        {
+            const auto recovery = CastUnique<NotifyRespawn>(std::move(aMessage));
+            if (recovery->ActorId == DownedActorId)
+            {
+                assert(Mode != "death-patient" && recovery->OwnershipEpoch);
+                ++RemoteRecoveries;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void SendDeathRequest(uint8_t aAction, uint32_t aDownId, uint32_t aTarget = 0)
+    {
+        PlayerRespawnRequest request;
+        request.Action = aAction;
+        request.DownId = aDownId;
+        request.TargetId = aTarget;
+        Transmit(request);
+    }
+
+    void ReportDowned(uint32_t aDownId)
+    {
+        CurrentDownId = aDownId;
+        DownedAt = std::chrono::steady_clock::now();
+        if (aDownId == kRespawnDownId)
+            SendDeathRequest(PlayerRespawnRequest::Downed, kReviveDownId);
+        SendDeathRequest(PlayerRespawnRequest::Downed, aDownId);
+        SendDeathRequest(PlayerRespawnRequest::Respawn, aDownId);
+        if (aDownId == kReviveDownId)
+            SendDeathRequest(PlayerRespawnRequest::Revive, aDownId, DownedActorId);
+        else
+            DeathRequestAt = DownedAt + 1250ms;
     }
 
     void AssignLock()
@@ -481,6 +647,15 @@ public:
     bool SawCarriageTeleport{};
     std::chrono::steady_clock::time_point ReadyAt{};
     std::optional<std::chrono::steady_clock::time_point> DepartureAt;
+    std::optional<std::chrono::steady_clock::time_point> DeathRequestAt;
+    std::chrono::steady_clock::time_point DownedAt{};
+    static constexpr uint32_t kReviveDownId = 41;
+    static constexpr uint32_t kRespawnDownId = 42;
+    uint32_t CurrentDownId{};
+    uint32_t DownedActorId{};
+    size_t RemoteRecoveries{};
+    bool SawRevive{};
+    bool SawPenalty{};
     size_t Received{};
     uint64_t FirstThrough{};
     uint64_t LastThrough{};
@@ -511,6 +686,10 @@ int main(int argc, char** argv)
         assert(client.Authed && client.Received == 0 && (client.Mode == "missing" || client.SawNpc));
     else
         assert(client.Done);
+    if (client.Mode.starts_with("death-"))
+        assert(client.SawRevive && client.SawPenalty);
+    if (client.Mode == "death-helper" || client.Mode == "death-distant")
+        assert(client.RemoteRecoveries == 2);
     std::printf("%s passed (received %zu quest updates, retry %s)\n", argv[1], client.Received, client.Retried ? "yes" : "no");
     client.Close();
 }
