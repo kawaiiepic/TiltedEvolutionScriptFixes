@@ -8,7 +8,8 @@
 
 #include <Messages/SendChatMessageRequest.h>
 #include <Messages/PlayerDialogueRequest.h>
-#include <sstream>
+#include <limits>
+#include <cmath>
 #include <Messages/TeleportRequest.h>
 
 #include <Events/SetTimeCommandEvent.h>
@@ -51,6 +52,24 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessRevealPlayersMessage();
         else if (eventName == "sendMessage")
             ProcessChatMessage(eventArgs);
+        else if (eventName == "voteDialogue")
+        {
+            // Send numeric arguments through the existing CEF event bridge, not chat.
+            const auto readId = [&](size_t aIndex, uint32_t& aValue)
+            {
+                const double value = eventArgs->GetType(aIndex) == VTYPE_DOUBLE
+                    ? eventArgs->GetDouble(aIndex) : static_cast<double>(eventArgs->GetInt(aIndex));
+                if (value < 0 || value > std::numeric_limits<uint32_t>::max() || !std::isfinite(value) || std::floor(value) != value)
+                    return false;
+                aValue = static_cast<uint32_t>(value);
+                return true;
+            };
+            PlayerDialogueRequest request{};
+            request.Action = PlayerDialogueRequest::Vote;
+            if (eventArgs->GetSize() == 3 &&
+                readId(0, request.ActorId) && readId(1, request.Revision) && readId(2, request.Index))
+                World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+        }
         else if (eventName == "setTime")
             ProcessSetTimeCommand(eventArgs);
         else if (eventName == "launchParty")
@@ -121,21 +140,6 @@ void OverlayClient::ProcessRevealPlayersMessage()
 void OverlayClient::ProcessChatMessage(CefRefPtr<CefListValue> aEventArgs)
 {
     std::string contents = aEventArgs->GetString(1).ToString();
-    // The renderer bridge is supplied by the overlay library. Use a reserved
-    // UI-only message type, translated here; it is never sent as a chat packet.
-    if (aEventArgs->GetInt(0) == 5)
-    {
-        std::istringstream input(contents);
-        PlayerDialogueRequest request{};
-        request.Action = PlayerDialogueRequest::Vote;
-        if (!(input >> request.ActorId >> request.Revision >> request.Index))
-            return;
-        input >> std::ws;
-        if (!input.eof())
-            return;
-        World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
-        return;
-    }
     if (!contents.empty())
     {
         SendChatMessageRequest messageRequest;

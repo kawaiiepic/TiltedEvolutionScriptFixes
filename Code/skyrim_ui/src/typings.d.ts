@@ -387,6 +387,7 @@ interface SkyrimTogether {
    * Send message to server.
    */
   sendMessage(type: number, message: string): void;
+  voteDialogue(actorId: number, revision: number, index: number): void;
 
   /**
    * Send a request to the server for changing the in-game time.

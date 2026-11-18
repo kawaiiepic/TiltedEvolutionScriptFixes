@@ -2,6 +2,7 @@
 
 #include <Structs/GameId.h>
 #include <vector>
+#include <cstdint>
 
 struct SceneState
 {

@@ -662,8 +662,7 @@ export class ClientService implements OnDestroy {
   }
 
   public voteDialogue(actorId: number, revision: number, index: number): void {
-    // Reserved renderer message type, handled entirely by the native client.
-    skyrimtogether.sendMessage(5, `${actorId} ${revision} ${index}`);
+    skyrimtogether.voteDialogue(actorId, revision, index);
   }
 
   private onSharedDialogue(actorId: number, visible: boolean, owner: string,

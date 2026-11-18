@@ -552,3 +552,95 @@ TEST_CASE("StringCache", "[encoding.string_cache]")
         REQUIRE(update == recvUpdate);
     }
 }
+
+TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
+{
+    SECTION("Owner publishes choices and spectator votes")
+    {
+        PlayerDialogueRequest request{};
+        request.Action = PlayerDialogueRequest::PublishOptions;
+        request.ActorId = 0xDEADBEEF;
+        request.Token = 123;
+        request.Revision = 456;
+        request.Index = 1;
+        request.Options = {"Tell me about the Greybeards.", "", "Goodbye."};
+        request.Text = "Example";
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == request.GetOpcode());
+        REQUIRE(*CastUnique<PlayerDialogueRequest>(std::move(message)) == request);
+    }
+
+    SECTION("Snapshot preserves option indices and counts")
+    {
+        NotifyPlayerDialogue panel{};
+        panel.Kind = NotifyPlayerDialogue::Panel;
+        panel.ActorId = 0xDEADBEEF;
+        panel.Revision = 7;
+        panel.Selected = 2;
+        panel.Name = "Owner";
+        panel.Options = {"Yes", "", "No"};
+        panel.Votes = {1, 0, 3};
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        panel.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == panel.GetOpcode());
+        REQUIRE(*CastUnique<NotifyPlayerDialogue>(std::move(message)) == panel);
+    }
+}
+
+TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
+{
+    SECTION("Native observer snapshot")
+    {
+        RequestSceneState request{};
+        request.State.Id = GameId(2, 0xFABCD);
+        request.State.Quest = GameId(0, 0x12345);
+        request.State.Phase = UINT32_MAX;
+        request.State.Active = true;
+        request.State.CompletedActions = {3, 9, 42};
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        request.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ClientMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == request.GetOpcode());
+        REQUIRE(*CastUnique<RequestSceneState>(std::move(message)) == request);
+    }
+
+    SECTION("Server ownership and generation")
+    {
+        NotifySceneState snapshot{};
+        snapshot.State.Id = GameId(1, 0x12345);
+        snapshot.State.Quest = GameId(1, 0x34567);
+        snapshot.State.Phase = 6;
+        snapshot.State.Active = true;
+        snapshot.State.CompletedActions = {12, 13};
+        snapshot.Owner = 4;
+        snapshot.Generation = 9;
+
+        Buffer buff(4096);
+        Buffer::Writer writer(&buff);
+        snapshot.Serialize(writer);
+        Buffer::Reader reader(&buff);
+        const ServerMessageFactory factory;
+        auto message = factory.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == snapshot.GetOpcode());
+        REQUIRE(*CastUnique<NotifySceneState>(std::move(message)) == snapshot);
+    }
+}

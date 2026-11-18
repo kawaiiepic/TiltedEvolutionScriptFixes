@@ -119,6 +119,10 @@ export class SkyrimtogetherMock extends EventEmitter implements SkyrimTogether {
     }
   }
 
+  voteDialogue(actorId: number, revision: number, index: number): void {
+    console.log('Shared dialogue vote', actorId, revision, index);
+  }
+
   deactivate(): void {
     throw new Error('NOT YET IMPLEMENTED');
   }

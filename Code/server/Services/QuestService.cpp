@@ -11,6 +11,7 @@
 #include <Setting.h>
 
 #include <algorithm>
+#include <iterator>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>

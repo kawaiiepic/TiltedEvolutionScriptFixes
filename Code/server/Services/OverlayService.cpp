@@ -3,6 +3,7 @@
 #include <Events/PlayerLeaveEvent.h>
 #include <Events/UpdateEvent.h>
 #include <algorithm>
+#include <iterator>
 
 #include <Services/OverlayService.h>
 
