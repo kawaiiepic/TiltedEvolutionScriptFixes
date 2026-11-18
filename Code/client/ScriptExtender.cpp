@@ -5,11 +5,7 @@
 
 namespace
 {
-constexpr wchar_t kScriptExtenderName[] = L"skse64";
-
 constexpr char kScriptExtenderEntrypoint[] = "StartSKSE";
-
-constexpr size_t kScriptExtenderNameLength = sizeof(kScriptExtenderName) / sizeof(wchar_t) - 1;
 
 // AE+ only
 // Use this to raise the SKSE baseline
@@ -54,18 +50,14 @@ int GetFileVersion(const std::filesystem::path& acFilePath, FileVersion& aVersio
 
 std::string GetSKSEStyleExeVersion()
 {
-    // make sure newer than anniversary!
-    auto exeBuild = VersionDb::Get().GetLoadedVersionString();
-    std::replace(exeBuild.begin(), exeBuild.end(), '.', '_');
-
-    // chop off empty patch numbers for instance "1.6.323.0 becomes "1_6_323"
-    auto patchPos = exeBuild.find_last_of("_0");
-    if (patchPos != std::string::npos)
-    {
-        exeBuild.erase(exeBuild.begin() + (patchPos - 1), exeBuild.end());
-    }
-
-    return exeBuild;
+    auto version = VersionDb::Get().GetLoadedVersionString();
+    // SKSE names its runtime DLL with the major, minor and revision only.
+    const auto patch = version.rfind('.');
+    if (patch == std::string::npos)
+        return {};
+    version.resize(patch);
+    std::replace(version.begin(), version.end(), '.', '_');
+    return version;
 }
 } // namespace
 
@@ -76,47 +68,26 @@ bool IsScriptExtenderLoaded()
 
 void LoadScriptExtender()
 {
-    const auto exeVerson{GetSKSEStyleExeVersion()};
-
-    // Get the path of the game, where the Script Extender dll resides
-    const auto gameDir = std::filesystem::current_path();
-
-    std::list<std::filesystem::path> dllMatches;
-    for (const auto& dirEntry : std::filesystem::directory_iterator(gameDir))
-    {
-        const auto& path = dirEntry.path();
-        if (path.extension() != L".dll")
-            continue;
-
-        auto fileName = path.filename().wstring();
-        if (fileName.length() < kScriptExtenderNameLength)
-            continue;
-
-        if (fileName.substr(0, kScriptExtenderNameLength) == kScriptExtenderName)
-        {
-            dllMatches.push_back(path);
-        }
-    }
-
-    // and before you ask, no, they dont expose it via file version info
-    std::filesystem::path* needle = nullptr;
-    for (auto& match : dllMatches)
-    {
-        auto fname = match.filename().string();
-        auto ptr = &fname[kScriptExtenderNameLength + 1];
-        // make extra sure!
-        if (std::strncmp(ptr, exeVerson.c_str(), exeVerson.length()) == 0)
-        {
-            needle = &match;
-            break;
-        }
-    }
-
-    if (!needle)
+    const auto version = GetSKSEStyleExeVersion();
+    if (version.empty())
         return;
 
+    std::error_code error;
+    const auto gameDir = std::filesystem::current_path(error);
+    if (error)
+        return;
+
+    const auto name = "skse64_" + version;
+    auto path = gameDir / (name + ".dll");
+    if (!std::filesystem::is_regular_file(path, error))
+    {
+        path = gameDir / (name + "_winstore.dll");
+        if (!std::filesystem::is_regular_file(path, error))
+            return;
+    }
+
     FileVersion fileVersion;
-    if (GetFileVersion(*needle, fileVersion) != 0)
+    if (GetFileVersion(path, fileVersion) != 0)
     {
         spdlog::error("Unable to verify Script Extender version");
         return;
@@ -132,22 +103,26 @@ void LoadScriptExtender()
         return;
     }
 
-    if (g_SKSEModuleHandle = LoadLibraryW(needle->c_str()))
+    if (HMODULE module = LoadLibraryW(path.c_str()))
     {
-        if (auto* pStartSKSE = reinterpret_cast<void (*)()>(GetProcAddress(g_SKSEModuleHandle, kScriptExtenderEntrypoint)))
+        if (auto* pStartSKSE = reinterpret_cast<void (*)()>(GetProcAddress(module, kScriptExtenderEntrypoint)))
         {
             spdlog::info(
                 "Installing SKSE {} startup hooks... be aware that messages that start without a colored "
                 "[timestamp] prefix are logs from the Script Extender and its loaded mods.",
                 skseVersion);
+            g_SKSEModuleHandle = module;
             pStartSKSE();
             spdlog::info("SKSE startup hooks installed; initialization will continue during game startup");
         }
         else
+        {
             spdlog::warn("SKSE dll doesn't expose StartSKSE(), it may be outdated.");
+            FreeLibrary(module);
+        }
     }
     else
     {
-        spdlog::error("Failed to load {}! Check your privileges or re-download the Script Extender files.", needle->string());
+        spdlog::error("Failed to load {}! Check your privileges or re-download the Script Extender files.", path.string());
     }
 }
