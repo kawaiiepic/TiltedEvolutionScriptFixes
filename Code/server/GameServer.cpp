@@ -27,6 +27,7 @@ constexpr size_t kMaxServerNameLength = 128u;
 // -- Cvars --
 Console::Setting uServerPort{"GameServer:uPort", "Which port to host the server on", 10578u};
 Console::Setting uMaxPlayerCount{"GameServer:uMaxPlayerCount", "Maximum number of players allowed on the server (going over the default of 8 is not recommended)", 8u};
+Console::Setting bRequireServerSaves{"GameServer:bRequireServerSaves", "Require experimental server-owned checkpoint protocol (native client save integration not yet available)", false, Console::SettingsFlags::kLocked};
 Console::Setting bPremiumTickrate{"GameServer:bPremiumMode", "Server tick rate: 60 updates per second if true, 30 if false", true};
 
 Console::StringSetting sServerName{"GameServer:sServerName", "Name that shows up in the server list", "Dedicated Together Server"};
@@ -302,6 +303,11 @@ void GameServer::BindMessageHandlers()
     {
         const auto pRealMessage = CastUnique<AuthenticationRequest>(std::move(apMessage));
         HandleAuthenticationRequest(aConnectionId, pRealMessage);
+    };
+    m_messageHandlers[RequestCharacterSave::Opcode] = [this](UniquePtr<ClientMessage>& apMessage, ConnectionId_t aConnectionId)
+    {
+        const auto request = CastUnique<RequestCharacterSave>(std::move(apMessage));
+        HandleCharacterSave(aConnectionId, *request);
     };
 }
 
@@ -583,6 +589,7 @@ void GameServer::OnUpdate()
         }
         const auto connection = it->first;
         it = m_lobbySessions.erase(it);
+        m_characterSaves.Release(connection);
         Kick(connection);
     }
 
@@ -592,6 +599,8 @@ void GameServer::OnUpdate()
 
 void GameServer::OnConsume(const void* apData, const uint32_t aSize, const ConnectionId_t aConnectionId)
 {
+    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == RequestCharacterSave::Opcode && aSize != CharacterSavePayload::WireSize))
+        return;
     ViewBuffer buf((uint8_t*)apData, aSize);
     Buffer::Reader reader(&buf);
 
@@ -614,6 +623,7 @@ void GameServer::OnConnection(const ConnectionId_t aHandle)
 
 void GameServer::OnDisconnection(const ConnectionId_t aConnectionId, EDisconnectReason aReason)
 {
+    m_characterSaves.Release(aConnectionId);
     m_lobbySessions.erase(aConnectionId);
     m_adminSessions.erase(aConnectionId);
 
@@ -859,6 +869,24 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
     spdlog::info("Connection {:x} authenticated to character lobby", aConnectionId);
 }
 
+void GameServer::HandleCharacterSave(ConnectionId_t aConnectionId, const RequestCharacterSave& acRequest)
+{
+    const bool inWorld = m_pWorld->GetPlayerManager().GetByConnectionId(aConnectionId) != nullptr;
+    const auto lobby = m_lobbySessions.find(aConnectionId);
+    if (!inWorld && (lobby == m_lobbySessions.end() || lobby->second.Expires <= std::chrono::steady_clock::now()))
+    {
+        Kick(aConnectionId);
+        return;
+    }
+    NotifyCharacterSave reply;
+    reply.Action = acRequest.Action;
+    if (!bRequireServerSaves)
+        reply.Status = CharacterSavePayload::Disabled;
+    else
+        m_characterSaves.Handle(aConnectionId, inWorld, acRequest, reply);
+    Send(aConnectionId, reply);
+}
+
 void GameServer::HandleWorldEntry(const ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest)
 {
     AuthenticationResponse serverResponse{};
@@ -881,6 +909,11 @@ void GameServer::HandleWorldEntry(const ConnectionId_t aConnectionId, const Uniq
         it->second.Expires <= std::chrono::steady_clock::now() ||
         acRequest->Username.empty() || acRequest->Username.size() > 128 || !acRequest->CellId ||
         acRequest->UserMods.ModList.empty())
+    {
+        sendKick(RT::kInvalidEntry);
+        return;
+    }
+    if (bRequireServerSaves && !m_characterSaves.CanEnter(aConnectionId))
     {
         sendKick(RT::kInvalidEntry);
         return;

@@ -32,6 +32,7 @@ local function build_server()
         "glm",
         "entt",
         "cpp-httplib",
+        "cryptopp",
         "tiltedcore")
 end
 

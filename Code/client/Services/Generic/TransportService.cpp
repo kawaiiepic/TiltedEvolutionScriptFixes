@@ -78,7 +78,8 @@ bool TransportService::Send(const ClientMessage& acMessage, const TiltedPhoques:
         ~ScopedReset() { s_allocator.Reset(); }
     } allocatorGuard;
 
-    if (Client::IsConnected() && (m_connected || acMessage.GetOpcode() == AuthenticationRequest::Opcode))
+    if (Client::IsConnected() && (m_connected || acMessage.GetOpcode() == AuthenticationRequest::Opcode ||
+        (m_lobbyAuthenticated && acMessage.GetOpcode() == RequestCharacterSave::Opcode)))
     {
         ScopedAllocator _{s_allocator};
 
@@ -99,6 +100,8 @@ bool TransportService::Send(const ClientMessage& acMessage, const TiltedPhoques:
 
 void TransportService::OnConsume(const void* apData, uint32_t aSize)
 {
+    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == NotifyCharacterSave::Opcode && aSize != CharacterSavePayload::WireSize))
+        return;
     ServerMessageFactory factory;
     TiltedPhoques::ViewBuffer buf((uint8_t*)apData, aSize);
     Buffer::Reader reader(&buf);
@@ -110,7 +113,8 @@ void TransportService::OnConsume(const void* apData, uint32_t aSize)
         return;
     }
 
-    if (m_connected || pMessage->GetOpcode() == AuthenticationResponse::Opcode)
+    if (m_connected || pMessage->GetOpcode() == AuthenticationResponse::Opcode ||
+        (m_lobbyAuthenticated && pMessage->GetOpcode() == NotifyCharacterSave::Opcode))
         m_messageHandlers[pMessage->GetOpcode()](pMessage);
 }
 

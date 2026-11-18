@@ -5,6 +5,7 @@
 #include <World.h>
 #include <map>
 #include <chrono>
+#include <Campaign/CharacterSaveStore.h>
 
 using TiltedPhoques::ConnectionId_t;
 using TiltedPhoques::Server;
@@ -93,6 +94,7 @@ struct GameServer final : Server
     Player const* GetAdminByUsername(const String& acUsername) noexcept;
 
 protected:
+    void HandleCharacterSave(ConnectionId_t aConnectionId, const RequestCharacterSave& acRequest);
     void HandleWorldEntry(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest);
     void HandleAuthenticationRequest(ConnectionId_t aConnectionId, const UniquePtr<AuthenticationRequest>& acRequest);
 
@@ -126,6 +128,7 @@ private:
         std::chrono::steady_clock::time_point Expires;
     };
     std::map<ConnectionId_t, LobbySession> m_lobbySessions;
+    Campaign::CharacterSaveStore m_characterSaves{"character-saves"};
     TiltedPhoques::Set<ConnectionId_t> m_adminSessions;
     TiltedPhoques::Map<ConnectionId_t, entt::entity> m_connectionToEntity;
 

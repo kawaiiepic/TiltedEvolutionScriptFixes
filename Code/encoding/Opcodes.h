@@ -56,6 +56,7 @@ enum ClientOpcode : unsigned char
     kRequestSceneState,
     kRequestQuestSyncAck,
     kRequestCarriageTravel,
+    kRequestCharacterSave,
     kClientOpcodeMax
 };
 
@@ -118,5 +119,6 @@ enum ServerOpcode : unsigned char
     kNotifyActionEvents,
     kNotifySceneState,
     kNotifyPlayerDowned,
+    kNotifyCharacterSave,
     kServerOpcodeMax
 };

@@ -1,6 +1,6 @@
 <ng-container *ngIf="(inGame$ | async) || (mainMenu$ | async)">
   <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
-    F2 · MULTIPLAYER
+    F2 · PLAY
   </aside>
   <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
@@ -52,7 +52,7 @@
         [attr.data-style-active]="(view$ | async) === RootView.CONNECT"
         (click)="setView(RootView.CONNECT)"
       >
-        {{ 'COMPONENT.ROOT.CONNECT' | transloco }}
+        {{ (mainMenu$ | async) ? 'Play' : ('COMPONENT.ROOT.CONNECT' | transloco) }}
       </button>
       <ng-container *ngIf="lobby$ | async">
         <button *ngIf="inGame$ | async" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>

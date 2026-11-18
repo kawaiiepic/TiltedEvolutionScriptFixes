@@ -131,6 +131,11 @@ export class RootComponent implements OnInit {
         ) {
           setTimeout(() => this.chatComp?.focus(), 100);
         }
+        if (state && this.client.mainMenuChange.getValue() &&
+            !this.client.lobbyStateChange.getValue() && !this.client.connectionStateChange.getValue() &&
+            !this.client.isConnectionInProgressChange.getValue()) {
+          this.setView(View.CONNECT);
+        }
         if (!state) {
           this.closeView();
         }
