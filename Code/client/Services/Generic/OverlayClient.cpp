@@ -36,10 +36,8 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         auto eventName = pArguments->GetString(0).ToString();
         auto eventArgs = pArguments->GetList(1);
 
-        spdlog::info(eventName);
-        spdlog::info(eventArgs->GetString(0).ToString());
-        spdlog::info(std::to_string(eventArgs->GetInt(1)));
-        spdlog::info(eventArgs->GetString(2).ToString());
+        // Never log arbitrary UI arguments; a connect request contains a password.
+        spdlog::debug("UI event {}", eventName);
 
 #ifndef PUBLIC_BUILD
         LOG(INFO) << "event=ui_event name=" << eventName;
@@ -49,6 +47,19 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")
             ProcessDisconnectMessage();
+        else if (eventName == "enterWorld")
+        {
+            World::Get().GetRunner().Queue([]()
+            {
+                auto& world = World::Get();
+                if (!world.GetTransport().EnterWorld())
+                    world.GetOverlayService().SendSystemMessage("Finish loading or creating your character, then try Enter World again.");
+            });
+        }
+        else if (eventName == "deactivate")
+            SetUIVisible(false);
+        else if (!m_transport.IsOnline() && eventName != "openPlayGuide")
+            return true;
         else if (eventName == "revealPlayers")
             ProcessRevealPlayersMessage();
         else if (eventName == "sendMessage")
@@ -132,11 +143,9 @@ void OverlayClient::ProcessConnectMessage(CefRefPtr<CefListValue> aEventArgs)
     }
 
     uint16_t port = aEventArgs->GetInt(1) ? aEventArgs->GetInt(1) : 10578;
-    World::Get().GetTransport().SetServerPassword(aEventArgs->GetString(2));
-
-    std::string endpoint = baseIp + ":" + std::to_string(port);
-
-    World::Get().GetRunner().Queue([endpoint] { World::Get().GetTransport().Connect(endpoint); });
+    const std::string password = aEventArgs->GetString(2).ToString();
+    const std::string endpoint = baseIp + ":" + std::to_string(port);
+    World::Get().GetRunner().Queue([endpoint, password] { World::Get().GetTransport().BeginConnection(endpoint, password); });
 }
 
 void OverlayClient::ProcessDisconnectMessage()

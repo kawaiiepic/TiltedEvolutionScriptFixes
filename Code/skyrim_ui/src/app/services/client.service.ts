@@ -47,6 +47,8 @@ export class ClientService implements OnDestroy {
 
   /** Connection state change. */
   public connectionStateChange = new BehaviorSubject(false);
+  public readonly mainMenuChange = new BehaviorSubject(false);
+  public readonly lobbyStateChange = new BehaviorSubject(false);
 
   public isConnectionInProgressChange = new BehaviorSubject(false);
 
@@ -143,6 +145,11 @@ export class ClientService implements OnDestroy {
     skyrimtogether.on('enterGame', this.onEnterGame.bind(this));
     skyrimtogether.on('exitGame', this.onExitGame.bind(this));
     skyrimtogether.on('openingMenu', this.onOpeningMenu.bind(this));
+    skyrimtogether.on('mainMenu', state => this.zone.run(() => this.mainMenuChange.next(state)));
+    skyrimtogether.on('serverLobby', state => this.zone.run(() => {
+      this.lobbyStateChange.next(state);
+      if (state) this.isConnectionInProgressChange.next(false);
+    }));
     skyrimtogether.on('connect', this.onConnect.bind(this));
     skyrimtogether.on('disconnect', this.onDisconnect.bind(this));
     skyrimtogether.on('setName', this.onSetName.bind(this)); //not wanted, we dont sync name changes
@@ -188,6 +195,8 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('enterGame');
     skyrimtogether.off('exitGame');
     skyrimtogether.off('openingMenu');
+    skyrimtogether.off('mainMenu');
+    skyrimtogether.off('serverLobby');
     skyrimtogether.off('connect');
     skyrimtogether.off('disconnect');
     skyrimtogether.off('setName');
@@ -222,6 +231,7 @@ export class ClientService implements OnDestroy {
    * @param password Password or admin password
    */
   public connect(host: string, port: number, password = ''): void {
+    if (this.lobbyStateChange.getValue() || this.connectionStateChange.getValue() || this.isConnectionInProgressChange.getValue()) return;
     skyrimtogether.connect(host, port, password);
     this.isConnectionInProgressChange.next(true);
     this._host = host;
@@ -232,6 +242,10 @@ export class ClientService implements OnDestroy {
   /**
    * Disconnect from the server or cancel connection.
    */
+  public enterWorld(): void {
+    if (this.lobbyStateChange.getValue() && this.inGameStateChange.getValue()) skyrimtogether.enterWorld();
+  }
+
   public disconnect(): void {
     skyrimtogether.disconnect();
     this._remainingReconnectionAttempt = 0;
@@ -378,6 +392,7 @@ export class ClientService implements OnDestroy {
     this.zone.run(async () => {
       this._remainingReconnectionAttempt = environment.nbReconnectionAttempts;
       this.isConnectionInProgressChange.next(false);
+      this.lobbyStateChange.next(false);
       this.connectionStateChange.next(true);
 
       this.chatService.pushSystemMessage('SERVICE.CLIENT.CONNECTED');
@@ -392,6 +407,7 @@ export class ClientService implements OnDestroy {
       this.localPlayerId = undefined;
       this.sharedDialogueChange.next([]);
       this.characterPortraits.next(new Map());
+      this.lobbyStateChange.next(false);
       this.connectionStateChange.next(false);
       this.isConnectionInProgressChange.next(false);
 

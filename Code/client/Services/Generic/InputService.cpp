@@ -103,9 +103,10 @@ void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
     TiltedPhoques::DInputHook::Get().SetEnabled(aActive);
     aOverlay.SetActive(aActive);
 
-    // Ensures the game is actually loaded, in case the initial event was sent too early
+    // Resend the actual context; opening the multiplayer overlay from the
+    // title screen must never pretend a Skyrim character is loaded.
     aOverlay.SetVersion(BUILD_COMMIT);
-    aOverlay.GetOverlayApp()->ExecuteAsync("enterGame");
+    aOverlay.RefreshMenuPresentation();
 
     apRenderer->SetCursorVisible(aActive);
 
@@ -200,7 +201,7 @@ void ProcessKeyboard(uint16_t aKey, uint16_t aScanCode, cef_key_event_type_t aTy
 
     if (aType != KEYEVENT_CHAR && (IsToggleKey(aKey) || (IsDisableKey(aKey) && active)))
     {
-        if (!overlay.GetInGame())
+        if (!overlay.GetInGame() && !overlay.GetMainMenu())
         {
             TiltedPhoques::DInputHook::Get().SetEnabled(false);
         }

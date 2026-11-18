@@ -1,5 +1,8 @@
-<ng-container *ngIf="inGame$ | async">
-  <ng-container *ngIf="!(menuOpen$ | async)">
+<ng-container *ngIf="(inGame$ | async) || (mainMenu$ | async)">
+  <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
+    F2 · MULTIPLAYER
+  </aside>
+  <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
 
     <app-group></app-group>
@@ -44,13 +47,18 @@
   >
     <app-window border="strip" class="app-root-menu">
       <button
-        *ngIf="!(connected$ | async) && !(connectionInProgress$ | async)"
+        *ngIf="!(connected$ | async) && !(lobby$ | async) && !(connectionInProgress$ | async)"
         data-style-ornament="inverted"
         [attr.data-style-active]="(view$ | async) === RootView.CONNECT"
         (click)="setView(RootView.CONNECT)"
       >
         {{ 'COMPONENT.ROOT.CONNECT' | transloco }}
       </button>
+      <ng-container *ngIf="lobby$ | async">
+        <button *ngIf="inGame$ | async" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
+        <button *ngIf="!(inGame$ | async)" data-style-ornament="inverted" (click)="returnToNativeMenu()">Create / load character</button>
+        <button data-style-ornament="inverted" (click)="setView(RootView.DISCONNECT)">Leave lobby</button>
+      </ng-container>
       <ng-container *ngIf="connected$ | async">
         <button
           data-style-ornament="inverted"
@@ -111,7 +119,13 @@
         {{ 'COMPONENT.ROOT.CONNECTION_IN_PROGRESS' | transloco }}
       </button>
     </app-window>
-    <app-window class="app-root-chat">
+    <app-window *ngIf="lobby$ | async" class="server-lobby-info">
+      <h3>Connected to character lobby</h3>
+      <p *ngIf="!(inGame$ | async)">Close the overlay and use Skyrim's New Game or Load menu. Finish character creation, then press F2 and select Enter world.</p>
+      <p *ngIf="inGame$ | async">Finish character creation and any personal starting choices. Select Enter world when ready.</p>
+      <small>Local native saves are used in this preview; server-owned saves are not enabled yet.</small>
+    </app-window>
+    <app-window *ngIf="inGame$ | async" class="app-root-chat">
       <app-chat #chat></app-chat>
     </app-window>
   </div>

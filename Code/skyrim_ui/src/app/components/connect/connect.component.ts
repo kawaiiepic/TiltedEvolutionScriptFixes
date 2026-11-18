@@ -61,6 +61,14 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
       },
     );
 
+    this.lobbySubscription = this.client.lobbyStateChange.subscribe(state => {
+      if (state && this.connecting) {
+        this.connecting = false;
+        this.sound.play(Sound.Success);
+        this.done.next();
+      }
+    });
+
     this.protocolMismatchSubscription =
       this.client.protocolMismatchChange.subscribe(async state => {
         if (state) {
@@ -87,6 +95,7 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
 
   public ngOnDestroy(): void {
     this.connectionSubscription.unsubscribe();
+    this.lobbySubscription.unsubscribe();
     this.protocolMismatchSubscription.unsubscribe();
   }
 
@@ -134,6 +143,7 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
   private inputRef!: ElementRef;
 
   private connectionSubscription: Subscription;
+  private lobbySubscription: Subscription;
 
   private protocolMismatchSubscription: Subscription;
 

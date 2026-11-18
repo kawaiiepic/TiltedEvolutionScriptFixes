@@ -32,6 +32,9 @@
 
 #include <Events/ConnectedEvent.h>
 #include <Events/DisconnectedEvent.h>
+#include <Events/ServerLobbyEvent.h>
+#include <Games/Skyrim/Interface/UI.h>
+#include <DInputHook.hpp>
 #include <Events/ConnectionErrorEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/PartyJoinedEvent.h>
@@ -117,6 +120,7 @@ OverlayService::OverlayService(World& aWorld, TransportService& transport, entt:
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&OverlayService::OnUpdate>(this);
     m_connectedConnection = aDispatcher.sink<ConnectedEvent>().connect<&OverlayService::OnConnectedEvent>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&OverlayService::OnDisconnectedEvent>(this);
+    m_lobbyConnection = aDispatcher.sink<ServerLobbyEvent>().connect<&OverlayService::OnServerLobbyEvent>(this);
     m_connectionErrorConnection = aDispatcher.sink<ConnectionErrorEvent>().connect<&OverlayService::OnConnectionError>(this);
     m_chatMessageConnection = aDispatcher.sink<NotifyChatMessageBroadcast>().connect<&OverlayService::OnChatMessageReceived>(this);
     m_playerJoinedConnection = aDispatcher.sink<NotifyPlayerJoined>().connect<&OverlayService::OnPlayerJoined>(this);
@@ -188,7 +192,7 @@ void OverlayService::Initialize() noexcept
 
 void OverlayService::SetActive(bool aActive) noexcept
 {
-    if (!m_inGame)
+    if (aActive && !m_inGame && !m_mainMenu)
         return;
     if (m_active == aActive)
         return;
@@ -217,8 +221,14 @@ void OverlayService::SetInGame(bool aInGame) noexcept
     else
     {
         m_pOverlay->ExecuteAsync("exitGame");
-        // TODO: this does nothing, since m_inGame is false
-        SetActive(false);
+        if (!m_mainMenu && m_active)
+        {
+            SetActive(false);
+            TiltedPhoques::DInputHook::Get().SetEnabled(false);
+            if (const auto client = m_pOverlay->GetClient())
+                if (const auto renderer = client->GetOverlayRenderHandler())
+                    renderer->SetCursorVisible(false);
+        }
     }
 }
 
@@ -278,8 +288,48 @@ void OverlayService::SetPlayerHealthPercentage(uint32_t aFormId) const noexcept
     m_pOverlay->ExecuteAsync("setHealth", pArguments);
 }
 
+void OverlayService::RefreshMenuPresentation() noexcept
+{
+    if (!m_pOverlay)
+        return;
+    auto args = CefListValue::Create();
+    args->SetBool(0, m_mainMenu);
+    m_pOverlay->ExecuteAsync("mainMenu", args);
+    m_pOverlay->ExecuteAsync(m_inGame ? "enterGame" : "exitGame");
+}
+
+void OverlayService::OnServerLobbyEvent(const ServerLobbyEvent& acEvent) noexcept
+{
+    if (!m_pOverlay)
+        return;
+    auto args = CefListValue::Create();
+    args->SetBool(0, acEvent.Authenticated);
+    m_pOverlay->ExecuteAsync("serverLobby", args);
+    if (!acEvent.Authenticated)
+        m_pOverlay->ExecuteAsync("disconnect");
+}
+
 void OverlayService::OnUpdate(const UpdateEvent&) noexcept
 {
+    if (!m_pOverlay)
+        return;
+    auto* pUI = UI::Get();
+    const bool mainMenu = pUI && pUI->GetMenuOpen("Main Menu");
+    if (m_mainMenu != mainMenu)
+    {
+        m_mainMenu = mainMenu;
+        auto args = CefListValue::Create();
+        args->SetBool(0, m_mainMenu);
+        m_pOverlay->ExecuteAsync("mainMenu", args);
+        if (!m_mainMenu && !m_inGame && m_active)
+        {
+            SetActive(false);
+            TiltedPhoques::DInputHook::Get().SetEnabled(false);
+            if (const auto client = m_pOverlay->GetClient())
+                if (const auto renderer = client->GetOverlayRenderHandler())
+                    renderer->SetCursorVisible(false);
+        }
+    }
     RefreshDialogueSession();
     PublishDialogueOptions();
     if (m_transport.IsOnline())

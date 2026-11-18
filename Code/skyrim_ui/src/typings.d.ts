@@ -105,6 +105,9 @@ declare const skyrimtogether: SkyrimTogether;
 
 /** Global Skyrim: Together object type. */
 interface SkyrimTogether {
+  on(event: 'mainMenu' | 'serverLobby', callback: (state: boolean) => void): void;
+  off(event: 'mainMenu' | 'serverLobby', callback?: (state: boolean) => void): void;
+  enterWorld(): void;
   on(event: 'characterPortrait', callback: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   off(event: 'characterPortrait', callback?: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;

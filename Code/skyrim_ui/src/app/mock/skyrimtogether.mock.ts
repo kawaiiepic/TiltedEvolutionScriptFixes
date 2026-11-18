@@ -94,6 +94,8 @@ export class SkyrimtogetherMock extends EventEmitter implements SkyrimTogether {
     }
   }
 
+  enterWorld(): void { /* Browser mock has no native character lobby. */ }
+
   disconnect(): void {
     if (this.connected) {
       this.emit('disconnect');

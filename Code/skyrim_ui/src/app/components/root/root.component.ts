@@ -75,6 +75,11 @@ export class RootComponent implements OnInit {
   }
 
   connected$ = this.client.connectionStateChange.asObservable();
+  mainMenu$ = this.client.mainMenuChange.asObservable();
+  lobby$ = this.client.lobbyStateChange.asObservable();
+
+  enterWorld(): void { this.client.enterWorld(); }
+  returnToNativeMenu(): void { this.client.deactivate(); }
   menuOpen$ = this.client.openingMenuChange.asObservable();
   inGame$ = this.client.inGameStateChange.asObservable();
   active$ = this.client.activationStateChange.asObservable();
@@ -124,7 +129,7 @@ export class RootComponent implements OnInit {
           state &&
           !this.uiRepository.isViewOpen()
         ) {
-          setTimeout(() => this.chatComp.focus(), 100);
+          setTimeout(() => this.chatComp?.focus(), 100);
         }
         if (!state) {
           this.closeView();

@@ -202,3 +202,19 @@
   gap: 0.2rem;
   img { width: 1.8rem; height: 1.8rem; object-fit: cover; border-radius: 50%; border: 1px solid #8a8068; background: #292723; }
 }
+
+.multiplayer-menu-hint {
+  position: absolute;
+  left: 3vw;
+  bottom: 4vh;
+  font-size: 1.15rem;
+  letter-spacing: 0.15em;
+  color: #ddd4bd;
+  pointer-events: none;
+}
+.server-lobby-info {
+  padding: 1.1rem;
+  line-height: 1.5;
+  h3 { margin-top: 0; }
+  small { color: #c1bba8; }
+}

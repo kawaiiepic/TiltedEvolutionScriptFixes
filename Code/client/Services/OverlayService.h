@@ -17,6 +17,7 @@ struct Actor;
 struct UpdateEvent;
 struct ConnectedEvent;
 struct DisconnectedEvent;
+struct ServerLobbyEvent;
 struct TransportService;
 struct NotifyChatMessageBroadcast;
 struct NotifyPlayerList;
@@ -56,6 +57,8 @@ struct OverlayService
 
     void SetInGame(bool aInGame) noexcept;
     [[nodiscard]] bool GetInGame() const noexcept;
+    [[nodiscard]] bool GetMainMenu() const noexcept { return m_mainMenu; }
+    void RefreshMenuPresentation() noexcept;
 
     void SetVersion(const std::string& acVersion);
 
@@ -74,6 +77,7 @@ protected:
     void OnUpdate(const UpdateEvent&) noexcept;
     void OnConnectedEvent(const ConnectedEvent&) noexcept;
     void OnDisconnectedEvent(const DisconnectedEvent&) noexcept;
+    void OnServerLobbyEvent(const ServerLobbyEvent&) noexcept;
     void OnWaitingFor3DRemoved(entt::registry& aRegistry, entt::entity aEntity) const noexcept;
     void OnPlayerComponentRemoved(entt::registry& aRegistry, entt::entity aEntity) const noexcept;
     void OnConnectionError(const ConnectionErrorEvent& acConnectedEvent) const noexcept;
@@ -103,6 +107,7 @@ private:
 
     bool m_active = false;
     bool m_inGame = false;
+    bool m_mainMenu = false;
 
     uint32_t m_dialogueActorId{};
     uint32_t m_dialogueToken{};
@@ -119,6 +124,7 @@ private:
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_connectedConnection;
     entt::scoped_connection m_disconnectedConnection;
+    entt::scoped_connection m_lobbyConnection;
     entt::scoped_connection m_connectionErrorConnection;
     entt::scoped_connection m_cellChangeEventConnection;
     entt::scoped_connection m_chatMessageConnection;

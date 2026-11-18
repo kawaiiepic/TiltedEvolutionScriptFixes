@@ -139,6 +139,13 @@ void TransportService::BeginConnection(const std::string& acEndpoint, const std:
 
 void TransportService::OnConnected()
 {
+    // Retain support for existing debug callers that use the base Connect
+    // API rather than the overlay's BeginConnection.
+    if (!m_connectionPending)
+    {
+        m_connectionPending = true;
+        m_enterAfterLogin = CanEnterWorld();
+    }
     AuthenticationRequest request{};
     request.Phase = AuthenticationRequest::Login;
     request.Version = BUILD_PROTOCOL;

@@ -66,6 +66,14 @@ export class ConnectPasswordComponent implements AfterViewInit {
         }
       });
 
+    this.client.lobbyStateChange.pipe(takeUntil(this.destroy$)).subscribe(state => {
+      if (state && this.connecting) {
+        this.connecting = false;
+        this.sound.play(Sound.Success);
+        this.done.next();
+      }
+    });
+
     this.client.protocolMismatchChange
       .pipe(takeUntil(this.destroy$))
       .subscribe(async state => {
