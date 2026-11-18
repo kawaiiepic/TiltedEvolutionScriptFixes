@@ -19,6 +19,12 @@ The dedicated server records shared quest events. Skyrim still evaluates conditi
 
 The existing feature branch derived quest state from native start, stage and stop observations. This preserves authored conditions but also means a script can run locally before the server learns of it. A stop or stage accepted by the server cannot undo already executed effects on another save. The server serializes accepted records as it receives them, suppresses duplicate stages and refuses to reopen a stopped quest. It has no quest-specific knowledge of whether two distinct stages represent mutually exclusive choices.
 
+## Native dialogue presentation
+
+Resolved non-actor speakers (including talking activators) now use native local dialogue without requesting an NPC ownership grant. Any previous shared grant is cleared when entering local dialogue. Unresolved speakers still require a verified actor identity before shared selection. Test Alternate Start's Statue of Mara while connected and confirm normal NPC ownership remains enforced.
+
+Native non-owner option selections already count as votes when the text uniquely matches an owner option. The desired presentation is the existing Skyrim dialogue list with vote counts appended to display labels, not a second voting list. The repository's menu wrapper exposes an opaque `uiMovie` pointer and read-only option text, but no verified Scaleform dialogue-list update method or lifetime contract. Do not overwrite native option text pointers or mutate interned strings. Verify the actual Dialogue Menu list and refresh path for both supported runtimes before replacing the overlay voting list. Preserve original option identity, revision validation, privacy and owner-only execution. The existing overlay remains until that native display path can be verified.
+
 ## Server operation
 
 Use a separate working directory for each server instance. Keep the files below on a persistent volume when using a container and use one active writer for that directory.

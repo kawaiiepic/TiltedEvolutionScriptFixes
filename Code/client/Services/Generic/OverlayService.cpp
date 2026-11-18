@@ -388,13 +388,23 @@ void OverlayService::RefreshDialogueSession() noexcept
     }
 
     const uint32_t cHandle = pManager->speaker.handle.iBits;
+    auto* pSpeaker = TESObjectREFR::GetByHandle(cHandle);
+
+    // Talking activators and other non-actor speakers never participate in
+    // shared NPC dialogue. Release any previous grant before leaving them local.
+    if (pSpeaker && !Cast<Actor>(pSpeaker))
+    {
+        if (m_dialogueToken)
+            CloseDialogueSession();
+        return;
+    }
+
     if (m_dialogueToken && m_dialogueSpeakerHandle == cHandle)
         return;
 
     if (m_dialogueToken)
         CloseDialogueSession();
 
-    auto* pSpeaker = TESObjectREFR::GetByHandle(cHandle);
     if (!pSpeaker)
         return;
 
@@ -499,6 +509,19 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
         return true;
 
     RefreshDialogueSession();
+
+    // A resolved non-actor speaker (for example a talking statue) cannot
+    // receive an NPC ownership grant. Let Skyrim execute its native choice.
+    // An unresolved speaker is not evidence that the conversation is local:
+    // normal NPCs must still wait for a grant.
+    const auto* pManager = MenuTopicManager::Get();
+    if (pManager && pManager->menuOpen && pManager->speaker)
+    {
+        auto* pSpeaker = TESObjectREFR::GetByHandle(pManager->speaker.handle.iBits);
+        if (pSpeaker && !Cast<Actor>(pSpeaker))
+            return true;
+    }
+
     if (m_dialogueYielded)
     {
         Utils::ShowHudMessage("You passed control. Close and reopen dialogue to rejoin.");
