@@ -274,7 +274,10 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
             ApplyLockState(*pObject, objectData.CurrentLockData.IsLocked, objectData.CurrentLockData.LockLevel);
 
         if (objectData.HasCampaignStock && pObject->baseForm->formType == FormType::Container)
+        {
             RestoreContainerStock(*pObject, objectData.CurrentInventory);
+            continue;
+        }
 
         if (objectData.IsSenderFirst)
             continue;

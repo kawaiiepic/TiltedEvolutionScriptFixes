@@ -20,6 +20,8 @@ void AssignCharacterRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     Serialization::WriteBool(aWriter, IsPlayerSummon);
     CurrentActorData.Serialize(aWriter);
     LeveledNpcPickId.Serialize(aWriter);
+    Serialization::WriteBool(aWriter, IsNonRespawning);
+    Serialization::WriteBool(aWriter, HasLeveledBase);
 }
 
 void AssignCharacterRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -55,4 +57,6 @@ void AssignCharacterRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
 
     CurrentActorData.Deserialize(aReader);
     LeveledNpcPickId.Deserialize(aReader);
+    IsNonRespawning = Serialization::ReadBool(aReader);
+    HasLeveledBase = Serialization::ReadBool(aReader);
 }

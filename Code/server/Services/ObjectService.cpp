@@ -93,8 +93,8 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
         if (!key || !cellKey)
             continue;
 
-        const bool cPersist = m_lockPolicies.IsShared(*key, m_cellLockPolicies.IsShared(*cellKey,
-            object.NoResetZone && !object.WorldSpaceId));
+        const bool cNoResetInterior = object.NoResetZone && !object.WorldSpaceId;
+        const bool cPersist = m_lockPolicies.IsShared(*key, m_cellLockPolicies.IsShared(*cellKey, cNoResetInterior));
         const auto iter = std::find_if(
             std::begin(view), std::end(view),
             [view, id = object.Id](auto entity)
@@ -123,8 +123,8 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
             {
                 if (const auto* pStock = m_stockJournal.Find(*objectComponent.CampaignStock))
                 {
-                    ApplySavedStock(inventoryComponent.Content, *pStock);
-                    objectData.CurrentInventory = inventoryComponent.Content;
+                    ApplySavedStock(objectData.CurrentInventory, *pStock);
+                    objectData.HasCampaignStock = true;
                 }
             }
 
@@ -163,7 +163,7 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
                 }
             }
 
-            if (object.IsContainer && m_stockCells.IsShared(*cellKey, false))
+            if (object.IsContainer && m_stockCells.IsShared(*cellKey, cNoResetInterior))
             {
                 objectComponent.CampaignStock = key;
                 if (const auto* pStock = m_stockJournal.Find(*key))

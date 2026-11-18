@@ -1493,9 +1493,12 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     message.IsDragon = pActor->IsDragon();
     message.IsMount = pActor->IsMount();
     message.IsPlayerSummon = pActor->GetCommandingActor() && pActor->GetCommandingActor()->formID == 0x14;
+    message.IsNonRespawning = !pNpc->actorData.Respawns() && !pNpc->actorData.IsEssential() &&
+                              !pNpc->actorData.baseTemplateForm && !pNpc->actorData.templateUseFlags;
 
     if (const TESNPC* pPick = pActor->GetLeveledPick())
     {
+        message.HasLeveledBase = true;
         const uint32_t pickFormId = pPick->formID;
         if (m_world.GetModSystem().GetServerModId(pickFormId, message.LeveledNpcPickId))
             spdlog::info("Captured leveled NPC pick {:X} for actor {:X} (base {:X})", pickFormId, pActor->formID, pNpc->formID);
@@ -1504,6 +1507,7 @@ void CharacterService::RequestServerAssignment(const entt::entity aEntity) const
     }
     else if (pNpc->IsTemporary())
     {
+        message.HasLeveledBase = true;
         spdlog::info("No leveled pick recoverable for temp base {:X} (actor {:X}), identity sync unavailable", pNpc->formID, pActor->formID);
     }
 

@@ -703,10 +703,10 @@ void CharacterService::CreateCharacter(const PacketEvent<AssignCharacterRequest>
     characterComponent.SetMount(message.IsMount);
     characterComponent.SetPlayerSummon(message.IsPlayerSummon);
 
-    if (!isCustom && !message.IsMount && !message.IsPlayerSummon && !message.LeveledNpcPickId)
+    if (!isCustom && !message.IsMount && !message.IsPlayerSummon && !message.HasLeveledBase && !message.LeveledNpcPickId)
     {
         const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(gameId, *acMessage.pPlayer);
-        if (key && m_npcLifePolicies.IsShared(*key, false))
+        if (key && m_npcLifePolicies.IsShared(*key, message.IsNonRespawning))
         {
             characterComponent.CampaignDeathKey = key;
             if (const auto dead = m_npcLife.GetDeathState(*key))
