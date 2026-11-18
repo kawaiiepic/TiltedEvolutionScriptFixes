@@ -26,6 +26,7 @@
 #include <Events/UpdateEvent.h>
 
 #include <Games/Skyrim/Interface/UI.h>
+#include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 #include <ModCompat/BehaviorVar.h>  
 
 World::World()
@@ -114,6 +115,12 @@ void World::SetMenuWindowThread(uint32_t aThreadId) noexcept
         Get().m_gameThreadId.store(aThreadId, std::memory_order_release);
 }
 
+void World::QueueCheckpointTask(std::function<void()> aTask) noexcept
+{
+    m_checkpointTasks.Add(std::move(aTask));
+    BSGraphics::WakeMainMenuPump();
+}
+
 void World::UpdateMainMenu() noexcept
 {
     // Use only the game thread. A window/engine callback may be nested
@@ -127,6 +134,9 @@ void World::UpdateMainMenu() noexcept
     }
     if (m_updating.test_and_set(std::memory_order_acquire)) return;
     const UpdateGuard guard{m_updating};
+    // The VM can tick on a worker. Only the window owner drains native
+    // checkpoint calls, including autosaves after leaving the title screen.
+    m_checkpointTasks.Drain();
     auto& overlay = GetOverlayService();
     if (!overlay.GetOverlayApp()) return;
     if (!m_loggedMenuPump)
