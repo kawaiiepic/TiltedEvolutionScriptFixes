@@ -5,15 +5,11 @@
 #endif
 
 #include <Structs/LockData.h>
-#include <Game/Player.h>
+#include <Campaign/PluginFormKey.h>
+#include <optional>
 
 struct ObjectComponent
 {
-    ObjectComponent(Player* apLastSender)
-        : pLastSender(apLastSender)
-    {
-    }
-
-    Player* pLastSender;
+    std::optional<Campaign::PluginFormKey> CampaignLock;
     LockData CurrentLockData{};
 };

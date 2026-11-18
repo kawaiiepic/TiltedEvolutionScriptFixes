@@ -90,21 +90,14 @@ void PlayerService::HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellR
     auto& message = acMessage.Packet;
     auto* pPlayer = acMessage.pPlayer;
 
-    if (pPlayer->GetCharacter())
-    {
-        auto entity = *pPlayer->GetCharacter();
+    const GameId oldCell = pPlayer->GetCellComponent().Cell;
+    if (const auto character = pPlayer->GetCharacter())
+        m_world.GetDispatcher().trigger(CharacterExteriorCellChangeEvent{pPlayer, *character, message.WorldSpaceId, message.CurrentCoords});
 
-        auto cell = CellIdComponent{message.CellId, message.WorldSpaceId, message.CurrentCoords};
-
-        if (pPlayer->GetCellComponent())
-        {
-            m_world.GetDispatcher().trigger(CharacterExteriorCellChangeEvent{pPlayer, entity, message.WorldSpaceId, message.CurrentCoords});
-        }
-
-        pPlayer->SetCellComponent(cell);
-
-        SendPlayerCellChanged(pPlayer);
-    }
+    pPlayer->SetCellComponent({message.CellId, message.WorldSpaceId, message.CurrentCoords});
+    if (oldCell && oldCell != message.CellId)
+        m_world.GetDispatcher().trigger(PlayerLeaveCellEvent(oldCell));
+    SendPlayerCellChanged(pPlayer);
 }
 
 void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellRequest>& acMessage) const noexcept
@@ -118,7 +111,8 @@ void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellR
     auto cell = CellIdComponent{message.CellId, {}, {}};
     pPlayer->SetCellComponent(cell);
 
-    m_world.GetDispatcher().trigger(PlayerLeaveCellEvent(oldCell));
+    if (oldCell && oldCell != message.CellId)
+        m_world.GetDispatcher().trigger(PlayerLeaveCellEvent(oldCell));
 
     if (pPlayer->GetCharacter())
     {

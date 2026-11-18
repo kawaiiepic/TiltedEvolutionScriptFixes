@@ -43,23 +43,18 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     EventDispatcherManager::Get()->activateEvent.RegisterSink(this);
 }
 
+static bool IsNoResetZone(const TESObjectCELL* apCell) noexcept
+{
+    const auto* pZone = apCell && apCell->loadedCellData ? apCell->loadedCellData->encounterZone : nullptr;
+    if (!pZone)
+        return false;
+    const auto* pSkyrim = ModManager::Get()->GetByName("Skyrim.esm");
+    return pSkyrim && pZone->formID == (static_cast<uint32_t>(pSkyrim->GetId()) << 24 | 0xF90B1u);
+}
+
 bool IsPlayerHome(const TESObjectCELL* pCell) noexcept
 {
-    if (pCell && pCell->loadedCellData && pCell->loadedCellData->encounterZone)
-    {
-        // Only return true if cell has the NoResetZone encounter zone
-        if (pCell->loadedCellData->encounterZone->formID == 0xf90b1)
-        {
-            switch (pCell->formID)
-            {
-            case 0xeec55: // one known exception: Sinderion's Field Lab
-                return false;
-            default: return true;
-            }
-        }
-    }
-
-    return false;
+    return IsNoResetZone(pCell) && pCell->formID != 0xEEC55; // Sinderion's Field Lab
 }
 
 // Find each loaded faction's containers for a jailed player's belongings and stolen items.
@@ -134,6 +129,7 @@ static void ApplyLockState(TESObjectREFR& aObject, bool aLocked, uint8_t aLevel)
 
 void ObjectService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
+    m_cell = {};
     auto view = m_world.view<ObjectComponent>();
     m_world.destroy(view.begin(), view.end());
 }
@@ -142,6 +138,10 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 {
     if (!m_transport.IsConnected())
         return;
+
+    m_cell = acEvent.CellId;
+    auto view = m_world.view<ObjectComponent>();
+    m_world.destroy(view.begin(), view.end());
 
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
     TESObjectCELL* pCell = pPlayer ? pPlayer->parentCell : nullptr;
@@ -177,6 +177,7 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     AssignObjectsRequest request{};
 
     const Set<const TESObjectREFR*> playerStashContainers = GetPlayerStashContainers();
+    const bool cNoReset = IsNoResetZone(pCell);
 
     for (TESObjectREFR* pObject : objects)
     {
@@ -188,10 +189,12 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 
         ObjectData objectData{};
         objectData.CellId = cellId;
+        objectData.NoResetZone = cNoReset;
         objectData.WorldSpaceId = worldSpaceId;
         objectData.CurrentCoords = GridCellCoords::CalculateGridCellCoords(pObject->position.x, pObject->position.y);
 
-        if (!m_world.GetModSystem().GetServerModId(pObject->formID, objectData.Id))
+        if (!m_world.GetModSystem().GetServerModId(pObject->formID, objectData.Id) ||
+            m_world.GetModSystem().GetGameId(objectData.Id) != pObject->formID)
         {
             spdlog::error("Server form id not found for object with form id {:X}", pObject->formID);
             continue;
@@ -216,6 +219,9 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
 {
     for (const ObjectData& objectData : acMessage.Objects)
     {
+        if (!m_cell || objectData.CellId != m_cell)
+            continue;
+
         const uint32_t cObjectId = World::Get().GetModSystem().GetGameId(objectData.Id);
         TESObjectREFR* pObject = Cast<TESObjectREFR>(TESForm::GetById(cObjectId));
         if (!pObject)
@@ -264,6 +270,9 @@ entt::entity ObjectService::CreateObjectEntity(const uint32_t acFormId, const ui
 
 void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 {
+    if (!acEvent.pObject || !acEvent.pActivator)
+        return;
+
     if (acEvent.ActivateFlag)
     {
         acEvent.pObject->Activate(acEvent.pActivator, acEvent.Unk1, acEvent.pObjectToGet, acEvent.Count, acEvent.DefaultProcessing);
@@ -411,7 +420,13 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
 void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) noexcept
 {
     ScriptAnimationRequest request{};
-    request.FormID = acEvent.FormID;
+    auto& mods = m_world.GetModSystem();
+    auto* pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormID));
+    auto* pCell = pObject ? pObject->GetParentCellEx() : nullptr;
+    if (!m_transport.IsOnline() || !pCell || !mods.GetServerModId(acEvent.FormID, request.Id) ||
+        mods.GetGameId(request.Id) != acEvent.FormID ||
+        !mods.GetServerModId(pCell->formID, request.Cell) || request.Cell != m_cell)
+        return;
     request.Animation = acEvent.Animation;
     request.EventName = acEvent.EventName;
 
@@ -420,15 +435,16 @@ void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) 
 
 void ObjectService::OnNotifyScriptAnimation(const NotifyScriptAnimation& acMessage) noexcept
 {
-    if (acMessage.FormID == 0)
+    if (!m_cell || acMessage.Cell != m_cell)
         return;
 
-    auto* pForm = TESForm::GetById(acMessage.FormID);
+    const uint32_t cFormId = m_world.GetModSystem().GetGameId(acMessage.Id);
+    auto* pForm = TESForm::GetById(cFormId);
     auto* pObject = Cast<TESObjectREFR>(pForm);
 
     if (!pObject)
     {
-        spdlog::error("Failed to fetch notify script animation object, form id: {:X}", acMessage.FormID);
+        spdlog::error("Failed to fetch notify script animation object, form id: {:X}", cFormId);
         return;
     }
 

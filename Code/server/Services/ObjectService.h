@@ -28,6 +28,7 @@ private:
 
     World& m_world;
     Campaign::FormSyncPolicies m_lockPolicies;
+    Campaign::FormSyncPolicies m_cellLockPolicies;
     Campaign::LockJournal m_lockJournal;
 
     entt::scoped_connection m_leaveCellConnection;

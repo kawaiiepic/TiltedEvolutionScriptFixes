@@ -25,4 +25,5 @@ struct ObjectData
     Inventory CurrentInventory{};
     bool IsSenderFirst{};
     bool HasCampaignLock{};
+    bool NoResetZone{};
 };

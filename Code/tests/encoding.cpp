@@ -694,6 +694,8 @@ TEST_CASE("First object assignment can restore an unlocked campaign lock", "[enc
     object.Id = GameId(1, 0x18B);
     object.IsSenderFirst = true;
     object.HasCampaignLock = true;
+    object.NoResetZone = true;
+    object.CellId = GameId(0, 0x804);
 
     Buffer buffer(1024);
     Buffer::Writer writer(&buffer);

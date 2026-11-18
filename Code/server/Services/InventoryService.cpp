@@ -70,12 +70,19 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
             }
         }
     }
-    else if (message.OwnershipEpoch != 0)
+    else
     {
-        spdlog::warn(
-            "Rejected inventory change from player {:X} because object {:X} unexpectedly carried ownership epoch {}",
-            acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch);
-        return;
+        const auto* pCell = m_world.try_get<CellIdComponent>(*it);
+        if (!m_world.all_of<ObjectComponent>(*it) || !pCell || !acMessage.pPlayer->GetCharacter() ||
+            acMessage.pPlayer->GetCellComponent().Cell != pCell->Cell || message.Item.IsQuestItem)
+            return;
+        if (message.OwnershipEpoch != 0)
+        {
+            spdlog::warn(
+             "Rejected inventory change from player {:X} because object {:X} unexpectedly carried ownership epoch {}",
+                acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch);
+            return;
+        }
     }
 
     auto& inventoryComponent = view.get<InventoryComponent>(*it);

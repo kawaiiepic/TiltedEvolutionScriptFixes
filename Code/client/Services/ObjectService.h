@@ -2,6 +2,7 @@
 
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Structs/GameId.h>
 
 struct ServerTimeSettings;
 struct DisconnectedEvent;
@@ -39,6 +40,7 @@ private:
 
     entt::entity CreateObjectEntity(const uint32_t acFormId, const uint32_t acServerId) noexcept;
 
+    GameId m_cell{};
     World& m_world;
     TransportService& m_transport;
 
