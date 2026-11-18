@@ -22,7 +22,6 @@ if is_plat("linux") then
         set_kind("binary")
         set_group("Tests")
         set_default(false)
-        add_undefines("NDEBUG")
         add_defines("STEAMNETWORKINGSOCKETS_STATIC_LINK")
         add_files("integration/CampaignClient.cpp")
         add_includedirs("../encoding")

@@ -1,3 +1,7 @@
+// The transport assertions must run when testing a release server.
+#undef NDEBUG
+#include <cassert>
+
 #include <EncodingPch.h>
 #include <Messages/ClientMessageFactory.h>
 #include <Messages/ServerMessageFactory.h>
@@ -6,7 +10,6 @@
 #include <Packet.hpp>
 #include <steam/isteamnetworkingutils.h>
 
-#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstring>

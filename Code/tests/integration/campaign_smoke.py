@@ -120,7 +120,7 @@ end)
         runner.expect("CAMPAIGN_SMOKE_COMMITTED")
         runner.expect("CAMPAIGN_SMOKE_COMPLETED")
         assert (directory / "shared-stock.log").read_text().endswith(' "Skyrim.esm" 0 15 5\n')
-        assert (directory / "shared-npc-life.log").read_text().endswith(' 2201 1\n')
+        assert (directory / "shared-npc-life.log").read_text() == '1 1 "Quest Pack.esl" 1 2201 1\n'
         assert (directory / "shared-locks.log").read_text() == '1 1 "Quest Pack.esl" 1 2221 0 0\n'
         test_client("missing")
         test_client("live")
@@ -140,7 +140,10 @@ end)
             test_client("stock-follower")
             assert owner.wait(timeout=8) == 0
         test_client("resurrect")
-        assert (directory / "shared-npc-life.log").read_text().endswith(' 2201 0\n')
+        assert (directory / "shared-npc-life.log").read_text().splitlines() == [
+            '1 1 "Quest Pack.esl" 1 2201 1',
+            '1 2 "Quest Pack.esl" 1 2201 0',
+        ]
         with subprocess.Popen([harness, "weather-owner", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as owner:
             assert select.select([owner.stdout], [], [], 12)[0]
