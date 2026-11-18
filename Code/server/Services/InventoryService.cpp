@@ -2,6 +2,7 @@
 
 #include <Components.h>
 #include <World.h>
+#include <Services/ObjectService.h>
 #include <GameServer.h>
 
 #include <Messages/NotifyObjectInventoryChanges.h>
@@ -86,6 +87,9 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
     }
 
     auto& inventoryComponent = view.get<InventoryComponent>(*it);
+    if (const auto* pObject = m_world.try_get<ObjectComponent>(*it);
+        pObject && !m_world.ctx().at<ObjectService>().CommitStockChange(*pObject, inventoryComponent.Content, message.Item))
+        return;
     inventoryComponent.Content.AddOrRemoveEntry(message.Item);
 
     if (!message.UpdateClients && !isRemoteNpcInteraction)

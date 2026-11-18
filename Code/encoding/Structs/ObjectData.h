@@ -26,4 +26,6 @@ struct ObjectData
     bool IsSenderFirst{};
     bool HasCampaignLock{};
     bool NoResetZone{};
+    bool IsContainer{};
+    bool HasCampaignStock{};
 };

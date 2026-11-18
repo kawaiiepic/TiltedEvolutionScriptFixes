@@ -11,5 +11,6 @@
 struct ObjectComponent
 {
     std::optional<Campaign::PluginFormKey> CampaignLock;
+    std::optional<Campaign::PluginFormKey> CampaignStock;
     LockData CurrentLockData{};
 };

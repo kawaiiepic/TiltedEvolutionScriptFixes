@@ -1,4 +1,5 @@
 #include "../server/Campaign/QuestJournal.h"
+#include "../server/Campaign/ContainerJournal.h"
 #include "../server/Campaign/NpcLifeJournal.h"
 #include "../server/Campaign/FormSyncPolicies.h"
 #include "../server/Campaign/LockJournal.h"
@@ -244,4 +245,30 @@ TEST_CASE("Persisted NPC resurrection overrides a previously recorded death", "[
     Campaign::NpcLifeJournal journal(file.Path);
     REQUIRE(journal.GetDeathState(key) == false);
     REQUIRE_FALSE(journal.GetDeathState({"Another.esl", true, key.BaseId}).has_value());
+}
+
+TEST_CASE("Container stock retains explicit empty snapshots and plugin identity", "[campaign]")
+{
+    TestJournalFile file;
+    const Campaign::PluginFormKey first{"Adventure.esp", false, 0x192};
+    const Campaign::PluginFormKey second{"Adventure.esp", false, 0x193};
+    const Campaign::PluginFormKey vanillaItem{"Skyrim.esm", false, 0xF};
+    const Campaign::PluginFormKey modItem{"Adventure.esl", true, 0xF};
+    const Campaign::ContainerStock cStock{{vanillaItem, 11}, {modItem, 4}};
+    {
+        Campaign::ContainerJournal journal(file.Path);
+        REQUIRE(journal.Set(first, cStock));
+        REQUIRE(journal.Set(second, cStock));
+        REQUIRE(journal.Set(second, {}));
+        const auto cSize = std::filesystem::file_size(file.Path);
+        REQUIRE(journal.Set(second, {}));
+        REQUIRE(std::filesystem::file_size(file.Path) == cSize);
+    }
+    Campaign::ContainerJournal journal(file.Path);
+    REQUIRE(journal.IsHealthy());
+    REQUIRE(journal.Find(first));
+    REQUIRE(*journal.Find(first) == cStock);
+    REQUIRE(journal.Find(second));
+    REQUIRE(journal.Find(second)->empty());
+    REQUIRE_FALSE(journal.Find({"Adventure.esp", false, 0x194}));
 }

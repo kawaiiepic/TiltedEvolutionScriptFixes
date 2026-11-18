@@ -1,6 +1,7 @@
 #include <Services/ObjectService.h>
 
 #include <World.h>
+#include <Games/Overrides.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/CellChangeEvent.h>
@@ -25,6 +26,7 @@
 #include <Games/TES.h>
 
 #include <inttypes.h>
+#include <map>
 
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport)
     : m_world(aWorld)
@@ -144,7 +146,7 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
     m_world.destroy(view.begin(), view.end());
 
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
-    TESObjectCELL* pCell = pPlayer ? pPlayer->parentCell : nullptr;
+    TESObjectCELL* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
     if (!pCell)
         return;
 
@@ -206,13 +208,49 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
             objectData.CurrentLockData.LockLevel = pLock->lockLevel;
         }
 
-        if (pObject->baseForm->formType == FormType::Container)
+        objectData.IsContainer = pObject->baseForm->formType == FormType::Container;
+        if (objectData.IsContainer)
             objectData.CurrentInventory = pObject->GetInventory();
 
         request.Objects.push_back(objectData);
     }
 
     m_transport.Send(request);
+}
+
+static void RestoreContainerStock(TESObjectREFR& aContainer, const Inventory& acStock) noexcept
+{
+    const Inventory current = aContainer.GetInventory();
+    std::map<uint64_t, Inventory::Entry> deltas;
+    Set<uint64_t> protectedItems;
+    for (const auto& entry : current.Entries)
+    {
+        if (!entry.IsPlainStock())
+            protectedItems.insert(entry.BaseId.LogFormat());
+    }
+
+    const auto accumulate = [&](const Inventory& acInventory, int32_t aDirection)
+    {
+        for (const auto& entry : acInventory.Entries)
+        {
+            const uint64_t cKey = entry.BaseId.LogFormat();
+            if (!entry.IsPlainStock() || protectedItems.contains(cKey) || entry.Count <= 0)
+                continue;
+            auto& delta = deltas[cKey];
+            delta.BaseId = entry.BaseId;
+            delta.Count = static_cast<int32_t>(std::clamp<int64_t>(
+                static_cast<int64_t>(delta.Count) + static_cast<int64_t>(entry.Count) * aDirection, -INT32_MAX, INT32_MAX));
+        }
+    };
+
+    accumulate(current, -1);
+    accumulate(acStock, 1);
+    ScopedInventoryOverride override;
+    for (const auto& [id, delta] : deltas)
+    {
+        if (delta.Count)
+            aContainer.AddOrRemoveItem(delta, true);
+    }
 }
 
 void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessage) noexcept
@@ -234,6 +272,9 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
 
         if (!objectData.IsSenderFirst || objectData.HasCampaignLock)
             ApplyLockState(*pObject, objectData.CurrentLockData.IsLocked, objectData.CurrentLockData.LockLevel);
+
+        if (objectData.HasCampaignStock && pObject->baseForm->formType == FormType::Container)
+            RestoreContainerStock(*pObject, objectData.CurrentInventory);
 
         if (objectData.IsSenderFirst)
             continue;

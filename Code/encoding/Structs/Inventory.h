@@ -68,6 +68,11 @@ struct Inventory
                    ExtraPoisonCount == acRhs.ExtraPoisonCount && ExtraSoulLevel == acRhs.ExtraSoulLevel && ExtraWorn == acRhs.ExtraWorn && ExtraWornLeft == acRhs.ExtraWornLeft && IsQuestItem == acRhs.IsQuestItem;
         }
 
+        bool IsPlainStock() const noexcept
+        {
+            return BaseId.BaseId && !ContainsExtraData() && !EnchantData.IsWeapon && EnchantData.Effects.empty();
+        }
+
         bool IsWorn() const noexcept { return ExtraWorn || ExtraWornLeft; }
     };
 

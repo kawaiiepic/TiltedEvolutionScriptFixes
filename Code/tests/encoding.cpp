@@ -695,6 +695,8 @@ TEST_CASE("First object assignment can restore an unlocked campaign lock", "[enc
     object.IsSenderFirst = true;
     object.HasCampaignLock = true;
     object.NoResetZone = true;
+    object.IsContainer = true;
+    object.HasCampaignStock = true;
     object.CellId = GameId(0, 0x804);
 
     Buffer buffer(1024);
@@ -705,4 +707,50 @@ TEST_CASE("First object assignment can restore an unlocked campaign lock", "[enc
     REQUIRE(message);
     REQUIRE(message->GetOpcode() == AssignObjectsResponse::Opcode);
     REQUIRE(CastUnique<AssignObjectsResponse>(std::move(message))->Objects == response.Objects);
+}
+
+TEST_CASE("Cell-scoped messages preserve plugin identity", "[encoding.campaign]")
+{
+    Buffer buffer(1024);
+    {
+        NotifyWeatherChange weather{};
+        weather.Cell = GameId(1, 0x421);
+        weather.Id = GameId(2, 0xABC);
+        weather.Owner = 34;
+        Buffer::Writer writer(&buffer);
+        weather.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ServerMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == NotifyWeatherChange::Opcode);
+        REQUIRE(*CastUnique<NotifyWeatherChange>(std::move(message)) == weather);
+    }
+    {
+        ScriptAnimationRequest animation{};
+        animation.Cell = GameId(1, 0x421);
+        animation.Id = GameId(5, 0x8AB);
+        Buffer::Writer writer(&buffer);
+        animation.Serialize(writer);
+        Buffer::Reader reader(&buffer);
+        auto message = ClientMessageFactory{}.Extract(reader);
+        REQUIRE(message);
+        REQUIRE(message->GetOpcode() == ScriptAnimationRequest::Opcode);
+        REQUIRE(*CastUnique<ScriptAnimationRequest>(std::move(message)) == animation);
+    }
+}
+
+TEST_CASE("Dropping missing stock does not create a negative inventory row", "[encoding.campaign]")
+{
+    Inventory inventory;
+    Inventory::Entry item{};
+    item.BaseId = GameId(0, 0xF);
+    item.Count = -5;
+    inventory.AddOrRemoveEntry(item);
+    REQUIRE(inventory.Entries.empty());
+
+    item.Count = INT32_MAX;
+    inventory.AddOrRemoveEntry(item);
+    inventory.AddOrRemoveEntry(item);
+    REQUIRE(inventory.Entries.size() == 1);
+    REQUIRE(inventory.Entries.front().Count == INT32_MAX);
 }

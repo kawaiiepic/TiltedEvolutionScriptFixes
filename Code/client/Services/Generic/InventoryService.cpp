@@ -190,8 +190,16 @@ void InventoryService::OnNotifyInventoryChanges(const NotifyInventoryChanges& ac
     }
 
     TESObjectREFR* pObject = Utils::GetByServerId<TESObjectREFR>(acMessage.ServerId);
-    if (!pObject)
+    if (!pObject || acMessage.Item.IsQuestItem)
         return;
+
+    if (acMessage.Item.Count < 0)
+    {
+        const auto inventory = pObject->GetInventory();
+        if (std::any_of(inventory.Entries.begin(), inventory.Entries.end(), [&](const auto& entry)
+            { return entry.IsQuestItem && entry.BaseId == acMessage.Item.BaseId; }))
+            return;
+    }
 
     ScopedInventoryOverride _;
     pObject->AddOrRemoveItem(acMessage.Item);

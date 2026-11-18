@@ -49,7 +49,14 @@ bool ModsComponent::IsInstalled(const String& acpFilename) const noexcept
 
 std::optional<Campaign::PluginFormKey> ModsComponent::FindFormKey(const GameId& acId, const Player& acPlayer) const noexcept
 {
-    if (!acPlayer.HasModId(acId.ModId) || acId.ModId >= m_formPlugins.size())
+    if (!acPlayer.HasModId(acId.ModId))
+        return std::nullopt;
+    return FindFormKey(acId);
+}
+
+std::optional<Campaign::PluginFormKey> ModsComponent::FindFormKey(const GameId& acId) const noexcept
+{
+    if (acId.ModId >= m_formPlugins.size())
         return std::nullopt;
 
     const auto& plugin = m_formPlugins[acId.ModId];

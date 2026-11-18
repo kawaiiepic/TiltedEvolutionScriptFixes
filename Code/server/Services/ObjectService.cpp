@@ -27,6 +27,8 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
     , m_lockPolicies(kLockPoliciesPath)
     , m_cellLockPolicies(kCellLockPoliciesPath)
     , m_lockJournal(kLockJournalPath)
+    , m_stockCells("shared-stock-cell-policies.conf")
+    , m_stockJournal("shared-stock.log")
 {
     if (!m_lockPolicies.IsHealthy())
         spdlog::error("Unable to load persistent lock policies {} (error line {}).", kLockPoliciesPath, m_lockPolicies.ErrorLine());
@@ -34,6 +36,9 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
         spdlog::error("Unable to load cell lock policies {} (error line {}).", kCellLockPoliciesPath, m_cellLockPolicies.ErrorLine());
     if (!m_lockJournal.IsHealthy())
         spdlog::error("Unable to load persistent locks {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
+
+    if (!m_stockCells.IsHealthy() || !m_stockJournal.IsHealthy())
+        spdlog::error("Could not load shared-stock-cell-policies.conf or shared-stock.log");
 
     m_leaveCellConnection = aDispatcher.sink<PlayerLeaveCellEvent>().connect<&ObjectService::OnPlayerLeaveCellEvent>(this);
     m_assignObjectConnection = aDispatcher.sink<PacketEvent<AssignObjectsRequest>>().connect<&ObjectService::OnAssignObjectsRequest>(this);
@@ -76,7 +81,7 @@ void ObjectService::OnPlayerLeaveCellEvent(const PlayerLeaveCellEvent& acEvent) 
 // This is fine for containers and doors, but if this system is expanded, think of temporaries.
 void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsRequest>& acMessage) noexcept
 {
-    auto view = m_world.view<FormIdComponent, ObjectComponent, InventoryComponent>();
+    auto view = m_world.view<FormIdComponent, ObjectComponent, InventoryComponent, CellIdComponent>();
 
     AssignObjectsResponse response;
     const auto& mods = m_world.ctx().at<ModsComponent>();
@@ -100,6 +105,8 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
 
         if (iter != std::end(view))
         {
+            if (view.get<CellIdComponent>(*iter).Cell != object.CellId)
+                continue;
             ObjectData objectData;
             objectData.ServerId = World::ToInteger(*iter);
 
@@ -112,6 +119,14 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
 
             auto& inventoryComponent = view.get<InventoryComponent>(*iter);
             objectData.CurrentInventory = inventoryComponent.Content;
+            if (objectComponent.CampaignStock)
+            {
+                if (const auto* pStock = m_stockJournal.Find(*objectComponent.CampaignStock))
+                {
+                    ApplySavedStock(inventoryComponent.Content, *pStock);
+                    objectData.CurrentInventory = inventoryComponent.Content;
+                }
+            }
 
             objectData.IsSenderFirst = false;
 
@@ -148,12 +163,91 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
                 }
             }
 
+            if (object.IsContainer && m_stockCells.IsShared(*cellKey, false))
+            {
+                objectComponent.CampaignStock = key;
+                if (const auto* pStock = m_stockJournal.Find(*key))
+                {
+                    ApplySavedStock(inventoryComp.Content, *pStock);
+                    objectData.CurrentInventory = inventoryComp.Content;
+                    objectData.HasCampaignStock = true;
+                }
+            }
             response.Objects.push_back(objectData);
         }
     }
 
     if (!response.Objects.empty())
+    {
+        for (auto& object : response.Objects)
+        {
+            object.CurrentInventory.RemoveByFilter([&](const auto& entry)
+            {
+                return !acMessage.pPlayer->HasModId(entry.BaseId.ModId) &&
+                       entry.BaseId.ModId != UINT32_MAX;
+            });
+        }
         acMessage.pPlayer->Send(response);
+    }
+}
+
+void ObjectService::ApplySavedStock(Inventory& aInventory, const Campaign::ContainerStock& acStock) const noexcept
+{
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    aInventory.RemoveByFilter([&](const auto& entry)
+    {
+        return entry.IsPlainStock() && mods.FindFormKey(entry.BaseId).has_value();
+    });
+    for (const auto& [item, count] : acStock)
+    {
+        if (const auto id = mods.FindFormId(item))
+        {
+            Inventory::Entry stack{};
+            stack.BaseId = *id;
+            stack.Count = count;
+            aInventory.Entries.push_back(stack);
+        }
+    }
+}
+
+bool ObjectService::CommitStockChange(const ObjectComponent& acObject, const Inventory& acInventory,
+                                      const Inventory::Entry& acChange) noexcept
+{
+    if (!acObject.CampaignStock || !acChange.IsPlainStock() || !acChange.Count)
+        return true;
+
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    const auto item = mods.FindFormKey(acChange.BaseId);
+    if (!item)
+        return true;
+    Campaign::ContainerStock stock;
+    if (const auto* pStock = m_stockJournal.Find(*acObject.CampaignStock))
+        stock = *pStock;
+    else
+    {
+        for (const auto& entry : acInventory.Entries)
+        {
+            if (!entry.IsPlainStock() || entry.Count <= 0)
+                continue;
+            if (const auto key = mods.FindFormKey(entry.BaseId))
+            {
+                auto& count = stock[*key];
+                count = static_cast<int32_t>(std::min<int64_t>(INT32_MAX, static_cast<int64_t>(count) + entry.Count));
+            }
+        }
+    }
+
+    const int64_t cCount = static_cast<int64_t>(stock[*item]) + acChange.Count;
+    if (cCount <= 0)
+        stock.erase(*item);
+    else
+        stock[*item] = static_cast<int32_t>(std::min<int64_t>(INT32_MAX, cCount));
+    if (!m_stockJournal.Set(*acObject.CampaignStock, std::move(stock)))
+    {
+        spdlog::warn("Could not commit container stock to shared-stock.log");
+        return false;
+    }
+    return true;
 }
 
 void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept

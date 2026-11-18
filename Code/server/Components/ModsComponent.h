@@ -30,6 +30,7 @@ struct ModsComponent
     void AddServerMod(const ESLoader::PluginData& acData);
 
     std::optional<Campaign::PluginFormKey> FindFormKey(const GameId& acId, const Player& acPlayer) const noexcept;
+    std::optional<Campaign::PluginFormKey> FindFormKey(const GameId& acId) const noexcept;
     std::optional<GameId> FindFormId(const Campaign::PluginFormKey& acKey) const noexcept;
     const auto& GetServerMods() const noexcept { return m_serverMods; }
 
