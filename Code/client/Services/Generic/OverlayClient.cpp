@@ -61,6 +61,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             World::Get().GetRunner().Queue([]()
             {
                 auto& world = World::Get();
+                if (CharacterCheckpoints::FinishCharacter(world.GetTransport())) return;
                 if (!world.GetTransport().EnterWorld())
                     world.GetOverlayService().SendSystemMessage("Finish loading or creating your character, then try Enter World again.");
             });

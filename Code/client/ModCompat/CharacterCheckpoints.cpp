@@ -22,7 +22,8 @@ namespace
 {
 using P = CharacterSavePayload;
 using Clock = std::chrono::steady_clock;
-enum class Phase { Disabled, Choose, Selecting, Download, NewCharacter, Staged, Ready, Upload, Failed };
+enum class Phase { Disabled, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
+enum class NativeOperation { None, Load, Save };
 struct Stamp
 {
     uint64_t Size{}, Written{};
@@ -37,6 +38,10 @@ struct State
 {
     Phase Step{Phase::Disabled};
     bool Required{}, Pending{}, NeedsBegin{};
+    bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
+    NativeOperation Operation{NativeOperation::None};
+    uint64_t NativeToken{};
+    Clock::time_point NativeDeadline{}, NextAutoSave{}, EnterDeadline{};
     uint8_t Expected{};
     uint64_t Revision{}, Ess{}, Co{}, Offset{};
     uint16_t LastCount{};
@@ -48,6 +53,10 @@ struct State
     Clock::time_point StableSince{}, NextPoll{}, Deadline{};
 };
 State s;
+NativeDriver s_driver{};
+uint64_t s_nextNativeToken{};
+constexpr auto kAutosaveInterval = std::chrono::minutes(5);
+constexpr auto kNativeTimeout = std::chrono::minutes(2);
 constexpr char kHex[] = "0123456789abcdef";
 
 const char* PhaseName() noexcept
@@ -58,8 +67,9 @@ const char* PhaseName() noexcept
     case Phase::Choose: return "choose";
     case Phase::Selecting: return "selecting";
     case Phase::Download: return "downloading";
-    case Phase::NewCharacter: return "new";
-    case Phase::Staged: return "staged";
+    case Phase::NewCharacter: return s.NativeEnabled ? "new-native" : "new";
+    case Phase::Staged: return s.NativeEnabled ? "awaiting-native-load" : "staged";
+    case Phase::LoadingNative: return "loading-native";
     case Phase::Ready: return "ready";
     case Phase::Upload: return "uploading";
     default: return "failed";
@@ -71,8 +81,18 @@ void Change(Phase aPhase, const char* apDetail)
     s.Detail = apDetail;
     PublishState();
 }
+void AbandonNative() noexcept
+{
+    if (s.NativeToken && s_driver.Abandon)
+        s_driver.Abandon(s.NativeToken);
+    s.NativeToken = 0;
+    s.Operation = NativeOperation::None;
+    s.CaptureReady = false;
+    s.AutoEnter = false;
+}
 void Fail(const char* apDetail)
 {
+    AbandonNative();
     s.Pending = false;
     s.Bytes.clear();
     Change(Phase::Failed, apDetail);
@@ -219,6 +239,32 @@ bool StageDownload()
     return true;
 }
 
+NativeStart StartNative(NativeOperation aOperation)
+{
+    if (!s.NativeEnabled || s.Operation != NativeOperation::None || s.Name.empty())
+        return NativeStart::Busy;
+    if (++s_nextNativeToken == 0) ++s_nextNativeToken;
+    const uint64_t token = s_nextNativeToken;
+    const auto result = aOperation == NativeOperation::Load ?
+        s_driver.RequestLoad(token, s.Name.c_str()) : s_driver.RequestSave(token, s.Name.c_str());
+    if (result == NativeStart::Accepted)
+    {
+        s.Operation = aOperation;
+        s.NativeToken = token;
+        s.NativeDeadline = Clock::now() + kNativeTimeout;
+        if (aOperation == NativeOperation::Load)
+            Change(Phase::LoadingNative, "Loading the canonical server checkpoint...");
+        else
+        {
+            s.CaptureReady = false;
+            s.StableSince = {};
+            s.Detail = "Creating a native checkpoint...";
+            PublishState();
+        }
+    }
+    return result;
+}
+
 bool Send(TransportService& aTransport, const RequestCharacterSave& acRequest)
 {
     if (!aTransport.Send(acRequest))
@@ -245,20 +291,52 @@ void PublishState() noexcept
     args->SetString(4, s.Detail);
     overlay->ExecuteAsync("characterCheckpoint", args);
 }
+bool RegisterNativeDriver(const NativeDriver& acDriver) noexcept
+{
+    if (s.Required || s_driver.RequestLoad || !acDriver.RequestLoad ||
+        !acDriver.RequestSave || !acDriver.Poll || !acDriver.Abandon)
+        return false;
+    s_driver = acDriver;
+    return true;
+}
+
+bool FinishCharacter(TransportService& aTransport) noexcept
+{
+    if (!s.NativeEnabled || s.Step != Phase::NewCharacter)
+        return false;
+    if (!aTransport.IsInLobby() || !aTransport.CanEnterWorld() || s.Pending)
+        return true;
+    if (s.Operation != NativeOperation::None || s.CaptureReady) return true;
+    const auto result = StartNative(NativeOperation::Save);
+    if (result == NativeStart::Accepted)
+        s.AutoEnter = true; // only after the initial checkpoint is committed
+    else if (result == NativeStart::Busy)
+    {
+        s.Detail = "Skyrim is not ready to save. Finish character creation and try again.";
+        PublishState();
+    }
+    else
+        Fail("Skyrim rejected the initial save request.");
+    return true;
+}
+
 void Begin(bool aRequired) noexcept
 {
+    AbandonNative();
     s = {};
     s.Required = aRequired;
+    s.NativeEnabled = aRequired && s_driver.RequestLoad != nullptr;
     Change(aRequired ? Phase::Choose : Phase::Disabled, aRequired ? "Choose a character slot." : "");
 }
 void Reset() noexcept
 {
+    AbandonNative();
     s = {};
     PublishState();
 }
 bool CanEnter() noexcept
 {
-    return !s.Required || ((s.Step == Phase::Ready || s.Step == Phase::Staged) && !s.Pending && s.Revision);
+    return !s.Required || ((s.Step == Phase::Ready || (!s.NativeEnabled && s.Step == Phase::Staged)) && !s.Pending && s.Revision);
 }
 
 void Select(TransportService& aTransport, const std::string& acKey) noexcept
@@ -304,7 +382,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Revision = acReply.Revision;
             if (!s.Revision)
             {
-                Change(Phase::NewCharacter, "Create your character in Skyrim, then make the named checkpoint save. It uploads automatically.");
+                Change(Phase::NewCharacter, s.NativeEnabled ? "Create your character in Skyrim, then select Finish character." : "Create your character in Skyrim, then make the named checkpoint save. It uploads automatically.");
                 return;
             }
             if (acReply.EssSize < 13 || acReply.EssSize > P::MaxSize ||
@@ -326,7 +404,8 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             if (s.Offset == s.Bytes.size())
             {
                 if (!StageDownload()) { Fail("Checkpoint failed integrity verification or could not be staged."); return; }
-                Change(Phase::Staged, "Downloaded. Load the named save in Skyrim, then select Enter world.");
+                Change(Phase::Staged, s.NativeEnabled ? "Download verified. Waiting for Skyrim to load the selected checkpoint..." : "Downloaded. Load the named save in Skyrim, then select Enter world.");
+                s.EnterDeadline = Clock::now() + kNativeTimeout;
             }
             return;
         case P::BeginUpload:
@@ -344,6 +423,9 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Revision = acReply.Revision;
             s.Baseline = s.Captured;
             s.Bytes.clear();
+            s.CaptureReady = false;
+            s.NextAutoSave = Clock::now() + kAutosaveInterval;
+            if (s.AutoEnter) s.EnterDeadline = Clock::now() + kNativeTimeout;
             Change(Phase::Ready, "Checkpoint saved on the server.");
             return;
         default: Fail("Unexpected checkpoint response."); return;
@@ -363,6 +445,58 @@ void Tick(TransportService& aTransport) noexcept
             if (now >= s.Deadline) Fail("Checkpoint transfer timed out; reconnect to resume.");
             return;
         }
+        if (s.NativeEnabled && s.Operation != NativeOperation::None)
+        {
+            const auto result = s_driver.Poll(s.NativeToken);
+            if (result == NativeResult::Pending)
+            {
+                if (now >= s.NativeDeadline) Fail("Native save/load timed out; reconnect to resume.");
+                return;
+            }
+            const auto completed = s.Operation;
+            s.NativeToken = 0;
+            s.Operation = NativeOperation::None;
+            if (result != NativeResult::Succeeded)
+            {
+                Fail("Skyrim could not complete the named save/load.");
+                return;
+            }
+            if (completed == NativeOperation::Load)
+            {
+                s.AutoEnter = true;
+                s.EnterDeadline = now + kNativeTimeout;
+                s.NextAutoSave = now + kAutosaveInterval;
+                Change(Phase::Ready, "Canonical checkpoint loaded. Entering server...");
+                return;
+            }
+            s.CaptureReady = true;
+            s.NativeDeadline = now + kNativeTimeout;
+        }
+
+        if (s.NativeEnabled && s.Step == Phase::Staged)
+        {
+            if (now >= s.EnterDeadline) { Fail("Skyrim did not become ready for the checkpoint load."); return; }
+            if (StartNative(NativeOperation::Load) == NativeStart::Failed)
+                Fail("Skyrim rejected the canonical checkpoint load.");
+            return;
+        }
+        if (s.NativeEnabled && s.AutoEnter && s.Step == Phase::Ready && aTransport.IsInLobby())
+        {
+            if (aTransport.CanEnterWorld() && aTransport.EnterWorld())
+                s.AutoEnter = false;
+            else if (now >= s.EnterDeadline)
+                Fail("World entry did not become ready.");
+            return;
+        }
+        if (s.NativeEnabled && s.Step == Phase::Ready && aTransport.IsOnline() &&
+            !s.CaptureReady && now >= s.NextAutoSave && aTransport.CanEnterWorld())
+        {
+            const auto result = StartNative(NativeOperation::Save);
+            s.NextAutoSave = now + (result == NativeStart::Busy ? std::chrono::seconds(5) : kAutosaveInterval);
+            if (result == NativeStart::Failed) Fail("Skyrim rejected the autosave.");
+            return;
+        }
+
         RequestCharacterSave request{};
         request.Revision = s.Revision;
         if (s.Step == Phase::Download)
@@ -397,6 +531,8 @@ void Tick(TransportService& aTransport) noexcept
             Change(Phase::Ready, "Connected using the selected character slot.");
         if ((s.Step != Phase::NewCharacter && !(s.Step == Phase::Ready && aTransport.IsOnline())) ||
             now < s.NextPoll || !aTransport.CanEnterWorld()) return;
+        if (s.NativeEnabled && !s.CaptureReady) return;
+        if (s.NativeEnabled && now >= s.NativeDeadline) { Fail("Completed native save files never became readable."); return; }
         s.NextPoll = now + std::chrono::seconds(1);
         PairStamp stamp{};
         if (!Snapshot(stamp, false) || stamp.Ess == s.Baseline.Ess ||
