@@ -13,6 +13,9 @@ export interface SharedDialoguePanel {
   actorId: number;
   owner: string;
   canChoose: boolean;
+  canVote: boolean;
+  canPass: boolean;
+  isPrivate: boolean;
   revision: number;
   npc: string;
   options: string[];
@@ -665,12 +668,17 @@ export class ClientService implements OnDestroy {
     skyrimtogether.voteDialogue(actorId, revision, index);
   }
 
+  public manageDialogue(panel: SharedDialoguePanel, action: number): void {
+    skyrimtogether.manageDialogue(panel.actorId, panel.revision, action);
+  }
+
   private onSharedDialogue(actorId: number, visible: boolean, owner: string,
-    canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number): void {
+    canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number,
+    canVote: boolean, canPass: boolean, isPrivate: boolean): void {
     this.zone.run(() => {
       const panels = this.sharedDialogueChange.getValue().filter(panel => panel.actorId !== actorId);
       if (visible) {
-        panels.push({ actorId, owner, canChoose, revision, npc, options, votes, selected });
+        panels.push({ actorId, owner, canChoose, canVote, canPass, isPrivate, revision, npc, options, votes, selected });
       }
       panels.sort((a, b) => Number(b.canChoose) - Number(a.canChoose) || a.actorId - b.actorId);
       this.sharedDialogueChange.next(panels);

@@ -15,7 +15,7 @@ struct NotifyPlayerDialogue final : ServerMessage
     void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
     void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
 
-    bool operator==(const NotifyPlayerDialogue& achRhs) const noexcept { return GetOpcode() == achRhs.GetOpcode() && Kind == achRhs.Kind && ActorId == achRhs.ActorId && Token == achRhs.Token && CanChoose == achRhs.CanChoose && Revision == achRhs.Revision && Options == achRhs.Options && Votes == achRhs.Votes && Selected == achRhs.Selected && Name == achRhs.Name && Text == achRhs.Text; }
+    bool operator==(const NotifyPlayerDialogue& achRhs) const noexcept { return GetOpcode() == achRhs.GetOpcode() && Kind == achRhs.Kind && ActorId == achRhs.ActorId && Token == achRhs.Token && CanChoose == achRhs.CanChoose && CanVote == achRhs.CanVote && CanPass == achRhs.CanPass && Private == achRhs.Private && Revision == achRhs.Revision && Options == achRhs.Options && Votes == achRhs.Votes && Selected == achRhs.Selected && Name == achRhs.Name && Text == achRhs.Text; }
 
     enum KindCode : uint8_t
     {
@@ -31,6 +31,9 @@ struct NotifyPlayerDialogue final : ServerMessage
     uint32_t ActorId{};
     uint32_t Token{};
     bool CanChoose{};
+    bool CanVote{};
+    bool CanPass{};
+    bool Private{};
     uint32_t Revision{};
     uint32_t Selected{UINT32_MAX};
     std::vector<TiltedPhoques::String> Options;

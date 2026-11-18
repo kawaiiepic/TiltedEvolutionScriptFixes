@@ -44,7 +44,15 @@ export class RootComponent implements OnInit {
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
 
   voteDialogue(panel: SharedDialoguePanel, index: number): void {
-    if (!panel.canChoose) this.client.voteDialogue(panel.actorId, panel.revision, index);
+    if (panel.canVote) this.client.voteDialogue(panel.actorId, panel.revision, index);
+  }
+
+  passDialogue(panel: SharedDialoguePanel): void {
+    if (panel.canPass) this.client.manageDialogue(panel, 0);
+  }
+
+  toggleDialoguePrivacy(panel: SharedDialoguePanel): void {
+    if (panel.canChoose) this.client.manageDialogue(panel, panel.isPrivate ? 2 : 1);
   }
 
   connected$ = this.client.connectionStateChange.asObservable();

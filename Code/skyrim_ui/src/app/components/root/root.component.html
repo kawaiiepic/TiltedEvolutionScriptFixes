@@ -11,11 +11,19 @@
       <p *ngIf="!panel.options.length">Waiting for dialogue options...</p>
       <button type="button" *ngFor="let option of panel.options; let i = index"
         [class.selected]="panel.selected === i"
-        [disabled]="panel.canChoose || !(active$ | async) || !option"
+        [disabled]="!panel.canVote || !(active$ | async) || !option"
         (click)="voteDialogue(panel, i)">
         <span>{{ option }}</span><small>{{ panel.votes[i] || 0 }} votes</small>
       </button>
-      <footer>{{ panel.canChoose ? 'Choose in Skyrim. Suggestions are advisory.' : 'Open the Together overlay to vote. The owner makes the final choice.' }}</footer>
+      <ng-container *ngIf="panel.canChoose">
+        <button type="button" [disabled]="!(active$ | async)" (click)="toggleDialoguePrivacy(panel)">
+          {{ panel.isPrivate ? 'Make public' : 'Make private' }}
+        </button>
+        <button type="button" *ngIf="panel.canPass" [disabled]="!(active$ | async)" (click)="passDialogue(panel)">
+          Pass control
+        </button>
+      </ng-container>
+      <footer *ngIf="panel.canVote">Open the Together overlay to vote.</footer>
     </section>
   </div>
   <app-notification-popup-container

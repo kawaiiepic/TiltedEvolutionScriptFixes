@@ -370,6 +370,8 @@ void OverlayService::CloseDialogueSession() noexcept
     m_dialogueActorId = 0;
     m_dialogueToken = 0;
     m_dialogueSpeakerHandle = 0;
+    m_dialoguePanelRevision = 0;
+    m_dialogueYielded = false;
     m_dialogueOptionsPublished = false;
     m_lastDialogueOptions.clear();
 }
@@ -455,13 +457,51 @@ void OverlayService::PublishDialogueOptions() noexcept
     }
 }
 
+void OverlayService::ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept
+{
+    RefreshDialogueSession();
+    if (!m_dialogueGranted || !m_dialogueCanChoose || aActorId != m_dialogueActorId ||
+        !aRevision || aRevision != m_dialoguePanelRevision)
+        return;
+
+    if (aAction == 0)
+    {
+        // Revoke the local grant before sending Leave. Keep the token until
+        // the native menu closes so it cannot automatically rejoin.
+        m_dialogueYielded = true;
+        m_dialogueCanChoose = false;
+        if (!SendDialogueAction(PlayerDialogueRequest::Leave))
+        {
+            m_dialogueYielded = false;
+            m_dialogueCanChoose = true;
+        }
+        return;
+    }
+
+    if (aAction == 1 || aAction == 2)
+    {
+        PlayerDialogueRequest request{};
+        request.Action = PlayerDialogueRequest::SetPrivacy;
+        request.ActorId = aActorId;
+        request.Token = m_dialogueToken;
+        request.Revision = aRevision;
+        request.Index = aAction == 1 ? 1 : 0;
+        m_transport.Send(request);
+    }
+}
+
 bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 {
     if (!m_transport.IsOnline())
         return true;
 
     RefreshDialogueSession();
-    if (!m_dialogueGranted || !apText || !*apText)
+    if (m_dialogueYielded)
+    {
+        Utils::ShowHudMessage("You passed control. Close and reopen dialogue to rejoin.");
+        return false;
+    }
+    if (!m_dialogueGranted)
     {
         Utils::ShowHudMessage("Waiting for shared dialogue control. Reopen the conversation if it cannot connect.");
         return false;
@@ -479,6 +519,8 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
         return false;
     }
 
+    if (!apText || !*apText)
+        return false;
     if (SendDialogueAction(PlayerDialogueRequest::Suggest, apText))
         Utils::ShowHudMessage("Dialogue suggestion sent to the conversation owner.");
     else
@@ -490,6 +532,8 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
 {
     if (acMessage.Kind == NotifyPlayerDialogue::Panel || acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
     {
+        if (acMessage.ActorId == m_dialogueActorId)
+            m_dialoguePanelRevision = acMessage.CanChoose ? acMessage.Revision : 0;
         if (!m_pOverlay)
             return;
         auto pArguments = CefListValue::Create();
@@ -499,7 +543,7 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         pArguments->SetBool(3, acMessage.CanChoose);
         pArguments->SetDouble(4, acMessage.Revision);
         const auto* pActor = Utils::GetByServerId<Actor>(acMessage.ActorId);
-        pArguments->SetString(5, pActor && pActor->baseForm ? pActor->baseForm->GetName() : "Nearby NPC");
+        pArguments->SetString(5, pActor && pActor->baseForm ? pActor->baseForm->GetName() : "NPC");
         auto options = CefListValue::Create();
         auto votes = CefListValue::Create();
         for (size_t i = 0; i < acMessage.Options.size(); ++i)
@@ -510,11 +554,14 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         pArguments->SetList(6, options);
         pArguments->SetList(7, votes);
         pArguments->SetInt(8, acMessage.Selected == UINT32_MAX ? -1 : static_cast<int>(acMessage.Selected));
+        pArguments->SetBool(9, acMessage.CanVote);
+        pArguments->SetBool(10, acMessage.CanPass);
+        pArguments->SetBool(11, acMessage.Private);
         m_pOverlay->ExecuteAsync("sharedDialogue", pArguments);
         return;
     }
 
-    if (!m_dialogueToken || acMessage.Token != m_dialogueToken || acMessage.ActorId != m_dialogueActorId)
+    if (m_dialogueYielded || !m_dialogueToken || acMessage.Token != m_dialogueToken || acMessage.ActorId != m_dialogueActorId)
         return;
 
     if (acMessage.Kind == NotifyPlayerDialogue::State)

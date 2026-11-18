@@ -581,6 +581,8 @@ TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
     {
         NotifyPlayerDialogue panel{};
         panel.Kind = NotifyPlayerDialogue::Panel;
+        panel.CanPass = true;
+        panel.Private = true;
         panel.ActorId = 0xDEADBEEF;
         panel.Revision = 7;
         panel.Selected = 2;

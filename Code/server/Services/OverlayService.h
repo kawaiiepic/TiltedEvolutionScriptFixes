@@ -1,11 +1,11 @@
 #pragma once
 
 #include <Messages/SendChatMessageRequest.h>
+#include <Messages/NotifyPlayerDialogue.h>
 
 #include <Events/PacketEvent.h>
 #include <Events/PlayerEnterWorldEvent.h>
 #include <map>
-#include <set>
 #include <vector>
 #include <chrono>
 
@@ -41,6 +41,7 @@ private:
     struct DialogueSession
     {
         uint32_t Owner{};
+        bool Private{};
         std::map<uint32_t, uint32_t> Participants; // Native menu participants only.
         uint32_t Revision{};
         std::vector<String> Options;
@@ -52,12 +53,13 @@ private:
     void InvalidateOptions(DialogueSession& aSession) noexcept;
     bool IsDialogueActorInRange(uint32_t aActorId, const Player& acPlayer) const noexcept;
     void LeaveDialogue(uint32_t aPlayerId) noexcept;
+    void SetDialoguePrivacy(uint32_t aActorId, DialogueSession& aSession, bool aPrivate) noexcept;
     void SendDialogueState(uint32_t aActorId, const DialogueSession& acSession) const noexcept;
 
     World& m_world;
     std::map<uint32_t, DialogueSession> m_dialogueSessions;
     std::map<uint32_t, uint32_t> m_playerDialogues; // Player id -> actor id.
-    std::map<uint32_t, std::set<uint32_t>> m_visiblePanels;
+    std::map<uint32_t, std::map<uint32_t, NotifyPlayerDialogue>> m_visiblePanels;
     uint32_t m_nextDialogueRevision{};
     std::chrono::steady_clock::time_point m_nextPanelRefresh{};
     entt::scoped_connection m_dialogueUpdateConnection;

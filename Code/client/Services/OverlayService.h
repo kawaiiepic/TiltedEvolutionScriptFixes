@@ -66,6 +66,7 @@ struct OverlayService
 
     // Called by the existing native dialogue-choice detour. False means suggest/block only.
     bool CanSelectDialogue(const char* apText) noexcept;
+    void ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept;
 
     void SetPlayerHealthPercentage(uint32_t aFormId) const noexcept;
 
@@ -108,6 +109,8 @@ private:
     uint32_t m_dialogueToken{};
     uint32_t m_nextDialogueToken{};
     uint32_t m_dialogueSpeakerHandle{};
+    uint32_t m_dialoguePanelRevision{};
+    bool m_dialogueYielded{};
     bool m_dialogueGranted{};
     bool m_dialogueCanChoose{};
     bool m_dialogueOptionsPublished{};

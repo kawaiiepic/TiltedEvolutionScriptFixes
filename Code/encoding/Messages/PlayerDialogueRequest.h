@@ -26,7 +26,8 @@ struct PlayerDialogueRequest final : ClientMessage
         Suggest,
         Choose,
         PublishOptions,
-        Vote
+        Vote,
+        SetPrivacy
     };
 
     uint8_t Action{Join};

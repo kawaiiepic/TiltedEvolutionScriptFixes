@@ -4,6 +4,7 @@
 #include <DInputHook.hpp>
 
 #include <Services/OverlayClient.h>
+#include <Services/OverlayService.h>
 #include <Services/TransportService.h>
 
 #include <Messages/SendChatMessageRequest.h>
@@ -52,7 +53,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessRevealPlayersMessage();
         else if (eventName == "sendMessage")
             ProcessChatMessage(eventArgs);
-        else if (eventName == "voteDialogue")
+        else if (eventName == "voteDialogue" || eventName == "manageDialogue")
         {
             // Send numeric arguments through the existing CEF event bridge, not chat.
             const auto readId = [&](size_t aIndex, uint32_t& aValue)
@@ -65,10 +66,22 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
                 return true;
             };
             PlayerDialogueRequest request{};
-            request.Action = PlayerDialogueRequest::Vote;
             if (eventArgs->GetSize() == 3 &&
                 readId(0, request.ActorId) && readId(1, request.Revision) && readId(2, request.Index))
-                World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+            {
+                if (eventName == "manageDialogue")
+                {
+                    World::Get().GetRunner().Queue([request]()
+                    {
+                        World::Get().GetOverlayService().ManageDialogue(request.ActorId, request.Revision, request.Index);
+                    });
+                }
+                else
+                {
+                    request.Action = PlayerDialogueRequest::Vote;
+                    World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+                }
+            }
         }
         else if (eventName == "setTime")
             ProcessSetTimeCommand(eventArgs);
