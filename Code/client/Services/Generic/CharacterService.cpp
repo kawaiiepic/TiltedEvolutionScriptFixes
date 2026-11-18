@@ -7,6 +7,7 @@
 #include <Services/OverlayService.h>
 #include <Services/QuestService.h>
 #include <Services/TransportService.h>
+#include <cmath>
 
 #include <Games/References.h>
 #include <Games/Misc/SubtitleManager.h>
