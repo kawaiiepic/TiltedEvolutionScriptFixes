@@ -137,7 +137,7 @@
             <code>{{ checkpoint.revision === '0' ? 'save ' : 'load ' }}{{ checkpoint.name }}</code>
             <small>Press F2 again after loading. Named saves upload automatically once the files are stable.</small>
           </ng-container>
-          <p *ngIf="checkpoint.phase === 'new-native'">Choose Skyrim's New Game and complete the normal character creation screen. Your first server checkpoint is created automatically when RaceMenu closes and Skyrim is ready.</p>
+          <p *ngIf="checkpoint.phase === 'new-native'">Complete Skyrim's normal character creation. Your first server checkpoint is created automatically when RaceMenu closes and Skyrim is ready.</p>
           <p *ngIf="checkpoint.phase === 'ready'">The selected checkpoint is ready for world entry.</p>
         </ng-container>
         <ng-template #legacyLobby>

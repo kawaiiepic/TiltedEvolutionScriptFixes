@@ -4,6 +4,7 @@
 #include <Services/InputService.h>
 #include <ModCompat/DialoguePortraits.h>
 #include <ModCompat/CharacterCheckpoints.h>
+#include <ModCompat/MainMenuBridge.h>
 
 #include <OverlayApp.hpp>
 
@@ -358,19 +359,12 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
                     renderer->SetCursorVisible(false);
         }
     }
+    MainMenuBridge::Tick(m_mainMenu);
     if (m_mainMenu && m_browserReady)
     {
         const HWND window = m_world.ctx().at<RenderSystemD3D11>().GetWindow();
-        if (!m_openedInitialMenu && window && GetForegroundWindow() == window)
-        {
-            if (m_transport.IsOnline() || m_transport.IsInLobby() || m_active)
-                m_openedInitialMenu = true;
-            else if (InputService::SetOverlayActive(*this, true))
-            {
-                m_openedInitialMenu = true;
-                spdlog::info("Opened initial main-menu connection screen");
-            }
-        }
+        if (MainMenuBridge::ConsumePlayRequest())
+            InputService::SetOverlayActive(*this, true);
         InputService::PollMainMenuHotkey(*this, window);
     }
     else

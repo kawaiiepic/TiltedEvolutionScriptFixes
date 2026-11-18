@@ -111,7 +111,6 @@ private:
     bool m_inGame = false;
     bool m_mainMenu = false;
     bool m_browserReady = false;
-    bool m_openedInitialMenu = false;
 
     uint32_t m_dialogueActorId{};
     uint32_t m_dialogueToken{};

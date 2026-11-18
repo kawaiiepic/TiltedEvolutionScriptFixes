@@ -1,0 +1,7 @@
+# Native Play menu preview
+
+This adapter supports the locally patched SWF with the STMenuProtocol boolean and STPlayRequested boolean on _root. It does not redistribute or override another mod's artwork. Install the user-specific patch as a separate mod so the original can be restored; use matching client and server versions. Without the patch, the original menu remains and F2 or Right Ctrl opens the server connection overlay.
+
+The adapter reads only primitive boolean Scaleform variables in MainMenu::AdvanceMovie and calls the existing FadeOutAndCall("StartNewGame") when the authenticated new slot is selected. Vanilla intro or alternate-start behavior is preserved; RaceMenu completion triggers the checkpoint workflow. No direct RaceMenu injection or skip-intro behavior is included.
+
+Source references (not binary verification): SKSE64 ScaleformMovie.h/ScaleformValue.h; CommonLibSSE-NG GFxMovie.h, GFxValue.h, MainMenu.h, GFxMovieView.cpp and Offsets.h (AE InvokeNoReturn ID 82665); existing local IMenu.h (AdvanceMovie slot 5). The source-provided SWF's setupMainMenu constructs Continue/New/Load; onMainButtonPress handles NEW; its confirmed New Game branch invokes FadeOutAndCall("StartNewGame"). The native ABI, UI thread/lifetime and in-game behavior have not been verified against either runtime. Set ST_DISABLE_NATIVE_MENU=1 and disable the patched menu mod to troubleshoot. Never use the patched SWF alone with an older client.

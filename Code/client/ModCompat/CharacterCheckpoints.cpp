@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 #include "CharacterCheckpoints.h"
 #include "NativeCheckpointDriver.h"
+#include "MainMenuBridge.h"
 
 #include <Messages/CharacterSave.h>
 #include <Services/TransportService.h>
@@ -42,7 +43,8 @@ struct State
     Phase Step{Phase::Disabled};
     bool Required{}, Pending{}, NeedsBegin{};
     bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
-    bool AwaitCharacterCreation{}, SawRaceMenu{};
+    bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
+    Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
     Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
@@ -89,6 +91,7 @@ void Change(Phase aPhase, const char* apDetail)
 }
 void AbandonNative() noexcept
 {
+    MainMenuBridge::CancelNewGame();
     if (s.NativeToken && s_driver.Abandon)
         s_driver.Abandon(s.NativeToken);
     s.NativeToken = 0;
@@ -399,9 +402,26 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
                     s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
                     s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
                     s.AwaitCharacterCreation = true;
-                    Change(Phase::NewCharacter, "Choose New Game in Skyrim. Your character will be saved automatically after RaceMenu.");
-                    InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                    if (MainMenuBridge::IsReady())
+                    {
+                        Change(Phase::NewCharacter, "Starting Skyrim's native character creation. Your character is saved automatically after RaceMenu.");
+                        if (!InputService::SetOverlayActive(World::Get().GetOverlayService(), false) ||
+                            !MainMenuBridge::RequestNewGame())
+                        {
+                            Fail("Could not start a native new game. Reconnect from the main menu.");
+                            return;
+                        }
+                        s.RequestedNewGame = true;
+                        s.NewGameDeadline = Clock::now() + kNativeTimeout;
+                    }
+                    else
+                    {
+                        Change(Phase::NewCharacter, "Choose New Game in Skyrim. Your character will be saved automatically after RaceMenu.");
+                        InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                    }
                 }
+                else if (MainMenuBridge::IsReady())
+                    Fail("The SKSE checkpoint bridge is required for the Play-only menu. Install the matching bridge or restore your original menu.");
                 else
                     Change(Phase::NewCharacter, "Create your character in Skyrim, then make the named checkpoint save. It uploads automatically.");
                 return;
@@ -500,6 +520,17 @@ void Tick(TransportService& aTransport) noexcept
         {
             const auto newGames = NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame;
             const auto loads = NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration;
+            if (s.RequestedNewGame && newGames == 0 &&
+                (MainMenuBridge::NewGameRequestFailed() || now >= s.NewGameDeadline))
+            {
+                Fail("Native New Game did not complete. Reconnect or restore your original menu.");
+                return;
+            }
+            if (newGames == 1 && s.RequestedNewGame)
+            {
+                MainMenuBridge::CancelNewGame();
+                s.RequestedNewGame = false;
+            }
             if (loads != newGames || newGames > 1)
             {
                 Fail("An unrelated save or new game was opened during character creation.");
