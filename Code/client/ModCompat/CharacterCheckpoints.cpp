@@ -22,7 +22,7 @@ namespace
 {
 using P = CharacterSavePayload;
 using Clock = std::chrono::steady_clock;
-enum class Phase { Disabled, Choose, Selecting, Download, NewCharacter, Ready, Upload, Failed };
+enum class Phase { Disabled, Choose, Selecting, Download, NewCharacter, Staged, Ready, Upload, Failed };
 struct Stamp
 {
     uint64_t Size{}, Written{};
@@ -59,6 +59,7 @@ const char* PhaseName() noexcept
     case Phase::Selecting: return "selecting";
     case Phase::Download: return "downloading";
     case Phase::NewCharacter: return "new";
+    case Phase::Staged: return "staged";
     case Phase::Ready: return "ready";
     case Phase::Upload: return "uploading";
     default: return "failed";
@@ -257,7 +258,7 @@ void Reset() noexcept
 }
 bool CanEnter() noexcept
 {
-    return !s.Required || (s.Step == Phase::Ready && !s.Pending && s.Revision);
+    return !s.Required || ((s.Step == Phase::Ready || s.Step == Phase::Staged) && !s.Pending && s.Revision);
 }
 
 void Select(TransportService& aTransport, const std::string& acKey) noexcept
@@ -325,7 +326,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             if (s.Offset == s.Bytes.size())
             {
                 if (!StageDownload()) { Fail("Checkpoint failed integrity verification or could not be staged."); return; }
-                Change(Phase::Ready, "Downloaded. Load the named save in Skyrim, then select Enter world.");
+                Change(Phase::Staged, "Downloaded. Load the named save in Skyrim, then select Enter world.");
             }
             return;
         case P::BeginUpload:
@@ -392,6 +393,8 @@ void Tick(TransportService& aTransport) noexcept
             Send(aTransport, request);
             return;
         }
+        if (s.Step == Phase::Staged && aTransport.IsOnline())
+            Change(Phase::Ready, "Connected using the selected character slot.");
         if ((s.Step != Phase::NewCharacter && !(s.Step == Phase::Ready && aTransport.IsOnline())) ||
             now < s.NextPoll || !aTransport.CanEnterWorld()) return;
         s.NextPoll = now + std::chrono::seconds(1);

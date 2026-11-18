@@ -55,8 +55,8 @@
         {{ (mainMenu$ | async) ? 'Play' : ('COMPONENT.ROOT.CONNECT' | transloco) }}
       </button>
       <ng-container *ngIf="lobby$ | async">
-        <button *ngIf="inGame$ | async" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'ready'" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
-        <button *ngIf="!(inGame$ | async)" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'new' && (checkpoint$ | async)?.phase !== 'ready'" data-style-ornament="inverted" (click)="returnToNativeMenu()">Return to Skyrim</button>
+        <button *ngIf="inGame$ | async" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'ready' && (checkpoint$ | async)?.phase !== 'staged'" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
+        <button *ngIf="!(inGame$ | async)" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'new' && (checkpoint$ | async)?.phase !== 'staged'" data-style-ornament="inverted" (click)="returnToNativeMenu()">Return to Skyrim</button>
         <button data-style-ornament="inverted" (click)="setView(RootView.DISCONNECT)">Leave lobby</button>
       </ng-container>
       <ng-container *ngIf="connected$ | async">
@@ -131,12 +131,13 @@
             <small>Character keys are stored on this device for this server address.</small>
           </section>
           <p>{{ checkpoint.detail }}</p>
-          <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'ready')">
+          <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'staged')">
             <p *ngIf="checkpoint.revision === '0'">Use New Game, finish character creation, then open the Skyrim console and enter:</p>
             <p *ngIf="checkpoint.revision !== '0'">Use Skyrim's Load menu or console to load this exact staged save before entering:</p>
             <code>{{ checkpoint.revision === '0' ? 'save ' : 'load ' }}{{ checkpoint.name }}</code>
             <small>Press F2 again after loading. Named saves upload automatically once the files are stable.</small>
           </ng-container>
+          <p *ngIf="checkpoint.phase === 'ready'">The initial save has been committed. Select Enter world when your character is ready.</p>
         </ng-container>
         <ng-template #legacyLobby>
           <p>Use Skyrim's New Game or Load menu, finish character creation, then press F2 and select Enter world.</p>

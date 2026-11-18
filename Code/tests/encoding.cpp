@@ -84,6 +84,22 @@ TEST_CASE("Character entry is a separate authenticated phase", "[encoding.auth]"
     REQUIRE(entry.Token.empty());
 }
 
+TEST_CASE("Lobby advertises mandatory server checkpoints", "[encoding.auth]")
+{
+    AuthenticationResponse response{};
+    response.Type = AuthenticationResponse::ResponseType::kLobbyAccepted;
+    response.RequiresCharacterSave = true;
+    Buffer buffer(4096);
+    Buffer::Writer writer(&buffer);
+    response.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ServerMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    auto decoded = CastUnique<AuthenticationResponse>(std::move(message));
+    REQUIRE(decoded->Type == response.Type);
+    REQUIRE(decoded->RequiresCharacterSave);
+}
+
 TEST_CASE("Checkpoint packets have bounded exact wire size", "[encoding.saves]")
 {
     RequestCharacterSave request{};

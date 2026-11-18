@@ -2,6 +2,7 @@
 
 #include <Services/OverlayService.h>
 #include <ModCompat/DialoguePortraits.h>
+#include <ModCompat/CharacterCheckpoints.h>
 
 #include <OverlayApp.hpp>
 
@@ -296,6 +297,7 @@ void OverlayService::RefreshMenuPresentation() noexcept
     args->SetBool(0, m_mainMenu);
     m_pOverlay->ExecuteAsync("mainMenu", args);
     m_pOverlay->ExecuteAsync(m_inGame ? "enterGame" : "exitGame");
+    CharacterCheckpoints::PublishState();
 }
 
 void OverlayService::OnServerLobbyEvent(const ServerLobbyEvent& acEvent) noexcept
