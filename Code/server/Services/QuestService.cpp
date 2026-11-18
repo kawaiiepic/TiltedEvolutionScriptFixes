@@ -88,29 +88,6 @@ void QuestService::BackupCampaign() const noexcept
         pOut->error("Unable to back up {} to {}: {}", kJournalPath, kJournalBackupPath, error.message());
 }
 
-bool QuestService::ResolveQuestKey(const GameId& acId, const Player& acPlayer, Campaign::QuestKey& aKey) const noexcept
-{
-    if (!acPlayer.HasModId(acId.ModId) || acId.BaseId == 0)
-        return false;
-
-    const auto& mods = m_world.ctx().at<ModsComponent>();
-    for (bool lite : {false, true})
-    {
-        const auto& list = lite ? mods.GetLiteMods() : mods.GetStandardMods();
-        for (const auto& [name, mod] : list)
-        {
-            if (mod.id != acId.ModId)
-                continue;
-            if (acId.BaseId > (lite ? 0xFFFu : 0xFFFFFFu))
-                return false;
-
-            aKey = {name.c_str(), lite, acId.BaseId};
-            return true;
-        }
-    }
-    return false;
-}
-
 void QuestService::QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::JournalRecord& acRecord, const Player& acPlayer) const noexcept
 {
     const auto& event = acRecord.Event;
@@ -119,15 +96,12 @@ void QuestService::QueueEntry(NotifyQuestUpdate& aBatch, const Campaign::Journal
 
     // Network mod IDs are assigned on connection and can change after a restart.
     const auto& mods = m_world.ctx().at<ModsComponent>();
-    const auto& list = event.Quest.Lite ? mods.GetLiteMods() : mods.GetStandardMods();
-    const auto it = list.find(String(event.Quest.Plugin.c_str()));
-    if (it == list.end() || !acPlayer.HasModId(it->second.id))
+    const auto id = mods.FindFormId(event.Quest);
+    if (!id || !acPlayer.HasModId(id->ModId))
         return;
-
-    const GameId id(it->second.id, event.Quest.BaseId);
     if (acRecord.ApplyStageBeforeStop)
-        aBatch.Updates.push_back({id, event.Stage, SharedQuestUpdate::StageUpdate});
-    aBatch.Updates.push_back({id, event.Stage, event.Status});
+        aBatch.Updates.push_back({*id, event.Stage, SharedQuestUpdate::StageUpdate});
+    aBatch.Updates.push_back({*id, event.Stage, event.Status});
 }
 
 void QuestService::OnQuestSyncTick(const UpdateEvent&) noexcept
@@ -187,8 +161,10 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
         return;
 
     Campaign::QuestEvent entry{{}, message.Stage, static_cast<Campaign::QuestEvent::Kind>(message.Status), message.ClientQuestType};
-    if (!ResolveQuestKey(message.Id, *acMessage.pPlayer, entry.Quest))
+    const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(message.Id, *acMessage.pPlayer);
+    if (!key)
         return;
+    entry.Quest = *key;
 
     // Preserve the existing per-player active quest log for other services, independently
     // of the campaign's historical journal and its duplicate suppression.
@@ -285,8 +261,8 @@ void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) n
         !pPlayer->HasModId(state.Id.ModId) || !pPlayer->HasModId(state.Quest.ModId))
         return;
 
-    Campaign::QuestKey quest;
-    if (!ResolveQuestKey(state.Quest, *pPlayer, quest) || !m_policies.IsShared(quest, true))
+    const auto quest = m_world.ctx().at<ModsComponent>().FindFormKey(state.Quest, *pPlayer);
+    if (!quest || !m_policies.IsShared(*quest, true))
         return;
 
     // Reference aliases share the existing scene owner's snapshot. Validate

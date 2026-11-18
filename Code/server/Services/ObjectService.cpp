@@ -15,9 +15,22 @@
 #include <Messages/ScriptAnimationRequest.h>
 #include <Messages/NotifyScriptAnimation.h>
 
+namespace
+{
+constexpr const char* kLockPoliciesPath = "shared-lock-policies.conf";
+constexpr const char* kLockJournalPath = "shared-locks.log";
+}
+
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
+    , m_lockPolicies(kLockPoliciesPath)
+    , m_lockJournal(kLockJournalPath)
 {
+    if (!m_lockPolicies.IsHealthy())
+        spdlog::error("Unable to load persistent lock policies {} (error line {}).", kLockPoliciesPath, m_lockPolicies.ErrorLine());
+    if (!m_lockJournal.IsHealthy())
+        spdlog::error("Unable to load persistent locks {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
+
     m_leaveCellConnection = aDispatcher.sink<PlayerLeaveCellEvent>().connect<&ObjectService::OnPlayerLeaveCellEvent>(this);
     m_assignObjectConnection = aDispatcher.sink<PacketEvent<AssignObjectsRequest>>().connect<&ObjectService::OnAssignObjectsRequest>(this);
     m_activateConnection = aDispatcher.sink<PacketEvent<ActivateRequest>>().connect<&ObjectService::OnActivate>(this);
@@ -108,6 +121,17 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
             objectData.Id = object.Id;
             objectData.ServerId = World::ToInteger(cEntity);
             objectData.IsSenderFirst = true;
+            const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(object.Id, *acMessage.pPlayer);
+            if (key && m_lockPolicies.IsShared(*key, false))
+            {
+                if (const auto* pState = m_lockJournal.Find(*key))
+                {
+                    objectData.HasCampaignLock = true;
+                    objectData.CurrentLockData.IsLocked = pState->Locked;
+                    objectData.CurrentLockData.LockLevel = pState->Level;
+                    objectComponent.CurrentLockData = objectData.CurrentLockData;
+                }
+            }
 
             response.Objects.push_back(objectData);
         }
@@ -133,28 +157,44 @@ void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) co
     }
 }
 
-void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) const noexcept
+void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) noexcept
 {
     NotifyLockChange notifyLockChange;
     notifyLockChange.Id = acMessage.Packet.Id;
     notifyLockChange.IsLocked = acMessage.Packet.IsLocked;
     notifyLockChange.LockLevel = acMessage.Packet.LockLevel;
 
-    auto objectView = m_world.view<FormIdComponent, ObjectComponent>();
+    const auto objectView = m_world.view<FormIdComponent, ObjectComponent, CellIdComponent>();
+    const auto iter = std::find_if(objectView.begin(), objectView.end(), [&](auto entity)
+    {
+        return objectView.get<FormIdComponent>(entity).Id == acMessage.Packet.Id;
+    });
 
-    const auto iter = std::find_if(
-        std::begin(objectView), std::end(objectView),
-        [objectView, id = acMessage.Packet.Id](auto entity)
+    const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(acMessage.Packet.Id, *acMessage.pPlayer);
+    if (key && m_lockPolicies.IsShared(*key, false))
+    {
+        if (iter == objectView.end() || !acMessage.pPlayer->GetCharacter())
+            return;
+
+        const auto& cell = objectView.get<CellIdComponent>(*iter);
+        if (cell.Cell != acMessage.Packet.CellId || !cell.IsInRange(acMessage.pPlayer->GetCellComponent(), false))
+            return;
+
+        if (!m_lockJournal.IsHealthy())
+            return;
+
+        if (!m_lockJournal.Set(*key, {notifyLockChange.IsLocked, notifyLockChange.LockLevel}))
         {
-            const auto& formIdComponent = objectView.get<FormIdComponent>(entity);
-            return formIdComponent.Id == id;
-        });
+            spdlog::error("Unable to persist lock change in {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
+            return;
+        }
+    }
 
-    if (iter != std::end(objectView))
+    if (iter != objectView.end())
     {
         auto& objectComponent = objectView.get<ObjectComponent>(*iter);
-        objectComponent.CurrentLockData.IsLocked = acMessage.Packet.IsLocked;
-        objectComponent.CurrentLockData.LockLevel = acMessage.Packet.LockLevel;
+        objectComponent.CurrentLockData.IsLocked = notifyLockChange.IsLocked;
+        objectComponent.CurrentLockData.LockLevel = notifyLockChange.LockLevel;
     }
 
     for (Player* pPlayer : m_world.GetPlayerManager())

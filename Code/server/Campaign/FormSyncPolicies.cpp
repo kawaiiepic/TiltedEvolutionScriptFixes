@@ -1,4 +1,4 @@
-#include "QuestPolicies.h"
+#include "FormSyncPolicies.h"
 
 #include <charconv>
 #include <fstream>
@@ -8,7 +8,7 @@
 
 namespace Campaign
 {
-QuestPolicies::QuestPolicies(const std::filesystem::path& acPath)
+FormSyncPolicies::FormSyncPolicies(const std::filesystem::path& acPath)
 {
     std::error_code error;
     const bool cExists = std::filesystem::exists(acPath, error);
@@ -29,11 +29,10 @@ QuestPolicies::QuestPolicies(const std::filesystem::path& acPath)
             continue;
 
         std::string mode, format, base;
-        QuestKey key;
+        PluginFormKey key;
         if (!(input >> mode >> format >> std::quoted(key.Plugin) >> base) ||
             (mode != "shared" && mode != "personal") ||
-            (format != "standard" && format != "light") || key.Plugin.empty() ||
-            key.Plugin.find_first_of("\r\n") != std::string::npos || key.Plugin.find('\0') != std::string::npos)
+            (format != "standard" && format != "light"))
         {
             m_errorLine = lineNumber;
             break;
@@ -47,7 +46,7 @@ QuestPolicies::QuestPolicies(const std::filesystem::path& acPath)
             pStart += 2;
         const auto result = std::from_chars(pStart, pEnd, key.BaseId, 16);
         if ((!input.eof() && input.peek() != '#') || result.ec != std::errc{} || result.ptr != pEnd ||
-            key.BaseId == 0 || key.BaseId > (key.Lite ? 0xFFFu : 0xFFFFFFu) ||
+            !key.IsValid() ||
             !m_overrides.emplace(std::move(key), mode == "shared").second)
         {
             m_errorLine = lineNumber;
@@ -60,7 +59,7 @@ QuestPolicies::QuestPolicies(const std::filesystem::path& acPath)
         m_overrides.clear();
 }
 
-bool QuestPolicies::IsShared(const QuestKey& acQuest, bool aDefault) const noexcept
+bool FormSyncPolicies::IsShared(const PluginFormKey& acQuest, bool aDefault) const noexcept
 {
     if (!m_healthy)
         return false;

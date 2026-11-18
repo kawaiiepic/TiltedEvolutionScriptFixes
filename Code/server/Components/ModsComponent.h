@@ -4,6 +4,13 @@
 #error Include Components.h instead
 #endif
 
+#include <Campaign/PluginFormKey.h>
+#include <Structs/GameId.h>
+#include <optional>
+#include <vector>
+
+struct Player;
+
 namespace ESLoader
 {
 struct PluginData;
@@ -22,8 +29,8 @@ struct ModsComponent
 
     void AddServerMod(const ESLoader::PluginData& acData);
 
-    const auto& GetStandardMods() const noexcept { return m_standardMods; }
-    const auto& GetLiteMods() const noexcept { return m_liteMods; }
+    std::optional<Campaign::PluginFormKey> FindFormKey(const GameId& acId, const Player& acPlayer) const noexcept;
+    std::optional<GameId> FindFormId(const Campaign::PluginFormKey& acKey) const noexcept;
     const auto& GetServerMods() const noexcept { return m_serverMods; }
 
     bool IsInstalled(const String& acpFileName) const noexcept;
@@ -32,6 +39,7 @@ struct ModsComponent
 
 private:
     uint32_t m_seed = 0;
+    std::vector<Campaign::PluginFormKey> m_formPlugins;
     // Mappings of ids owned by the server
     TModList m_standardMods;
     TModList m_liteMods;

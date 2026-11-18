@@ -108,9 +108,34 @@ bool ShouldSyncObject(const TESObjectREFR* apObject, const Set<const TESObjectRE
     }
 }
 
+static void ApplyLockState(TESObjectREFR& aObject, bool aLocked, uint8_t aLevel) noexcept
+{
+    Lock* pLock = aObject.GetLock();
+    if (!pLock)
+    {
+        if (!aLocked && !aLevel)
+            return;
+        pLock = aObject.CreateLock();
+        if (!pLock)
+        {
+            spdlog::error("Failed to create lock for object {:X}", aObject.formID);
+            return;
+        }
+    }
+    else if (pLock->IsLocked() == aLocked && pLock->lockLevel == aLevel)
+    {
+        return;
+    }
+
+    pLock->lockLevel = aLevel;
+    pLock->SetLock(aLocked);
+    aObject.LockChange();
+}
+
 void ObjectService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
-    // TODO(cosideci): clear object components
+    auto view = m_world.view<ObjectComponent>();
+    m_world.destroy(view.begin(), view.end());
 }
 
 void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
@@ -119,7 +144,9 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
         return;
 
     PlayerCharacter* pPlayer = PlayerCharacter::Get();
-    TESObjectCELL* pCell = pPlayer->parentCell;
+    TESObjectCELL* pCell = pPlayer ? pPlayer->parentCell : nullptr;
+    if (!pCell)
+        return;
 
     // Player homes should not be synced, so that chest contents,
     // which are often used as storage, are never accidentally wiped.
@@ -199,24 +226,11 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
 
         CreateObjectEntity(pObject->formID, objectData.ServerId);
 
+        if (!objectData.IsSenderFirst || objectData.HasCampaignLock)
+            ApplyLockState(*pObject, objectData.CurrentLockData.IsLocked, objectData.CurrentLockData.LockLevel);
+
         if (objectData.IsSenderFirst)
             continue;
-
-        if (objectData.CurrentLockData != LockData{})
-        {
-            Lock* pLock = pObject->GetLock();
-
-            if (!pLock)
-            {
-                pLock = pObject->CreateLock();
-                if (!pLock)
-                    continue;
-            }
-
-            pLock->lockLevel = objectData.CurrentLockData.LockLevel;
-            pLock->SetLock(objectData.CurrentLockData.IsLocked);
-            pObject->LockChange();
-        }
 
         if (pObject->baseForm->formType == FormType::Container)
         {
@@ -353,6 +367,8 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
     }
 
     const auto* const pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormId));
+    if (!pObject)
+        return;
 
     TESObjectCELL* pCell = pObject->GetParentCellEx();
     if (!pCell)
@@ -389,27 +405,7 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
         return;
     }
 
-    auto* pLock = pObject->GetLock();
-
-    if(!acMessage.IsLocked)
-    {
-        if (!pLock || !pLock->IsLocked())
-            return;
-    }
-
-    if (!pLock && acMessage.IsLocked)
-    {
-        pLock = pObject->CreateLock();
-        if (!pLock)
-        {
-            spdlog::error("Failed to create lock for object form id {:X}", pObject->formID);
-            return;
-        }
-    }
-
-    pLock->lockLevel = acMessage.LockLevel;
-    pLock->SetLock(acMessage.IsLocked);
-    pObject->LockChange();
+    ApplyLockState(*pObject, acMessage.IsLocked, acMessage.LockLevel);
 }
 
 void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) noexcept

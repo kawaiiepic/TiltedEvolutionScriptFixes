@@ -686,3 +686,21 @@ TEST_CASE("Campaign replay batch and acknowledgement round trip", "[encoding.cam
         REQUIRE(CastUnique<RequestQuestSyncAck>(std::move(message))->Through == cThrough);
     }
 }
+
+TEST_CASE("First object assignment can restore an unlocked campaign lock", "[encoding.campaign]")
+{
+    AssignObjectsResponse response;
+    auto& object = response.Objects.emplace_back();
+    object.Id = GameId(1, 0x18B);
+    object.IsSenderFirst = true;
+    object.HasCampaignLock = true;
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    response.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ServerMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == AssignObjectsResponse::Opcode);
+    REQUIRE(CastUnique<AssignObjectsResponse>(std::move(message))->Objects == response.Objects);
+}

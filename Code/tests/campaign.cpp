@@ -1,5 +1,6 @@
 #include "../server/Campaign/QuestJournal.h"
-#include "../server/Campaign/QuestPolicies.h"
+#include "../server/Campaign/FormSyncPolicies.h"
+#include "../server/Campaign/LockJournal.h"
 
 #include <catch2/catch.hpp>
 #include <chrono>
@@ -126,7 +127,7 @@ TEST_CASE("Campaign policies distinguish plugin names and light FormIDs", "[camp
                  << "shared light \"A Mod.esp\" ABC\n";
     }
 
-    Campaign::QuestPolicies policies(file.Path);
+    Campaign::FormSyncPolicies policies(file.Path);
     REQUIRE(policies.IsHealthy());
     REQUIRE(policies.Size() == 2);
     REQUIRE_FALSE(policies.IsShared({"A Mod.esp", false, 0xABC}, true));
@@ -137,8 +138,40 @@ TEST_CASE("Campaign policies distinguish plugin names and light FormIDs", "[camp
         std::ofstream invalid(file.Path, std::ios::app);
         invalid << "shared standard \"A Mod.esp\" 0xABC\n";
     }
-    Campaign::QuestPolicies invalid(file.Path);
+    Campaign::FormSyncPolicies invalid(file.Path);
     REQUIRE_FALSE(invalid.IsHealthy());
     REQUIRE(invalid.ErrorLine() == 4);
     REQUIRE_FALSE(invalid.IsShared({"Another.esp", false, 0xABC}, true));
+}
+
+TEST_CASE("Persistent locks retain explicit unlocks through restart", "[campaign]")
+{
+    TestJournalFile file;
+    const Campaign::PluginFormKey key{"Dungeon.esp", false, 0x18B};
+    {
+        Campaign::LockJournal journal(file.Path);
+        REQUIRE(journal.IsHealthy());
+        REQUIRE_FALSE(journal.Find(key));
+        REQUIRE(journal.Set(key, {true, 75}));
+        REQUIRE(journal.Set(key, {false, 0}));
+        const auto cSize = std::filesystem::file_size(file.Path);
+        REQUIRE(journal.Set(key, {false, 0}));
+        REQUIRE(std::filesystem::file_size(file.Path) == cSize);
+    }
+    {
+        Campaign::LockJournal restarted(file.Path);
+        REQUIRE(restarted.IsHealthy());
+        REQUIRE(restarted.Find(key));
+        const Campaign::LockState cUnlocked{};
+        REQUIRE(*restarted.Find(key) == cUnlocked);
+        REQUIRE_FALSE(restarted.Find({"Other Dungeon.esp", false, key.BaseId}));
+    }
+    {
+        std::ofstream torn(file.Path, std::ios::app);
+        torn << "1 3 \"Dungeon.esp\" 0 395 1";
+    }
+    Campaign::LockJournal damaged(file.Path);
+    REQUIRE_FALSE(damaged.IsHealthy());
+    REQUIRE_FALSE(damaged.Find(key));
+    REQUIRE(damaged.ErrorLine() == 3);
 }

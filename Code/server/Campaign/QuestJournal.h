@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include "PluginFormKey.h"
 #include <filesystem>
 #include <map>
 #include <set>
@@ -9,20 +9,11 @@
 
 namespace Campaign
 {
-struct QuestKey
-{
-    std::string Plugin;
-    bool Lite{};
-    uint32_t BaseId{};
-
-    auto operator<=>(const QuestKey&) const = default;
-};
-
 struct QuestEvent
 {
     enum Kind : uint8_t { StageUpdate, Started, Stopped };
 
-    QuestKey Quest;
+    PluginFormKey Quest;
     uint16_t Stage{};
     Kind Status{};
     uint8_t Type{};
@@ -60,7 +51,7 @@ private:
 
     std::filesystem::path m_path;
     std::vector<JournalRecord> m_records;
-    std::map<QuestKey, QuestState> m_quests;
+    std::map<PluginFormKey, QuestState> m_quests;
     bool m_healthy{true};
     bool m_hasFile{};
     size_t m_errorLine{};
