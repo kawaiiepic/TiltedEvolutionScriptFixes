@@ -11,6 +11,14 @@ void SceneState::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcep
     aWriter.WriteBits(cCount, 8);
     for (uint32_t i = 0; i < cCount; ++i)
         aWriter.WriteBits(CompletedActions[i], 32);
+
+    const uint32_t cAliasCount = static_cast<uint32_t>(std::min<size_t>(ReferenceAliases.size(), 255));
+    aWriter.WriteBits(cAliasCount, 8);
+    for (uint32_t i = 0; i < cAliasCount; ++i)
+    {
+        aWriter.WriteBits(ReferenceAliases[i].AliasId, 32);
+        ReferenceAliases[i].Reference.Serialize(aWriter);
+    }
 }
 
 void SceneState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -28,5 +36,14 @@ void SceneState::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
     {
         aReader.ReadBits(value, 32);
         action = static_cast<uint32_t>(value);
+    }
+
+    aReader.ReadBits(value, 8);
+    ReferenceAliases.resize(static_cast<size_t>(value));
+    for (auto& alias : ReferenceAliases)
+    {
+        aReader.ReadBits(value, 32);
+        alias.AliasId = static_cast<uint32_t>(value);
+        alias.Reference.Deserialize(aReader);
     }
 }

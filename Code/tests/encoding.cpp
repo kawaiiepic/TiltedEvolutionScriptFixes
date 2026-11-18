@@ -610,6 +610,7 @@ TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
         request.State.Phase = UINT32_MAX;
         request.State.Active = true;
         request.State.CompletedActions = {3, 9, 42};
+        request.State.ReferenceAliases = {{7, GameId(2, 0x33445)}, {12, GameId(0, 0x54321)}};
 
         Buffer buff(4096);
         Buffer::Writer writer(&buff);
@@ -630,6 +631,7 @@ TEST_CASE("Shared scripted scene protocol", "[encoding.scene]")
         snapshot.State.Phase = 6;
         snapshot.State.Active = true;
         snapshot.State.CompletedActions = {12, 13};
+        snapshot.State.ReferenceAliases = {{3, GameId(4, 0x777)}};
         snapshot.Owner = 4;
         snapshot.Generation = 9;
 

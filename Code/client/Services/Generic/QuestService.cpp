@@ -338,6 +338,75 @@ void QuestService::ObserveScene(uint32_t aFormId) noexcept
     });
 }
 
+std::vector<SceneReferenceAlias> QuestService::CaptureSceneAliases(BGSScene* apScene) const noexcept
+{
+    std::vector<SceneReferenceAlias> aliases;
+    if (!apScene || !apScene->owningQuest)
+        return aliases;
+
+    auto& modSystem = m_world.GetModSystem();
+    for (uint32_t aliasId : apScene->actorIds)
+    {
+        if (aliases.size() >= 255)
+            break;
+        if (std::any_of(aliases.begin(), aliases.end(), [aliasId](const auto& a) { return a.AliasId == aliasId; }))
+            continue;
+
+        // The existing getter takes a native ALID, not the index of a quest's
+        // opaque alias array. Never guess the layout of that array.
+        const auto* pReference = apScene->owningQuest->GetAliasedRef(aliasId);
+        if (!pReference || pReference == PlayerCharacter::Get() ||
+            pReference->formID == 0x14 || (pReference->formID >> 24) == 0xFF)
+            continue;
+
+        GameId reference{};
+        if (!modSystem.GetServerModId(pReference->formID, reference) ||
+            !reference.BaseId || modSystem.GetGameId(reference) != pReference->formID)
+            continue;
+
+        aliases.push_back({aliasId, reference});
+    }
+    std::sort(aliases.begin(), aliases.end(), [](const auto& a, const auto& b) { return a.AliasId < b.AliasId; });
+    return aliases;
+}
+
+void QuestService::CheckSceneAliases(BGSScene* apScene, const std::vector<SceneReferenceAlias>& acLocal) noexcept
+{
+    const auto shared = m_sharedScenes.find(apScene->formID);
+    const auto observer = m_localScenes.find(apScene->formID);
+    if (observer == m_localScenes.end())
+        return;
+
+    auto& previous = observer->second.LastMismatches;
+    if (shared == m_sharedScenes.end() || shared->second.Owner == m_world.GetTransport().GetLocalPlayerId())
+    {
+        previous.clear();
+        return;
+    }
+
+    std::vector<SceneReferenceAlias> mismatches;
+    for (const auto& expected : shared->second.State.ReferenceAliases)
+    {
+        const auto actual = std::find_if(acLocal.begin(), acLocal.end(),
+            [&](const auto& a) { return a.AliasId == expected.AliasId; });
+        if (actual == acLocal.end())
+        {
+            // A missing local sample may be an unloaded, player-specific or
+            // temporary target. Do not declare it a conflicting assignment.
+            continue;
+        }
+        if (actual->Reference != expected.Reference)
+        {
+            mismatches.push_back(expected);
+            if (std::find(previous.begin(), previous.end(), expected) == previous.end())
+                spdlog::warn("Quest alias mismatch: quest {:X}, scene {:X}, alias {}, canonical target {:X}, local target {:X}; native alias replacement not available",
+                    apScene->owningQuest->formID, apScene->formID, expected.AliasId,
+                    expected.Reference.LogFormat(), actual->Reference.LogFormat());
+        }
+    }
+    previous = std::move(mismatches);
+}
+
 void QuestService::RefreshSceneStates() noexcept
 {
     const auto now = std::chrono::steady_clock::now();
@@ -379,6 +448,13 @@ void QuestService::RefreshSceneStates() noexcept
 
         request.State.Active = true;
         request.State.Phase = pScene->currentPhaseIndex;
+        if (now >= local.NextAliasSample)
+        {
+            local.NextAliasSample = now + std::chrono::milliseconds(500);
+            local.Aliases = CaptureSceneAliases(pScene);
+            CheckSceneAliases(pScene, local.Aliases);
+        }
+        request.State.ReferenceAliases = local.Aliases;
         for (const auto* pAction : pScene->actions)
         {
             if (request.State.CompletedActions.size() == 255)

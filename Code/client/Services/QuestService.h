@@ -13,6 +13,7 @@ struct DisconnectedEvent;
 struct UpdateEvent;
 
 struct TESQuest;
+struct BGSScene;
 
 /** @brief Applies server-wide quest progression using the native client quest engine. */
 class QuestService final : public BSTEventSink<TESQuestStartStopEvent>,
@@ -62,6 +63,8 @@ private:
     void RefreshSceneStates() noexcept;
     void OnSceneState(const NotifySceneState& acState) noexcept;
     bool MayReleaseSceneStages(TESQuest* apQuest) const noexcept;
+    std::vector<SceneReferenceAlias> CaptureSceneAliases(BGSScene* apScene) const noexcept;
+    void CheckSceneAliases(BGSScene* apScene, const std::vector<SceneReferenceAlias>& acLocal) noexcept;
 
     World& m_world;
     // Keyed by quest form ID
@@ -71,6 +74,9 @@ private:
     {
         SceneState Last{};
         std::chrono::steady_clock::time_point NextHeartbeat{};
+        std::chrono::steady_clock::time_point NextAliasSample{};
+        std::vector<SceneReferenceAlias> Aliases;
+        std::vector<SceneReferenceAlias> LastMismatches;
     };
     std::map<uint32_t, LocalScene> m_localScenes;
     std::map<uint32_t, NotifySceneState> m_sharedScenes;

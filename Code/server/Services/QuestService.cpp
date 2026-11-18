@@ -319,6 +319,16 @@ void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) n
         !pPlayer->HasModId(state.Id.ModId) || !pPlayer->HasModId(state.Quest.ModId))
         return;
 
+    // Reference aliases share the existing scene owner's snapshot. Validate
+    // plugin mappings and unique alias IDs before storing or relaying them.
+    std::set<uint32_t> aliasIds;
+    for (const auto& alias : state.ReferenceAliases)
+    {
+        if (!alias.Reference.BaseId || !pPlayer->HasModId(alias.Reference.ModId) ||
+            !aliasIds.insert(alias.AliasId).second)
+            return;
+    }
+
     const uint64_t cKey = state.Id.LogFormat();
     auto it = m_scenes.find(cKey);
     if (!state.Active)
@@ -349,6 +359,22 @@ void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) n
     auto& scene = it->second;
     if (scene.Canonical.State.Quest != state.Quest)
         return;
+    if (!scene.Ended && scene.Canonical.Owner != pPlayer->GetId())
+    {
+        const auto old = scene.Observers.find(pPlayer->GetId());
+        if (old == scene.Observers.end() || old->second.State.ReferenceAliases != state.ReferenceAliases)
+        {
+            for (const auto& actual : state.ReferenceAliases)
+            {
+                const auto& aliases = scene.Canonical.State.ReferenceAliases;
+                const auto expected = std::find_if(aliases.begin(), aliases.end(),
+                    [&](const auto& a) { return a.AliasId == actual.AliasId; });
+                if (expected != aliases.end() && expected->Reference != actual.Reference)
+                    spdlog::warn("Player {} has divergent scene {:X} alias {}: expected {:X}, observed {:X}",
+                        pPlayer->GetId(), cKey, actual.AliasId, expected->Reference.LogFormat(), actual.Reference.LogFormat());
+            }
+        }
+    }
     scene.Observers[pPlayer->GetId()] = {state, now};
     // Once the owner finishes, lagging followers cannot open a new instance
     // until the observers have all stopped or disconnected.
