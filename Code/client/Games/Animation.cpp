@@ -9,6 +9,7 @@
 
 #include <Games/Animation/ActorMediator.h>
 #include <Games/Animation/TESActionData.h>
+#include <Games/Overrides.h>
 
 #include <Misc/BSFixedString.h>
 
@@ -27,14 +28,17 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
     if (!pExtension->IsRemote() || g_forceAnimation)
     {
+        if (ScopedAnimationOverride::IsOverriden())
+            return TiltedPhoques::ThisCall(RealPerformAction, apThis, apAction);
+
         ActionEvent action;
         action.State1 = pActor->actorState.flags1;
         action.State2 = pActor->actorState.flags2;
         action.Type = apAction->unkInput | (apAction->someFlag ? 0x4 : 0);
         action.Tick = World::Get().GetTick();
         action.ActorId = pActor->formID;
-        action.ActionId = apAction->action->formID;
-        action.TargetId = apAction->target ? apAction->target->formID : 0;
+        const uint32_t cActionId = apAction->action ? apAction->action->formID : 0;
+        const uint32_t cTargetId = apAction->target ? apAction->target->formID : 0;
 
         pActor->SaveAnimationVariables(action.Variables);
 
@@ -48,15 +52,36 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
 
         action.EventName = apAction->eventName.AsAscii();
         action.TargetEventName = apAction->targetEventName.AsAscii();
-        action.IdleId = apAction->idleForm ? apAction->idleForm->formID : 0;
+        const uint32_t cIdleId = apAction->idleForm ? apAction->idleForm->formID : 0;
+        const uint32_t cTargetIdleId = apAction->targetIdleForm ? apAction->targetIdleForm->formID : 0;
 
-        // Save for later
-        if (res)
+        World::Get().GetRunner().Queue([action = std::move(action), cActionId, cTargetId, cIdleId, cTargetIdleId, res]() mutable
         {
-            pExtension->LatestAnimation = action;
-        }
+            auto& world = World::Get();
+            auto* pActor = Cast<Actor>(TESForm::GetById(action.ActorId));
+            if (!pActor || pActor->GetExtension()->IsRemote())
+                return;
 
-        World::Get().GetRunner().Trigger(action);
+            const auto& mods = world.GetModSystem();
+            const auto mapForm = [&mods](uint32_t aFormId) -> GameId
+            {
+                GameId id{};
+                if (aFormId && (aFormId >> 24) != 0xFF && mods.GetServerModId(aFormId, id) && mods.GetGameId(id) == aFormId)
+                    return id;
+                return {};
+            };
+            action.ActionId = mapForm(cActionId);
+            action.TargetId = mapForm(cTargetId);
+            action.IdleId = mapForm(cIdleId);
+            if (action.TargetId)
+                action.TargetIdleId = mapForm(cTargetIdleId);
+            else
+                action.TargetEventName.clear();
+
+            if (res)
+                pActor->GetExtension()->LatestAnimation = action;
+            world.GetDispatcher().trigger(std::move(action));
+        });
 
         return res;
     }
@@ -80,6 +105,7 @@ bool ActorMediator::PerformAction(TESActionData* apAction) noexcept
 
 bool ActorMediator::ForceAction(TESActionData* apAction) noexcept
 {
+    ScopedAnimationOverride override;
     TP_THIS_FUNCTION(TAnimationStep, uint8_t, ActorMediator, TESActionData*);
     using TApplyAnimationVariables = void*(void*, TESActionData*);
 

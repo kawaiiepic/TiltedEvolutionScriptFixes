@@ -61,10 +61,4 @@ struct AnimationSystem
      * @param animationComponent The local animation component of the actor holding the pending actions.
      */
     static void SerializeActions(RequestActionEvents& aMessage, LocalComponent& localComponent, LocalAnimationComponent& animationComponent) noexcept;
-    /**
-     * @brief Serializes the actions to-be-sent.
-     *
-     * This function is not being used.
-     */
-    static bool Serialize(World& aWorld, const ActionEvent& aActionEvent, const ActionEvent& aLastProcessedAction, std::string* apData);
 };

@@ -31,6 +31,9 @@ struct Experience
 struct Activate
 {
 };
+struct Animation
+{
+};
 struct Inventory
 {
 };
@@ -51,6 +54,7 @@ using ScopedUnequipOverride = ScopedOverride<details::Unequip>;
 using ScopedSaveLoadOverride = ScopedOverride<details::SaveLoad>;
 using ScopedExperienceOverride = ScopedOverride<details::Experience>;
 using ScopedActivateOverride = ScopedOverride<details::Activate>;
+using ScopedAnimationOverride = ScopedOverride<details::Animation>;
 using ScopedInventoryOverride = ScopedOverride<details::Inventory>;
 using ScopedExtraDataOverride = ScopedOverride<details::ExtraData>;
 using ScopedQuestOverride = ScopedOverride<details::Quest>;

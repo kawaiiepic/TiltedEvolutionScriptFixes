@@ -4,7 +4,7 @@ void ScriptAnimationRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
 {
     Id.Serialize(aWriter);
     Cell.Serialize(aWriter);
-    Animation.Serialize(aWriter);
+    Serialization::WriteVarInt(aWriter, Tick);
     EventName.Serialize(aWriter);
 }
 
@@ -14,6 +14,6 @@ void ScriptAnimationRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
 
     Id.Deserialize(aReader);
     Cell.Deserialize(aReader);
-    Animation.Deserialize(aReader);
+    Tick = Serialization::ReadVarInt(aReader);
     EventName.Deserialize(aReader);
 }

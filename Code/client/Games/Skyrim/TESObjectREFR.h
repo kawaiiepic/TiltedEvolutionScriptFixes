@@ -194,7 +194,6 @@ struct TESObjectREFR : TESForm
 
     bool Activate(TESObjectREFR* apActivator, uint8_t aUnk1, TESBoundObject* apObjectToGet, int32_t aCount, char aDefaultProcessing) noexcept;
 
-    bool PlayAnimationAndWait(BSFixedString* apAnimation, BSFixedString* apEventName) noexcept;
     bool PlayAnimation(BSFixedString* apEventName) noexcept;
 
     Lock* CreateLock() noexcept;

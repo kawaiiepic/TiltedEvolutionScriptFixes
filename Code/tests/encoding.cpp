@@ -171,15 +171,16 @@ TEST_CASE("Differential structures", "[encoding.differential]")
     {
         ActionEvent sendAction, recvAction;
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
+        sendAction.TargetIdleId = GameId(9, 0xABC);
         sendAction.Type = 4;
 
         {
@@ -199,6 +200,7 @@ TEST_CASE("Differential structures", "[encoding.differential]")
             Buffer::Writer writer(&buff);
 
             sendAction.EventName = "Plot twist !";
+            sendAction.TargetIdleId = {};
 
             sendAction.GenerateDifferential(recvAction, writer);
 
@@ -215,15 +217,15 @@ TEST_CASE("Differential structures", "[encoding.differential]")
 
         TP_UNUSED(StringCache::Get().Add("test"))
 
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
         sendAction.Type = 4;
 
         {
@@ -389,15 +391,15 @@ TEST_CASE("Packets", "[encoding.packets]")
         Buffer buff(1000);
 
         ActionEvent sendAction;
-        sendAction.ActionId = 42;
+        sendAction.ActionId = GameId(0, 42);
         sendAction.State1 = 6547;
         sendAction.Tick = 48;
         sendAction.ActorId = 12345678;
         sendAction.EventName = "test";
-        sendAction.IdleId = 87964;
+        sendAction.IdleId = GameId(7, 87964);
         sendAction.State2 = 8963;
         sendAction.TargetEventName = "toast";
-        sendAction.TargetId = 963741;
+        sendAction.TargetId = GameId(5, 963741);
         sendAction.Type = 4;
 
         AssignCharacterRequest sendMessage, recvMessage;
@@ -477,14 +479,14 @@ TEST_CASE("Packets", "[encoding.packets]")
     {
         ActionEvent firstAction;
         firstAction.Tick = 1712345678901;
-        firstAction.ActionId = 42;
-        firstAction.TargetId = 963741;
+        firstAction.ActionId = GameId(0, 42);
+        firstAction.TargetId = GameId(5, 963741);
         firstAction.State1 = 6547;
         firstAction.EventName = "jumpStandingStart";
 
         ActionEvent secondAction = firstAction;
         secondAction.Tick += 120;
-        secondAction.ActionId = 43;
+        secondAction.ActionId = GameId(0, 43);
         secondAction.EventName = "attackStart";
         secondAction.TargetEventName = "toast";
 
@@ -510,7 +512,7 @@ TEST_CASE("Packets", "[encoding.packets]")
     {
         ActionEvent action;
         action.Tick = 1712345678901;
-        action.ActionId = 42;
+        action.ActionId = GameId(0, 42);
         action.EventName = "blockStart";
 
         NotifyActionEvents sendMessage;
@@ -763,6 +765,8 @@ TEST_CASE("Cell-scoped messages preserve plugin identity", "[encoding.campaign]"
         ScriptAnimationRequest animation{};
         animation.Cell = GameId(1, 0x421);
         animation.Id = GameId(5, 0x8AB);
+        animation.Tick = 123456;
+        animation.EventName = "ExampleGraphEvent";
         Buffer::Writer writer(&buffer);
         animation.Serialize(writer);
         Buffer::Reader reader(&buffer);

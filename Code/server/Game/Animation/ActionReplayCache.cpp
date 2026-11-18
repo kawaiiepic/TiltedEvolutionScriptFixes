@@ -40,9 +40,8 @@ bool ActionReplayCache::RefineReplayCache() noexcept
         if (auto instantAnimName = FindInstantCounterpartForAction(action.EventName))
         {
             action.EventName = String{*instantAnimName};
-            action.TargetEventName = String{*instantAnimName};
-            action.ActionId = 0;
-            action.IdleId = 0;
+            action.ActionId = {};
+            action.IdleId = {};
         }
 
         if (IsExitAction(action))

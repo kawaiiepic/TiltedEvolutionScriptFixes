@@ -329,14 +329,15 @@ void ObjectService::OnScriptAnimationRequest(const PacketEvent<ScriptAnimationRe
 {
     const auto& packet = acMessage.Packet;
     const auto& mods = m_world.ctx().at<ModsComponent>();
-    if (acMessage.pPlayer->GetCellComponent().Cell != packet.Cell ||
-        !mods.FindFormKey(packet.Id, *acMessage.pPlayer))
+    if (!acMessage.pPlayer->GetCharacter() || !packet.Cell ||
+        acMessage.pPlayer->GetCellComponent().Cell != packet.Cell || packet.EventName.empty() ||
+        packet.EventName.size() > 256 || !mods.FindFormKey(packet.Id, *acMessage.pPlayer))
         return;
 
     NotifyScriptAnimation message{};
     message.Id = packet.Id;
     message.Cell = packet.Cell;
-    message.Animation = packet.Animation;
+    message.Tick = packet.Tick;
     message.EventName = packet.EventName;
 
     for (Player* pPlayer : m_world.GetPlayerManager())
