@@ -499,6 +499,8 @@ export class ClientService implements OnDestroy {
       );
     }
     this.zone.run(() => {
+      const portraits = new Map(this.characterPortraits.getValue());
+      if (portraits.delete(playerId)) this.characterPortraits.next(portraits);
       this.playerDisconnectedChange.next(
         new Player({
           name: username,

@@ -142,7 +142,12 @@ void Update(World& aWorld, TiltedPhoques::OverlayApp* apOverlay, uint32_t aLocal
     if (!apOverlay || now < s_nextUpdate)
         return;
     s_nextUpdate = now + std::chrono::milliseconds(500);
-    if (s_panels.empty() || !Discover())
+    if (s_panels.empty())
+    {
+        CancelShot();
+        return;
+    }
+    if (!Discover())
         return;
 
     std::set<uint32_t> wanted;
