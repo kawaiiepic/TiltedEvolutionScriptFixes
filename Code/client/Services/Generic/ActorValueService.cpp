@@ -380,6 +380,12 @@ void ActorValueService::OnActorMaxValueChanges(const NotifyActorMaxValueChanges&
 
 void ActorValueService::OnDeathStateChange(const NotifyDeathStateChange& acMessage) const noexcept
 {
+    if (const auto entity = Utils::FindEntityByServerId(acMessage.Id))
+    {
+        if (auto* pWaiting = m_world.try_get<WaitingFor3D>(*entity);
+            pWaiting && acMessage.OwnershipEpoch && pWaiting->SpawnRequest.OwnershipEpoch == acMessage.OwnershipEpoch)
+            pWaiting->SpawnRequest.IsDead = acMessage.IsDead;
+    }
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
 
     const auto it = std::find_if(std::begin(view), std::end(view), [&acMessage, view](entt::entity entity)
