@@ -6,6 +6,7 @@
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/ServerLobbyEvent.h>
+#include <ModCompat/CharacterCheckpoints.h>
 #include <Games/Skyrim/Interface/UI.h>
 #include <PlayerCharacter.h>
 
@@ -60,6 +61,11 @@ TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher)
     };
 
     ServerMessageFactory::Visit(handlerGenerator);
+
+    m_messageHandlers[NotifyCharacterSave::Opcode] = [](UniquePtr<ServerMessage>& apMessage)
+    {
+        CharacterCheckpoints::Receive(*TiltedPhoques::CastUnique<NotifyCharacterSave>(std::move(apMessage)));
+    };
 
     // Override authentication response
     m_messageHandlers[AuthenticationResponse::Opcode] = [this](UniquePtr<ServerMessage>& apMessage)
@@ -163,7 +169,7 @@ void TransportService::OnConnected()
 
 bool TransportService::EnterWorld() noexcept
 {
-    if (!m_lobbyAuthenticated || m_enterPending || !CanEnterWorld())
+    if (!m_lobbyAuthenticated || m_enterPending || !CanEnterWorld() || !CharacterCheckpoints::CanEnter())
         return false;
 
     AuthenticationRequest request{};
@@ -221,6 +227,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_enterAfterLogin = false;
     m_serverPassword.clear();
     m_localPlayerId = 0;
+    CharacterCheckpoints::Reset();
     spdlog::warn("Disconnected from server {}", aReason);
     if (wasInWorld)
         m_dispatcher.trigger(DisconnectedEvent());
@@ -230,6 +237,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
 
 void TransportService::OnUpdate()
 {
+    CharacterCheckpoints::Tick(*this);
 }
 
 double TransportService::GetMessageReceiveTime() const noexcept
@@ -262,7 +270,8 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     {
         m_connectionPending = false;
         m_lobbyAuthenticated = true;
-        if (m_enterAfterLogin && EnterWorld())
+        CharacterCheckpoints::Begin(acMessage.RequiresCharacterSave);
+        if (!acMessage.RequiresCharacterSave && m_enterAfterLogin && EnterWorld())
             return;
         m_dispatcher.trigger(ServerLobbyEvent{true});
         return;

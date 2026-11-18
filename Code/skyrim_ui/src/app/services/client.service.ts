@@ -9,6 +9,12 @@ import { ChatService } from './chat.service';
 import { ErrorEvents, ErrorService } from './error.service';
 import { LoadingService } from './loading.service';
 
+export interface CharacterCheckpoint {
+  required: boolean; phase: string; name: string; revision: string; detail: string;
+}
+export interface CharacterSlot { label: string; key: string; }
+const emptyCheckpoint: CharacterCheckpoint = { required: false, phase: 'disabled', name: '', revision: '0', detail: '' };
+
 export interface SharedDialoguePanel {
   actorId: number;
   owner: string;
@@ -49,6 +55,8 @@ export class ClientService implements OnDestroy {
   public connectionStateChange = new BehaviorSubject(false);
   public readonly mainMenuChange = new BehaviorSubject(false);
   public readonly lobbyStateChange = new BehaviorSubject(false);
+  public readonly checkpointChange = new BehaviorSubject<CharacterCheckpoint>(emptyCheckpoint);
+  public readonly characterSlotsChange = new BehaviorSubject<CharacterSlot[]>([]);
 
   public isConnectionInProgressChange = new BehaviorSubject(false);
 
@@ -146,9 +154,15 @@ export class ClientService implements OnDestroy {
     skyrimtogether.on('exitGame', this.onExitGame.bind(this));
     skyrimtogether.on('openingMenu', this.onOpeningMenu.bind(this));
     skyrimtogether.on('mainMenu', state => this.zone.run(() => this.mainMenuChange.next(state)));
+    skyrimtogether.on('characterCheckpoint', (required, phase, name, revision, detail) => this.zone.run(() => {
+      this.checkpointChange.next({ required, phase, name, revision, detail });
+    }));
     skyrimtogether.on('serverLobby', state => this.zone.run(() => {
       this.lobbyStateChange.next(state);
-      if (state) this.isConnectionInProgressChange.next(false);
+      if (state) {
+        this.isConnectionInProgressChange.next(false);
+        this.readCharacterSlots();
+      }
     }));
     skyrimtogether.on('connect', this.onConnect.bind(this));
     skyrimtogether.on('disconnect', this.onDisconnect.bind(this));
@@ -197,6 +211,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('openingMenu');
     skyrimtogether.off('mainMenu');
     skyrimtogether.off('serverLobby');
+    skyrimtogether.off('characterCheckpoint');
     skyrimtogether.off('connect');
     skyrimtogether.off('disconnect');
     skyrimtogether.off('setName');
@@ -242,6 +257,43 @@ export class ClientService implements OnDestroy {
   /**
    * Disconnect from the server or cancel connection.
    */
+  private get slotStorageKey(): string {
+    return 'st-character-slots-v1:' + JSON.stringify([this._host?.trim().toLowerCase(), this._port]);
+  }
+
+  private readCharacterSlots(): void {
+    try {
+      const slots = JSON.parse(localStorage.getItem(this.slotStorageKey) || '[]');
+      this.characterSlotsChange.next(Array.isArray(slots) ? slots.filter(s =>
+        typeof s?.label === 'string' && typeof s?.key === 'string' && /^[0-9a-f]{64}$/.test(s.key)).slice(0, 32) : []);
+    } catch { this.characterSlotsChange.next([]); }
+  }
+
+  public selectCharacter(slot: CharacterSlot): void {
+    if (this.lobbyStateChange.value && this.checkpointChange.value.phase === 'choose')
+      skyrimtogether.selectCharacter(slot.key);
+  }
+
+  public createCharacter(label: string): void {
+    if (!this.lobbyStateChange.value || this.checkpointChange.value.phase !== 'choose') return;
+    const name = label.trim().slice(0, 64);
+    const slots = this.characterSlotsChange.value;
+    if (!name || slots.length >= 32) return;
+    try {
+      // The key is a private capability, not a character name or a password
+      // shared with the server. Never log it through StoreService.
+      const key = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map(byte => byte.toString(16).padStart(2, '0')).join('');
+      const slot = { label: name, key };
+      const next = [...slots, slot];
+      localStorage.setItem(this.slotStorageKey, JSON.stringify(next));
+      this.characterSlotsChange.next(next);
+      this.selectCharacter(slot);
+    } catch {
+      this.checkpointChange.next({ ...this.checkpointChange.value, detail: 'Could not securely create or persist the slot.' });
+    }
+  }
+
   public enterWorld(): void {
     if (this.lobbyStateChange.getValue() && this.inGameStateChange.getValue()) skyrimtogether.enterWorld();
   }
@@ -405,6 +457,8 @@ export class ClientService implements OnDestroy {
   private onDisconnect(isError: boolean): void {
     void this.zone.run(async () => {
       this.localPlayerId = undefined;
+      this.checkpointChange.next(emptyCheckpoint);
+      this.characterSlotsChange.next([]);
       this.sharedDialogueChange.next([]);
       this.characterPortraits.next(new Map());
       this.lobbyStateChange.next(false);

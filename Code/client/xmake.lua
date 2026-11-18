@@ -63,6 +63,7 @@ target(name)
 
     add_syslinks(
         "version",
+        "shell32",
         "dbghelp",
         "kernel32")
 end

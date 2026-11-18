@@ -6,6 +6,7 @@
 #include <Services/OverlayClient.h>
 #include <Services/OverlayService.h>
 #include <Services/TransportService.h>
+#include <ModCompat/CharacterCheckpoints.h>
 
 #include <Messages/SendChatMessageRequest.h>
 #include <Messages/PlayerDialogueRequest.h>
@@ -47,6 +48,14 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")
             ProcessDisconnectMessage();
+        else if (eventName == "selectCharacter")
+        {
+            const std::string key = eventArgs->GetString(0).ToString();
+            World::Get().GetRunner().Queue([key]()
+            {
+                CharacterCheckpoints::Select(World::Get().GetTransport(), key);
+            });
+        }
         else if (eventName == "enterWorld")
         {
             World::Get().GetRunner().Queue([]()

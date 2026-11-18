@@ -55,8 +55,8 @@
         {{ (mainMenu$ | async) ? 'Play' : ('COMPONENT.ROOT.CONNECT' | transloco) }}
       </button>
       <ng-container *ngIf="lobby$ | async">
-        <button *ngIf="inGame$ | async" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
-        <button *ngIf="!(inGame$ | async)" data-style-ornament="inverted" (click)="returnToNativeMenu()">Create / load character</button>
+        <button *ngIf="inGame$ | async" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'ready'" data-style-ornament="inverted" (click)="enterWorld()">Enter world</button>
+        <button *ngIf="!(inGame$ | async)" [disabled]="(checkpoint$ | async)?.required && (checkpoint$ | async)?.phase !== 'new' && (checkpoint$ | async)?.phase !== 'ready'" data-style-ornament="inverted" (click)="returnToNativeMenu()">Return to Skyrim</button>
         <button data-style-ornament="inverted" (click)="setView(RootView.DISCONNECT)">Leave lobby</button>
       </ng-container>
       <ng-container *ngIf="connected$ | async">
@@ -121,10 +121,36 @@
     </app-window>
     <app-window *ngIf="lobby$ | async" class="server-lobby-info">
       <h3>Connected to character lobby</h3>
-      <p *ngIf="!(inGame$ | async)">Close the overlay and use Skyrim's New Game or Load menu. Finish character creation, then press F2 and select Enter world.</p>
-      <p *ngIf="inGame$ | async">Finish character creation and any personal starting choices. Select Enter world when ready.</p>
-      <small>Local native saves are used in this preview; server-owned saves are not enabled yet.</small>
+      <ng-container *ngIf="checkpoint$ | async as checkpoint">
+        <ng-container *ngIf="checkpoint.required; else legacyLobby">
+          <section *ngIf="checkpoint.phase === 'choose'" class="character-selector">
+            <h4>Select character</h4>
+            <button type="button" *ngFor="let slot of characterSlots$ | async" (click)="selectCharacter(slot)">{{ slot.label }}</button>
+            <input #label type="text" maxlength="64" placeholder="New character name" [value]="characterLabel" (input)="characterLabel = label.value">
+            <button type="button" [disabled]="!characterLabel.trim()" (click)="createCharacter()">Create new character</button>
+            <small>Character keys are stored on this device for this server address.</small>
+          </section>
+          <p>{{ checkpoint.detail }}</p>
+          <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'ready')">
+            <p *ngIf="checkpoint.revision === '0'">Use New Game, finish character creation, then open the Skyrim console and enter:</p>
+            <p *ngIf="checkpoint.revision !== '0'">Use Skyrim's Load menu or console to load this exact staged save before entering:</p>
+            <code>{{ checkpoint.revision === '0' ? 'save ' : 'load ' }}{{ checkpoint.name }}</code>
+            <small>Press F2 again after loading. Named saves upload automatically once the files are stable.</small>
+          </ng-container>
+        </ng-container>
+        <ng-template #legacyLobby>
+          <p>Use Skyrim's New Game or Load menu, finish character creation, then press F2 and select Enter world.</p>
+          <small>This server uses normal local saves.</small>
+        </ng-template>
+      </ng-container>
     </app-window>
+    <ng-container *ngIf="connected$ | async">
+      <app-window class="server-lobby-info" *ngIf="checkpoint$ | async as checkpoint" [hidden]="!checkpoint.required">
+        <h4>Server checkpoint · revision {{ checkpoint.revision }}</h4>
+        <p>{{ checkpoint.detail }}</p>
+        <small>Save the character with <code>save {{ checkpoint.name }}</code> to automatically upload the next revision.</small>
+      </app-window>
+    </ng-container>
     <app-window *ngIf="inGame$ | async" class="app-root-chat">
       <app-chat #chat></app-chat>
     </app-window>

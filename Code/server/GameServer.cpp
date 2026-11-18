@@ -865,6 +865,7 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
     m_lobbySessions.emplace(aConnectionId, LobbySession{admin, acRequest->SKSEActive, acRequest->MO2Active,
         acRequest->DiscordId, std::chrono::steady_clock::now() + std::chrono::minutes(30)});
     response.Type = RT::kLobbyAccepted;
+    response.RequiresCharacterSave = bRequireServerSaves;
     Send(aConnectionId, response);
     spdlog::info("Connection {:x} authenticated to character lobby", aConnectionId);
 }

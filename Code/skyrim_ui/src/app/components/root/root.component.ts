@@ -77,6 +77,11 @@ export class RootComponent implements OnInit {
   connected$ = this.client.connectionStateChange.asObservable();
   mainMenu$ = this.client.mainMenuChange.asObservable();
   lobby$ = this.client.lobbyStateChange.asObservable();
+  checkpoint$ = this.client.checkpointChange.asObservable();
+  characterSlots$ = this.client.characterSlotsChange.asObservable();
+  characterLabel = '';
+  selectCharacter(slot: import('../../services/client.service').CharacterSlot): void { this.client.selectCharacter(slot); }
+  createCharacter(): void { this.client.createCharacter(this.characterLabel); }
 
   enterWorld(): void { this.client.enterWorld(); }
   returnToNativeMenu(): void { this.client.deactivate(); }
