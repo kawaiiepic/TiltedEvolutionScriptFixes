@@ -80,6 +80,8 @@ The event fires after a successful durable append. Reconnect replay and journal 
 
 Run `xmake build TPTests` and `xmake run TPTests`. Build the Linux server and Windows client with the matching branch. Build the overlay with the pinned lockfile and pnpm 9. Each replay batch has at most 16 updates and only one batch can be outstanding per player. The server retries an unacknowledged batch after two seconds. Public dialogue panels send on change, and unchanged lock state does not append another disk record.
 
+The Linux dedicated server at `8c9c74f5` built successfully. `TPTests` passed 206 assertions in 22 cases. Headless clients verified protocol rejection, partyless quest completion replay with acknowledgement retry, plugin remapping, Lua snapshot recovery, and torn-journal detection. They also verified automatic NoResetZone lock recovery, configured container stock recovery, configured NPC death and resurrection across restarts, and exterior weather handoff without a party. These checks exercise the server and wire protocol. Native Skyrim application, client compatibility, and gameplay remain pending. The Windows workflow reported no checks on this branch, and its manual dispatch returned HTTP 404.
+
 Use a dedicated server and two game clients to validate these cases before calling the campaign playable end to end.
 
 1. Start and progress the same quest concurrently with no party. Reconnect one client on an older save and restart the server between sessions. Inspect native objectives, markers, fragments and rewards on both clients.
