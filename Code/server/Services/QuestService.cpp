@@ -3,6 +3,9 @@
 #include <World.h>
 #include <Services/QuestService.h>
 #include <Events/PlayerJoinEvent.h>
+#include <Events/PlayerLeaveEvent.h>
+#include <Events/UpdateEvent.h>
+#include <Messages/RequestSceneState.h>
 #include <Messages/RequestQuestUpdate.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <Setting.h>
@@ -29,6 +32,9 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
 {
     LoadJournal();
+    m_sceneConnection = aDispatcher.sink<PacketEvent<RequestSceneState>>().connect<&QuestService::OnSceneState>(this);
+    m_sceneTickConnection = aDispatcher.sink<UpdateEvent>().connect<&QuestService::OnSceneTick>(this);
+    m_scenePlayerLeaveConnection = aDispatcher.sink<PlayerLeaveEvent>().connect<&QuestService::OnScenePlayerLeave>(this);
     m_questUpdateConnection = aDispatcher.sink<PacketEvent<RequestQuestUpdate>>().connect<&QuestService::OnQuestChanges>(this);
     m_joinConnection = aDispatcher.sink<PlayerJoinEvent>().connect<&QuestService::OnPlayerJoin>(this);
 }
@@ -193,6 +199,12 @@ void QuestService::SendEntry(const JournalEntry& acEntry, const Player& acPlayer
 
 void QuestService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
 {
+    for (const auto& [id, scene] : m_scenes)
+    {
+        const auto& state = scene.Canonical;
+        if (!scene.Ended && acEvent.pPlayer->HasModId(state.State.Id.ModId) && acEvent.pPlayer->HasModId(state.State.Quest.ModId))
+            acEvent.pPlayer->Send(state);
+    }
     if (!m_journalHealthy)
         return;
 
@@ -258,5 +270,135 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     {
         if (pPlayer != acMessage.pPlayer)
             SendEntry(entry, *pPlayer);
+    }
+}
+
+void QuestService::BroadcastScene(const NotifySceneState& acState) noexcept
+{
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+    {
+        if (pPlayer->HasModId(acState.State.Id.ModId) && pPlayer->HasModId(acState.State.Quest.ModId))
+            pPlayer->Send(acState);
+    }
+}
+
+void QuestService::RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept
+{
+    aScene.Observers.erase(aPlayerId);
+    if (aScene.Ended || aScene.Canonical.Owner != aPlayerId)
+        return;
+
+    if (!aFinished && !aScene.Observers.empty())
+    {
+        // Transfer only to a client actually observing the same native scene.
+        // Prefer the observer furthest along, while preserving the generation.
+        auto best = aScene.Observers.begin();
+        for (auto it = std::next(best); it != aScene.Observers.end(); ++it)
+        {
+            const uint32_t cPhase = it->second.State.Phase;
+            if (cPhase != UINT32_MAX && (best->second.State.Phase == UINT32_MAX || cPhase > best->second.State.Phase))
+                best = it;
+        }
+        aScene.Canonical.Owner = best->first;
+        aScene.Canonical.State = best->second.State;
+        BroadcastScene(aScene.Canonical);
+        return;
+    }
+
+    aScene.Ended = true;
+    aScene.Canonical.State.Active = false;
+    BroadcastScene(aScene.Canonical);
+}
+
+void QuestService::OnSceneState(const PacketEvent<RequestSceneState>& acEvent) noexcept
+{
+    const auto& state = acEvent.Packet.State;
+    const auto* pPlayer = acEvent.pPlayer;
+    if (!state.Id.BaseId || !state.Quest.BaseId ||
+        !pPlayer->HasModId(state.Id.ModId) || !pPlayer->HasModId(state.Quest.ModId))
+        return;
+
+    const uint64_t cKey = state.Id.LogFormat();
+    auto it = m_scenes.find(cKey);
+    if (!state.Active)
+    {
+        if (it != m_scenes.end() && it->second.Canonical.State.Quest == state.Quest)
+        {
+            RemoveSceneObserver(it->second, pPlayer->GetId(), true);
+            if (it->second.Observers.empty())
+                m_scenes.erase(it);
+        }
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (it == m_scenes.end())
+    {
+        auto& scene = m_scenes[cKey];
+        scene.Canonical.Owner = pPlayer->GetId();
+        if (++m_nextSceneGeneration == 0)
+            ++m_nextSceneGeneration;
+        scene.Canonical.Generation = m_nextSceneGeneration;
+        scene.Canonical.State = state;
+        scene.Observers.emplace(pPlayer->GetId(), SceneObserver{state, now});
+        BroadcastScene(scene.Canonical);
+        return;
+    }
+
+    auto& scene = it->second;
+    if (scene.Canonical.State.Quest != state.Quest)
+        return;
+    scene.Observers[pPlayer->GetId()] = {state, now};
+    // Once the owner finishes, lagging followers cannot open a new instance
+    // until the observers have all stopped or disconnected.
+    if (scene.Ended || scene.Canonical.Owner != pPlayer->GetId())
+        return;
+
+    if (scene.Canonical.State != state)
+    {
+        scene.Canonical.State = state;
+        BroadcastScene(scene.Canonical);
+    }
+}
+
+void QuestService::OnScenePlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
+{
+    for (auto it = m_scenes.begin(); it != m_scenes.end();)
+    {
+        RemoveSceneObserver(it->second, acEvent.pPlayer->GetId(), false);
+        if (it->second.Observers.empty())
+            it = m_scenes.erase(it);
+        else
+            ++it;
+    }
+}
+
+void QuestService::OnSceneTick(const UpdateEvent&) noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextSceneTick)
+        return;
+    m_nextSceneTick = now + std::chrono::seconds(2);
+
+    for (auto it = m_scenes.begin(); it != m_scenes.end();)
+    {
+        auto& scene = it->second;
+        std::vector<uint32_t> expired;
+        for (const auto& [playerId, observer] : scene.Observers)
+        {
+            if (now - observer.LastSeen > std::chrono::seconds(20))
+                expired.push_back(playerId);
+        }
+        // Remove expired followers before migrating an expired owner.
+        for (uint32_t playerId : expired)
+            if (playerId != scene.Canonical.Owner)
+                RemoveSceneObserver(scene, playerId, false);
+        if (std::find(expired.begin(), expired.end(), scene.Canonical.Owner) != expired.end())
+            RemoveSceneObserver(scene, scene.Canonical.Owner, false);
+
+        if (scene.Observers.empty())
+            it = m_scenes.erase(it);
+        else
+            ++it;
     }
 }

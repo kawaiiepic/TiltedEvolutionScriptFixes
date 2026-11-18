@@ -5,6 +5,9 @@
 #include <Games/Events.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <deque>
+#include <map>
+#include <chrono>
+#include <Messages/NotifySceneState.h>
 
 struct DisconnectedEvent;
 struct UpdateEvent;
@@ -55,10 +58,23 @@ private:
     // applied anymore.
     HeldStages* GetHeldStages(uint32_t aQuestFormId, TESQuest* apQuest) noexcept;
     void ApplyQuestUpdate(const NotifyQuestUpdate&) noexcept;
+    void ObserveScene(uint32_t aFormId) noexcept;
+    void RefreshSceneStates() noexcept;
+    void OnSceneState(const NotifySceneState& acState) noexcept;
+    bool MayReleaseSceneStages(TESQuest* apQuest) const noexcept;
 
     World& m_world;
     // Keyed by quest form ID
     Map<uint32_t, HeldStages> m_heldStages{};
+
+    struct LocalScene
+    {
+        SceneState Last{};
+        std::chrono::steady_clock::time_point NextHeartbeat{};
+    };
+    std::map<uint32_t, LocalScene> m_localScenes;
+    std::map<uint32_t, NotifySceneState> m_sharedScenes;
+    entt::scoped_connection m_sceneConnection;
 
     entt::scoped_connection m_joinedConnection;
     entt::scoped_connection m_updateConnection;

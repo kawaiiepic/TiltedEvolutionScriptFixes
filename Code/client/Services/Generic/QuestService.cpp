@@ -16,6 +16,7 @@
 
 #include <Messages/RequestQuestUpdate.h>
 #include <Messages/NotifyQuestUpdate.h>
+#include <Messages/RequestSceneState.h>
 
 static TESQuest* FindQuestByNameId(const String& name)
 {
@@ -36,6 +37,7 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     m_joinedConnection = aDispatcher.sink<ConnectedEvent>().connect<&QuestService::OnConnected>(this);
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&QuestService::OnUpdate>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&QuestService::OnDisconnected>(this);
+    m_sceneConnection = aDispatcher.sink<NotifySceneState>().connect<&QuestService::OnSceneState>(this);
     m_questUpdateConnection = aDispatcher.sink<NotifyQuestUpdate>().connect<&QuestService::OnQuestUpdate>(this);
 
     // Game events:
@@ -61,12 +63,16 @@ void QuestService::OnConnected(const ConnectedEvent&) noexcept
     m_heldStages.clear();
     m_pendingUpdates.clear();
     m_pendingStops.clear();
+    m_localScenes.clear();
+    m_sharedScenes.clear();
 }
 
 void QuestService::OnUpdate(const UpdateEvent&) noexcept
 {
     if (!m_world.GetTransport().IsOnline())
         return;
+
+    RefreshSceneStates();
 
     // Apply a bounded amount of history per frame, rather than starting every fragment in a single packet pump.
     if (!m_pendingUpdates.empty())
@@ -87,8 +93,11 @@ void QuestService::OnUpdate(const UpdateEvent&) noexcept
         TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(questFormId));
         if (HeldStages* pHeld = GetHeldStages(questFormId, pQuest))
         {
-            ReleaseStagesForWaitingPhases(pQuest, *pHeld);
-            ReleaseUncheckedStages(pQuest, *pHeld);
+            if (MayReleaseSceneStages(pQuest))
+            {
+                ReleaseStagesForWaitingPhases(pQuest, *pHeld);
+                ReleaseUncheckedStages(pQuest, *pHeld);
+            }
         }
     }
 
@@ -132,6 +141,8 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
     m_heldStages.clear();
     m_pendingUpdates.clear();
     m_pendingStops.clear();
+    m_localScenes.clear();
+    m_sharedScenes.clear();
 }
 
 BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, const EventDispatcher<TESQuestStartStopEvent>*)
@@ -266,18 +277,21 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageItemDoneEvent* apEvent, 
 
 BSTEventResult QuestService::OnEvent(const TESSceneEvent* apEvent, const EventDispatcher<TESSceneEvent>*)
 {
+    ObserveScene(apEvent->sceneFormId);
     spdlog::debug("Scene {:X} {}", apEvent->sceneFormId, apEvent->type == 0 ? "begin" : "end");
     return BSTEventResult::kOk;
 }
 
 BSTEventResult QuestService::OnEvent(const TESSceneActionEvent* apEvent, const EventDispatcher<TESSceneActionEvent>*)
 {
+    ObserveScene(apEvent->sceneFormId);
     spdlog::debug("Scene {:X} action {} done, quest: {:X}, alias: {}", apEvent->sceneFormId, apEvent->actionIndex, apEvent->questFormId, apEvent->aliasId);
     return BSTEventResult::kOk;
 }
 
 BSTEventResult QuestService::OnEvent(const TESScenePhaseEvent* apEvent, const EventDispatcher<TESScenePhaseEvent>*)
 {
+    ObserveScene(apEvent->sceneFormId);
     if (!spdlog::should_log(spdlog::level::debug))
         return BSTEventResult::kOk;
 
@@ -308,6 +322,117 @@ BSTEventResult QuestService::OnEvent(const TESTopicInfoEvent* apEvent, const Eve
     spdlog::debug(
         "Dialogue line {:X} {}, speaker: {:X}", apEvent->uiTopicInfoFormID, apEvent->eType == 0 ? "begin" : "end", apEvent->pSpeakerRef ? apEvent->pSpeakerRef->formID : 0);
     return BSTEventResult::kOk;
+}
+
+void QuestService::ObserveScene(uint32_t aFormId) noexcept
+{
+    if (!m_world.GetTransport().IsOnline() || !aFormId)
+        return;
+
+    // Event sinks can run on script threads. Only read engine scene state on
+    // the main runner/update path after the event's own fragments have run.
+    m_world.GetRunner().Queue([this, aFormId]()
+    {
+        if (m_world.GetTransport().IsOnline())
+            m_localScenes.try_emplace(aFormId);
+    });
+}
+
+void QuestService::RefreshSceneStates() noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = m_localScenes.begin(); it != m_localScenes.end();)
+    {
+        auto& local = it->second;
+        auto* pScene = Cast<BGSScene>(TESForm::GetById(it->first));
+        if (!pScene || !pScene->isPlaying)
+        {
+            if (local.Last.Active)
+            {
+                RequestSceneState ended{};
+                ended.State = local.Last;
+                ended.State.Active = false;
+                if (!m_world.GetTransport().Send(ended))
+                {
+                    ++it;
+                    continue;
+                }
+            }
+            it = m_localScenes.erase(it);
+            continue;
+        }
+        if (!pScene->owningQuest || IsNonSyncableQuest(pScene->owningQuest) ||
+            pScene->owningQuest->type == TESQuest::Type::None ||
+            pScene->owningQuest->type == TESQuest::Type::Miscellaneous)
+        {
+            it = m_localScenes.erase(it);
+            continue;
+        }
+
+        RequestSceneState request{};
+        if (!m_world.GetModSystem().GetServerModId(pScene->formID, request.State.Id) ||
+            !m_world.GetModSystem().GetServerModId(pScene->owningQuest->formID, request.State.Quest))
+        {
+            ++it;
+            continue;
+        }
+
+        request.State.Active = true;
+        request.State.Phase = pScene->currentPhaseIndex;
+        for (const auto* pAction : pScene->actions)
+        {
+            if (request.State.CompletedActions.size() == 255)
+                break;
+            if (pAction && pAction->IsComplete() && pAction->IsInPhase(request.State.Phase))
+                request.State.CompletedActions.push_back(pAction->GetIndex());
+        }
+        if (request.State != local.Last || now >= local.NextHeartbeat)
+        {
+            if (m_world.GetTransport().Send(request))
+            {
+                local.Last = request.State;
+                local.NextHeartbeat = now + std::chrono::seconds(2);
+            }
+        }
+        ++it;
+    }
+}
+
+void QuestService::OnSceneState(const NotifySceneState& acState) noexcept
+{
+    const uint32_t cFormId = m_world.GetModSystem().GetGameId(acState.State.Id);
+    if (!cFormId)
+        return;
+    if (!acState.State.Active)
+    {
+        m_sharedScenes.erase(cFormId);
+        return;
+    }
+    m_sharedScenes[cFormId] = acState;
+    spdlog::debug("Shared scene {:X} owner {} generation {} phase {} completed actions {}",
+        cFormId, acState.Owner, acState.Generation, acState.State.Phase, acState.State.CompletedActions.size());
+}
+
+bool QuestService::MayReleaseSceneStages(TESQuest* apQuest) const noexcept
+{
+    if (!apQuest)
+        return false;
+
+    // Do not push a follower past the owner by applying remote quest stages
+    // when that follower's local scene is already further ahead. The owner
+    // must never wait on itself. Skyrim still drives all native phase transitions.
+    for (const auto* pScene : apQuest->scenes)
+    {
+        if (!pScene || !pScene->isPlaying || pScene->currentPhaseIndex == UINT32_MAX)
+            continue;
+        const auto it = m_sharedScenes.find(pScene->formID);
+        if (it == m_sharedScenes.end() || it->second.Owner == m_world.GetTransport().GetLocalPlayerId())
+            continue;
+        const auto& state = it->second.State;
+        if (state.Phase == UINT32_MAX || pScene->currentPhaseIndex > state.Phase)
+            return false;
+    }
+    return true;
 }
 
 static bool Compare(TESConditionItem::OpCode aOpCode, float aLhs, float aRhs) noexcept

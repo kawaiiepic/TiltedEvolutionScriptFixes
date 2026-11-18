@@ -8,11 +8,16 @@
 #include <string>
 #include <tuple>
 #include <vector>
+#include <chrono>
+#include <Messages/NotifySceneState.h>
 
 struct World;
 struct Player;
 struct PlayerJoinEvent;
 struct RequestQuestUpdate;
+struct RequestSceneState;
+struct PlayerLeaveEvent;
+struct UpdateEvent;
 
 // The server owns an ordered campaign journal. The game clients still run native quest fragments.
 class QuestService
@@ -47,6 +52,32 @@ private:
     bool Append(const JournalEntry& acEntry) noexcept;
     void SendEntry(const JournalEntry& acEntry, const Player& acPlayer) const noexcept;
     bool ResolveEntry(const RequestQuestUpdate& acRequest, const Player& acPlayer, JournalEntry& aEntry) const noexcept;
+
+    struct SceneObserver
+    {
+        SceneState State{};
+        std::chrono::steady_clock::time_point LastSeen{};
+    };
+
+    struct SharedScene
+    {
+        NotifySceneState Canonical{};
+        std::map<uint32_t, SceneObserver> Observers;
+        bool Ended{};
+    };
+
+    void OnSceneState(const PacketEvent<RequestSceneState>& acEvent) noexcept;
+    void OnSceneTick(const UpdateEvent&) noexcept;
+    void OnScenePlayerLeave(const PlayerLeaveEvent&) noexcept;
+    void RemoveSceneObserver(SharedScene& aScene, uint32_t aPlayerId, bool aFinished) noexcept;
+    void BroadcastScene(const NotifySceneState& acState) noexcept;
+
+    std::map<uint64_t, SharedScene> m_scenes;
+    uint32_t m_nextSceneGeneration{};
+    std::chrono::steady_clock::time_point m_nextSceneTick{};
+    entt::scoped_connection m_sceneConnection;
+    entt::scoped_connection m_sceneTickConnection;
+    entt::scoped_connection m_scenePlayerLeaveConnection;
 
     World& m_world;
     std::vector<JournalEntry> m_journal;
