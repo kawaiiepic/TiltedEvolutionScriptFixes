@@ -777,6 +777,43 @@ TEST_CASE("Cell-scoped messages preserve plugin identity", "[encoding.campaign]"
     }
 }
 
+TEST_CASE("Carriage travel retains the boarding token", "[encoding.travel]")
+{
+    RequestCarriageTravel arrival;
+    arrival.Seat = GameId(2, 0x812);
+    arrival.Cell = GameId(3, 0x928);
+    arrival.Position = glm::vec3(64.f, -128.f, 256.f);
+    arrival.Token = 17;
+    arrival.Arrived = true;
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    arrival.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == RequestCarriageTravel::Opcode);
+    const auto parsed = CastUnique<RequestCarriageTravel>(std::move(message));
+    REQUIRE(parsed->Seat == arrival.Seat);
+    REQUIRE(parsed->Cell == arrival.Cell);
+    REQUIRE(parsed->Position == arrival.Position);
+    REQUIRE(parsed->Token == arrival.Token);
+    REQUIRE(parsed->Arrived);
+
+    NotifyTeleport teleport;
+    teleport.CellId = arrival.Cell;
+    teleport.WorldSpaceId = GameId(0, 0x3C);
+    teleport.Position = arrival.Position;
+    teleport.CarriageToken = 4;
+    Buffer::Writer teleportWriter(&buffer);
+    teleport.Serialize(teleportWriter);
+    Buffer::Reader teleportReader(&buffer);
+    auto received = ServerMessageFactory{}.Extract(teleportReader);
+    REQUIRE(received);
+    REQUIRE(received->GetOpcode() == NotifyTeleport::Opcode);
+    REQUIRE(*CastUnique<NotifyTeleport>(std::move(received)) == teleport);
+}
+
 TEST_CASE("Dropping missing stock does not create a negative inventory row", "[encoding.campaign]")
 {
     Inventory inventory;

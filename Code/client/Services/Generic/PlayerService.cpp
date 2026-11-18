@@ -2,6 +2,7 @@
 
 #include <World.h>
 
+#include <Events/ActivateEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/ConnectedEvent.h>
 #include <Events/DisconnectedEvent.h>
@@ -18,17 +19,25 @@
 #include <Messages/EnterExteriorCellRequest.h>
 #include <Messages/EnterInteriorCellRequest.h>
 #include <Messages/PlayerLevelRequest.h>
+#include <Messages/RequestCarriageTravel.h>
 
+#include <Structs/CarriageTravel.h>
 #include <Structs/ServerSettings.h>
 
 #include <PlayerCharacter.h>
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESGlobal.h>
+#include <Forms/BGSKeyword.h>
+#include <Forms/TESWorldSpace.h>
+#include <Components/BGSKeywordForm.h>
 #include <Games/Overrides.h>
 #include <Games/References.h>
+#include <Games/TES.h>
 #include <AI/AIProcess.h>
 #include <EquipManager.h>
 #include <Forms/TESRace.h>
+#include <Interface/UI.h>
+#include <Services/OverlayService.h>
 
 PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
     : m_world(aWorld)
@@ -45,6 +54,9 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_playerLevelConnection = m_dispatcher.sink<PlayerLevelEvent>().connect<&PlayerService::OnPlayerLevelEvent>(this);
     m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>().connect<&PlayerService::OnPartyJoinedEvent>(this);
     m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>().connect<&PlayerService::OnPartyLeftEvent>(this);
+    m_carriageActivateConnection = aDispatcher.sink<ActivateEvent>().connect<&PlayerService::OnActivate>(this);
+    m_teleportConnection = aDispatcher.sink<NotifyTeleport>().connect<&PlayerService::OnNotifyTeleport>(this);
+    EventDispatcherManager::Get()->fastTravelEndEvent.RegisterSink(this);
 }
 
 void PlayerService::OnUpdate(const UpdateEvent&) noexcept
@@ -54,6 +66,7 @@ void PlayerService::OnUpdate(const UpdateEvent&) noexcept
     RunDifficultyUpdates();
     RunLevelUpdates();
     RunBeastFormDetection();
+    RunCarriageTravelUpdates();
 }
 
 void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -68,6 +81,9 @@ void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
 
 void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
+    m_carriage.reset();
+    m_carriageTeleport.reset();
+    m_reportedCell = {};
     PlayerCharacter::Get()->SetDifficulty(m_previousDifficulty);
     m_serverDifficulty = m_previousDifficulty = 6;
 
@@ -124,7 +140,7 @@ void PlayerService::OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) co
     }
 }
 
-void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) const noexcept
+void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
 {
     if (acEvent.WorldSpaceId)
     {
@@ -133,15 +149,156 @@ void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) const noex
         message.WorldSpaceId = acEvent.WorldSpaceId;
         message.CurrentCoords = acEvent.CurrentCoords;
 
-        m_transport.Send(message);
+        if (m_transport.Send(message))
+            m_reportedCell = message.CellId;
     }
     else
     {
         EnterInteriorCellRequest message;
         message.CellId = acEvent.CellId;
 
-        m_transport.Send(message);
+        if (m_transport.Send(message))
+            m_reportedCell = message.CellId;
     }
+}
+
+void PlayerService::OnActivate(const ActivateEvent& acEvent) noexcept
+{
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!m_transport.IsOnline() || !pPlayer || acEvent.pActivator != pPlayer || !acEvent.pObject ||
+        !acEvent.pObject->baseForm || acEvent.pObject->baseForm->formType != FormType::Furniture)
+        return;
+
+    // Skyrim.esm's isCartTravelPlayer keyword marks the actual passenger furniture.
+    constexpr uint32_t kCarriageSeatKeyword = 0x103444;
+    const auto* pSkyrim = ModManager::Get()->GetByName("Skyrim.esm");
+    auto* pKeyword = pSkyrim ? Cast<BGSKeyword>(TESForm::GetById((static_cast<uint32_t>(pSkyrim->GetId()) << 24) | kCarriageSeatKeyword)) : nullptr;
+    const auto* pKeywords = Cast<BGSKeywordForm>(acEvent.pObject->baseForm);
+    const auto* pCell = acEvent.pObject->GetParentCellEx();
+    if (!pKeyword || !pKeywords || !pKeywords->Contains(pKeyword) || !pCell || pCell != pPlayer->GetParentCellEx())
+        return;
+
+    RequestCarriageTravel request;
+    const auto& mods = m_world.GetModSystem();
+    if (acEvent.pObject->IsTemporary() || !mods.GetServerModId(acEvent.pObject->formID, request.Seat) ||
+        mods.GetGameId(request.Seat) != acEvent.pObject->formID ||
+        !mods.GetServerModId(pCell->formID, request.Cell) || request.Cell != m_reportedCell)
+        return;
+
+    if (++m_nextCarriageToken == 0)
+        ++m_nextCarriageToken;
+    request.Token = m_nextCarriageToken;
+    request.Position = acEvent.pObject->position;
+    if (m_transport.Send(request))
+    {
+        m_carriageTeleport.reset();
+        m_carriage = CarriageBoarding{request.Seat, request.Cell, request.Position,
+            std::chrono::steady_clock::now() + CarriageTravel::kBoardingLifetime, request.Token};
+    }
+}
+
+BSTEventResult PlayerService::OnEvent(const TESFastTravelEndEvent*, const EventDispatcher<TESFastTravelEndEvent>*)
+{
+    m_world.GetRunner().Queue([this]()
+    {
+        if (m_carriage)
+            m_carriage->Arrived = true;
+    });
+    return BSTEventResult::kOk;
+}
+
+void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
+{
+    if (!acMessage.CarriageToken)
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+        ApplyTeleport(acMessage);
+    }
+    else if (m_carriage && m_carriage->Token == acMessage.CarriageToken)
+        m_carriageTeleport = acMessage;
+}
+
+void PlayerService::RunCarriageTravelUpdates() noexcept
+{
+    if (!m_carriage)
+        return;
+    const auto* pUI = UI::Get();
+    static const BSFixedString s_mapMenu("MapMenu");
+    static const BSFixedString s_loadingMenu("Loading Menu");
+    if (std::chrono::steady_clock::now() >= m_carriage->ExpiresAt || (pUI && pUI->GetMenuOpen(s_mapMenu)))
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+        return;
+    }
+    if (pUI && pUI->GetMenuOpen(s_loadingMenu))
+        return;
+
+    auto* pPlayer = PlayerCharacter::Get();
+    const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    GameId currentCell{};
+    if (!pCell || !m_world.GetModSystem().GetServerModId(pCell->formID, currentCell))
+        return;
+
+    if (currentCell == m_carriage->Origin)
+    {
+        const glm::vec3 delta = glm::vec3(pPlayer->position) - m_carriage->Position;
+        if (glm::dot(delta, delta) > CarriageTravel::kBoardingDistance * CarriageTravel::kBoardingDistance)
+        {
+            m_carriage.reset();
+            m_carriageTeleport.reset();
+        }
+        else if (m_carriageTeleport && !m_carriage->Arrived)
+        {
+            const auto teleport = *m_carriageTeleport;
+            m_carriage.reset();
+            m_carriageTeleport.reset();
+            ApplyTeleport(teleport);
+        }
+        return;
+    }
+    if (!m_carriage->Arrived || currentCell != m_reportedCell)
+        return;
+
+    RequestCarriageTravel request;
+    request.Seat = m_carriage->Seat;
+    request.Token = m_carriage->Token;
+    request.Cell = currentCell;
+    request.Position = pPlayer->position;
+    request.Arrived = true;
+    if (m_transport.Send(request))
+    {
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+    }
+}
+
+void PlayerService::ApplyTeleport(const NotifyTeleport& acMessage) noexcept
+{
+    auto& modSystem = m_world.GetModSystem();
+
+    const uint32_t cellId = modSystem.GetGameId(acMessage.CellId);
+    TESObjectCELL* pCell = Cast<TESObjectCELL>(TESForm::GetById(cellId));
+    if (!pCell)
+    {
+        const uint32_t worldSpaceId = modSystem.GetGameId(acMessage.WorldSpaceId);
+        TESWorldSpace* pWorldSpace = Cast<TESWorldSpace>(TESForm::GetById(worldSpaceId));
+        if (pWorldSpace)
+        {
+            GridCellCoords coordinates = GridCellCoords::CalculateGridCellCoords(acMessage.Position);
+            pCell = pWorldSpace->LoadCell(coordinates.X, coordinates.Y);
+        }
+
+        if (!pCell)
+        {
+            spdlog::error("Failed to fetch cell to teleport to.");
+            m_world.GetOverlayService().SendSystemMessage("Teleporting to player failed.");
+            return;
+        }
+    }
+
+    PlayerCharacter::Get()->MoveTo(pCell, acMessage.Position);
 }
 
 void PlayerService::OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept

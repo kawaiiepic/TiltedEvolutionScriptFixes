@@ -1,6 +1,7 @@
 #include "Events/CharacterInteriorCellChangeEvent.h"
 #include "Events/CharacterExteriorCellChangeEvent.h"
 #include "Events/PlayerLeaveCellEvent.h"
+#include "Events/PlayerLeaveEvent.h"
 
 #include <Services/PlayerService.h>
 #include <Services/CharacterService.h>
@@ -17,6 +18,9 @@
 #include <Messages/PlayerLevelRequest.h>
 #include <Messages/NotifyPlayerLevel.h>
 #include <Messages/NotifyPlayerCellChanged.h>
+#include <Messages/NotifyTeleport.h>
+#include <Messages/RequestCarriageTravel.h>
+#include <Structs/CarriageTravel.h>
 
 #include <Setting.h>
 namespace
@@ -31,7 +35,72 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher) noexc
     , m_exteriorCellEnterConnection(aDispatcher.sink<PacketEvent<EnterExteriorCellRequest>>().connect<&PlayerService::HandleExteriorCellEnter>(this))
     , m_playerRespawnConnection(aDispatcher.sink<PacketEvent<PlayerRespawnRequest>>().connect<&PlayerService::OnPlayerRespawnRequest>(this))
     , m_playerLevelConnection(aDispatcher.sink<PacketEvent<PlayerLevelRequest>>().connect<&PlayerService::OnPlayerLevelRequest>(this))
+    , m_carriageTravelConnection(aDispatcher.sink<PacketEvent<RequestCarriageTravel>>().connect<&PlayerService::OnCarriageTravel>(this))
+    , m_playerLeaveConnection(aDispatcher.sink<PlayerLeaveEvent>().connect<&PlayerService::OnPlayerLeave>(this))
 {
+}
+
+void PlayerService::OnCarriageTravel(const PacketEvent<RequestCarriageTravel>& acMessage) noexcept
+{
+    const auto& request = acMessage.Packet;
+    const auto& player = *acMessage.pPlayer;
+    const auto& cell = player.GetCellComponent();
+    const auto character = player.GetCharacter();
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    if (!character || !request.Token || request.Cell != cell.Cell ||
+        !mods.FindFormKey(request.Seat, player) || !mods.FindFormKey(request.Cell, player) ||
+        (cell.WorldSpaceId && !mods.FindFormKey(cell.WorldSpaceId, player)))
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    const auto isNear = [](const glm::vec3& acLeft, const glm::vec3& acRight)
+    {
+        const auto delta = acLeft - acRight;
+        return glm::dot(delta, delta) <= CarriageTravel::kBoardingDistance * CarriageTravel::kBoardingDistance;
+    };
+    if (!request.Arrived)
+    {
+        const auto* pMovement = m_world.try_get<MovementComponent>(*character);
+        if (pMovement && isNear(pMovement->Position, request.Position))
+            m_carriageBoardings.insert_or_assign(player.GetId(), CarriageBoarding{
+                request.Seat, cell.Cell, request.Position, request.Token, now + CarriageTravel::kBoardingLifetime});
+        return;
+    }
+
+    const auto departure = m_carriageBoardings.find(player.GetId());
+    if (departure == m_carriageBoardings.end() || departure->second.ExpiresAt <= now ||
+        departure->second.Token != request.Token || departure->second.Seat != request.Seat || departure->second.Cell == cell.Cell)
+        return;
+
+    const auto boarding = departure->second;
+    m_carriageBoardings.erase(departure);
+    NotifyTeleport notify{};
+    notify.CellId = cell.Cell;
+    notify.WorldSpaceId = cell.WorldSpaceId;
+    notify.Position = request.Position;
+    for (const Player* pRider : m_world.GetPlayerManager())
+    {
+        const auto rider = m_carriageBoardings.find(pRider->GetId());
+        const auto riderCharacter = pRider->GetCharacter();
+        if (rider == m_carriageBoardings.end() || !riderCharacter || rider->second.ExpiresAt <= now ||
+            rider->second.Seat != boarding.Seat || rider->second.Cell != boarding.Cell ||
+            pRider->GetCellComponent().Cell != boarding.Cell || !pRider->HasModId(cell.Cell.ModId) ||
+            (cell.WorldSpaceId && !pRider->HasModId(cell.WorldSpaceId.ModId)))
+            continue;
+
+        const auto* pMovement = m_world.try_get<MovementComponent>(*riderCharacter);
+        if (!pMovement || !isNear(pMovement->Position, boarding.Position))
+            continue;
+
+        notify.CarriageToken = rider->second.Token;
+        m_carriageBoardings.erase(rider);
+        pRider->Send(notify);
+    }
+}
+
+void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
+{
+    m_carriageBoardings.erase(acEvent.pPlayer->GetId());
 }
 
 void SendPlayerCellChanged(const Player* apPlayer) noexcept

@@ -55,6 +55,7 @@ enum ClientOpcode : unsigned char
     kRequestActionEvents,
     kRequestSceneState,
     kRequestQuestSyncAck,
+    kRequestCarriageTravel,
     kClientOpcodeMax
 };
 

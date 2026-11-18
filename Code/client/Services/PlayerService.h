@@ -1,5 +1,10 @@
 #pragma once
 
+#include <Events/EventDispatcher.h>
+#include <Games/Events.h>
+#include <Messages/NotifyTeleport.h>
+#include <optional>
+
 struct World;
 struct TransportService;
 
@@ -12,13 +17,14 @@ struct CellChangeEvent;
 struct PlayerLevelEvent;
 struct PartyJoinedEvent;
 struct PartyLeftEvent;
+struct ActivateEvent;
 
 struct NotifyPlayerRespawn;
 
 /**
  * @brief Handles logic related to the local player.
  */
-struct PlayerService
+struct PlayerService : BSTEventSink<TESFastTravelEndEvent>
 {
     PlayerService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept;
     ~PlayerService() noexcept = default;
@@ -32,10 +38,13 @@ protected:
     void OnServerSettingsReceived(const ServerSettings& acSettings) noexcept;
     void OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) const noexcept;
     void OnGridCellChangeEvent(const GridCellChangeEvent& acEvent) const noexcept;
-    void OnCellChangeEvent(const CellChangeEvent& acEvent) const noexcept;
+    void OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept;
     void OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept;
     void OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept;
     void OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept;
+    void OnActivate(const ActivateEvent& acEvent) noexcept;
+    void OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept;
+    BSTEventResult OnEvent(const TESFastTravelEndEvent*, const EventDispatcher<TESFastTravelEndEvent>*) override;
 
 private:
     /**
@@ -49,12 +58,28 @@ private:
     void RunDifficultyUpdates() const noexcept;
     void RunLevelUpdates() const noexcept;
     void RunBeastFormDetection() const noexcept;
+    void RunCarriageTravelUpdates() noexcept;
+    void ApplyTeleport(const NotifyTeleport& acMessage) noexcept;
 
     void ToggleDeathSystem(bool aSet) noexcept;
 
     World& m_world;
     entt::dispatcher& m_dispatcher;
     TransportService& m_transport;
+
+    struct CarriageBoarding
+    {
+        GameId Seat;
+        GameId Origin;
+        glm::vec3 Position;
+        std::chrono::steady_clock::time_point ExpiresAt;
+        uint32_t Token;
+        bool Arrived{};
+    };
+    std::optional<CarriageBoarding> m_carriage;
+    std::optional<NotifyTeleport> m_carriageTeleport;
+    GameId m_reportedCell{};
+    uint32_t m_nextCarriageToken{};
 
     std::chrono::steady_clock::time_point m_respawnDeadline;
     int32_t m_serverDifficulty = 6;
@@ -82,4 +107,6 @@ private:
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_partyJoinedConnection;
     entt::scoped_connection m_partyLeftConnection;
+    entt::scoped_connection m_carriageActivateConnection;
+    entt::scoped_connection m_teleportConnection;
 };

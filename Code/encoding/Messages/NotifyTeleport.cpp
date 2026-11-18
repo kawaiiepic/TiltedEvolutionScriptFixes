@@ -6,6 +6,7 @@ void NotifyTeleport::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const 
     CellId.Serialize(aWriter);
     Position.Serialize(aWriter);
     WorldSpaceId.Serialize(aWriter);
+    Serialization::WriteVarInt(aWriter, CarriageToken);
 }
 
 void NotifyTeleport::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -15,4 +16,5 @@ void NotifyTeleport::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noex
     CellId.Deserialize(aReader);
     Position.Deserialize(aReader);
     WorldSpaceId.Deserialize(aReader);
+    CarriageToken = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
 }
