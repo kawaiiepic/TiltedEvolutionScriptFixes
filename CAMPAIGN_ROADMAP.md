@@ -47,9 +47,9 @@ Accepted changes write `shared-locks.log`. Restoring a lock does not restore a d
 
 ### Recovery and administration
 
-- Run `campaign-status` in the dedicated server console for journal health, the affected record line, loaded policies and replay cursors.
-- Run `campaign-backup` to create `shared-quests.log.backup` from the committed journal. Archive an existing backup under a distinct name before creating the next one. Back up the policy and lock files alongside the quest journal.
-- To recover the quest journal, stop the server, preserve the damaged file, restore a known-good backup as `shared-quests.log`, then restart and check `campaign-status`. A torn final line is reported even if it contains all fields. A v1 journal stays readable and new records use v2. Avoid running an older server binary against a journal containing v2 records.
+- Run `/campaign-status` in the dedicated server console for journal health, the affected record line, loaded policies and replay cursors.
+- Run `/campaign-backup` to create `shared-quests.log.backup` from the committed journal. Archive an existing backup under a distinct name before creating the next one. Back up the policy and lock files alongside the quest journal.
+- To recover the quest journal, stop the server, preserve the damaged file, restore a known-good backup as `shared-quests.log`, then restart and check `/campaign-status`. A torn final line is reported even if it contains all fields. A v1 journal stays readable and new records use v2. Avoid running an older server binary against a journal containing v2 records.
 - A replay acknowledgement means the client quest service processed the batch. It does not certify that pending native fragments ran or that the character was saved. Recover affected characters from corresponding saves when rolling back a campaign.
 - `bRemoteDialogueSpectating` under `[Gameplay]` exposes public panels to distant players. Only nearby players can vote on those panels. Owners can make a conversation private and pass control to an eligible player who already has the native conversation open.
 - Set `bEnableXpSync` under `[Gameplay]` to enable party combat XP sharing. An existing INI keeps its configured value.
