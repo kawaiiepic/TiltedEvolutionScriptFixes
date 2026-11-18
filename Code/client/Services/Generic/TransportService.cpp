@@ -113,7 +113,7 @@ void TransportService::OnConsume(const void* apData, uint32_t aSize)
 void TransportService::OnConnected()
 {
     AuthenticationRequest request{};
-    request.Version = BUILD_COMMIT;
+    request.Version = BUILD_PROTOCOL;
     request.SKSEActive = IsScriptExtenderLoaded();
     request.MO2Active = GetModuleHandleW(kMO2DllName);
 
@@ -227,7 +227,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     {
     case AR::kWrongVersion:
         ErrorInfo += "\"error\": \"wrong_version\", \"data\": {";
-        ErrorInfo += fmt::format("\"expectedVersion\": \"{}\", \"version\": \"{}\"", acMessage.Version, BUILD_COMMIT);
+        ErrorInfo += fmt::format("\"expectedVersion\": \"{}\", \"version\": \"{}\"", acMessage.Version, BUILD_PROTOCOL);
         ErrorInfo += "}";
         break;
     case AR::kModsMismatch:

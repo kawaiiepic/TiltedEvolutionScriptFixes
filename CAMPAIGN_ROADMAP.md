@@ -1,6 +1,6 @@
 # Shared campaign roadmap
 
-The dedicated server records shared quest events. Skyrim still evaluates conditions, runs Papyrus fragments, holds each character's save and renders its journal and HUD. Quest updates, scene observations and shared dialogue work independently of party membership. Matching client and server builds are required.
+The dedicated server records shared quest events. Skyrim still evaluates conditions, runs Papyrus fragments, holds each character's save and renders its journal and HUD. Quest updates, scene observations and shared dialogue work independently of party membership. The protocol handshake checks the source commit so clients and the server must use matching builds.
 
 ## Status by phase
 
