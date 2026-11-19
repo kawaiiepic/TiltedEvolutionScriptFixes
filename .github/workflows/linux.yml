@@ -77,10 +77,18 @@ jobs:
         if: matrix.arch == 'amd64'
         run: |
           xmake build CampaignSmokeClient
-          python3 Code/tests/integration/campaign_smoke.py \
+          set -o pipefail
+          if ! python3 Code/tests/integration/campaign_smoke.py \
             "build/linux/x86_64/$BUILD_MODE/SkyrimTogetherServer" \
             "build/linux/x86_64/$BUILD_MODE/CampaignSmokeClient" \
-            build/BuildInfo.h
+            build/BuildInfo.h 2>&1 | tee campaign-smoke.log; then
+            awk '/Assertion|Error:|Timed out/ && count++ < 6 {
+              gsub(/%/, "%25");
+              gsub(/\r/, "%0D");
+              print "::error::" substr($0, 1, 700);
+            }' campaign-smoke.log
+            exit 1
+          fi
 
       - name: Stage Linux server
         run: |

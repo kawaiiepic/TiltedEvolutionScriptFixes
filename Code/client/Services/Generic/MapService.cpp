@@ -7,6 +7,7 @@
 #include <Messages/MapDiscovery.h>
 #include <ExtraData/ExtraMapMarker.h>
 #include <Interface/UI.h>
+#include <Structs/GridCellCoords.h>
 #include <Structs/ServerSettings.h>
 #include <VersionDb.h>
 
@@ -25,7 +26,7 @@ namespace
 {
 MapMarkerData* GetShareableMapMarker(const TESObjectREFR& acReference) noexcept
 {
-    if (acReference.IsTemporary() || (acReference.flags & (TESForm::DELETED | TESForm::DISABLED)))
+    if (acReference.IsTemporary() || acReference.IsDeleted() || acReference.IsDisabled())
         return nullptr;
     auto* pExtra = static_cast<ExtraMapMarker*>(acReference.extraData.GetByType(ExtraDataType::MapMarker));
     auto* pMarker = pExtra ? pExtra->mapData : nullptr;
