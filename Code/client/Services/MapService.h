@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Events/EventDispatcher.h>
+#include <Games/Events.h>
 #include <Structs/GameId.h>
 #include <chrono>
 #include <unordered_set>
