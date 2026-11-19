@@ -14,7 +14,10 @@
 struct CharacterSavePayload
 {
     static constexpr size_t ChunkSize = 60 * 1024;
-    static constexpr size_t WindowSize = 8;
+    static constexpr size_t WindowSize = 32;
+    static constexpr uint32_t MaxRateKiB = 10240;
+    static constexpr uint32_t MinRateKiB = 64;
+    static constexpr int32_t SendBufferBytes = 8 * 1024 * 1024;
     static constexpr uint64_t MaxSize = 128ull * 1024 * 1024;
     static constexpr size_t HeaderSize = 1 + 2 + 4 * 8 + 32 + 32 + 2;
     static bool ValidPacket(const void* apData, size_t aSize) noexcept

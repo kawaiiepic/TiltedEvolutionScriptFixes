@@ -28,6 +28,7 @@ constexpr size_t kMaxServerNameLength = 128u;
 Console::Setting uServerPort{"GameServer:uPort", "Which port to host the server on", 10578u};
 Console::Setting uMaxPlayerCount{"GameServer:uMaxPlayerCount", "Maximum number of players allowed on the server (going over the default of 8 is not recommended)", 8u};
 Console::Setting bRequireServerSaves{"GameServer:bRequireServerSaves", "Require server-owned character checkpoints before entering the world", true, Console::SettingsFlags::kLocked};
+Console::Setting uCheckpointRateKiB{"GameServer:uCheckpointRateKiB", "Per-client network send ceiling and cooperative checkpoint upload limit in KiB/s (64-10240)", 10240u, Console::SettingsFlags::kLocked};
 Console::Setting bPremiumTickrate{"GameServer:bPremiumMode", "Server tick rate: 60 updates per second if true, 30 if false", true};
 
 Console::StringSetting sServerName{"GameServer:sServerName", "Name that shows up in the server list", "Dedicated Together Server"};
@@ -160,6 +161,15 @@ GameServer::GameServer(Console::ConsoleRegistry& aConsole) noexcept
 {
     BASE_ASSERT(s_pInstance == nullptr, "Server instance already exists?");
     s_pInstance = this;
+
+    using P = CharacterSavePayload;
+    const auto rateKiB = std::clamp(uCheckpointRateKiB.value_as<uint32_t>(), P::MinRateKiB, P::MaxRateKiB);
+    auto* utils = SteamNetworkingUtils();
+    const bool rate = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, rateKiB * 1024);
+    const bool floor = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, P::MinRateKiB * 1024);
+    const bool buffer = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendBufferSize, P::SendBufferBytes);
+    if (!rate || !floor || !buffer) spdlog::warn("Could not configure checkpoint network defaults");
+    spdlog::info("Checkpoint network ceiling: {} KiB/s per connection", rateKiB);
 
     auto port = uServerPort.value_as<uint16_t>();
     while (!Host(port, GetUserTickRate()))
@@ -885,6 +895,9 @@ void GameServer::HandleCharacterSave(ConnectionId_t aConnectionId, const Request
         reply.Status = CharacterSavePayload::Disabled;
     else
         m_characterSaves.Handle(aConnectionId, inWorld, acRequest, reply);
+    // BeginUpload has no chunk offset; advertise the configured pacing rate here.
+    if (reply.Status == CharacterSavePayload::Ok && reply.Action == CharacterSavePayload::BeginUpload)
+        reply.Offset = std::clamp(uCheckpointRateKiB.value_as<uint32_t>(), CharacterSavePayload::MinRateKiB, CharacterSavePayload::MaxRateKiB);
     Send(aConnectionId, reply);
 }
 

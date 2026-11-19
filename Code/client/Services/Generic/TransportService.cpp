@@ -45,6 +45,12 @@ TransportService::TransportService(World& aWorld, entt::dispatcher& aDispatcher)
     m_connectedConnection = m_dispatcher.sink<ConnectedEvent>().connect<&TransportService::HandleConnected>(this);
     m_disconnectedConnection = m_dispatcher.sink<DisconnectedEvent>().connect<&TransportService::HandleDisconnected>(this);
 
+    // Set defaults before any connection is created. Leave congestion control enabled.
+    auto* utils = SteamNetworkingUtils();
+    const bool rate = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, CharacterSavePayload::MaxRateKiB * 1024);
+    const bool floor = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, CharacterSavePayload::MinRateKiB * 1024);
+    const bool buffer = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendBufferSize, CharacterSavePayload::SendBufferBytes);
+    if (!rate || !floor || !buffer) spdlog::warn("Could not configure checkpoint network defaults");
     m_connected = false;
 
     auto handlerGenerator = [this](auto& x)

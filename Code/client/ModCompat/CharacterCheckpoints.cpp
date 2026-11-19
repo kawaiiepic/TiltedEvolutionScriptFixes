@@ -62,7 +62,9 @@ struct State
     uint8_t Expected{};
     uint64_t Revision{}, Ess{}, Co{}, Offset{}, SentOffset{};
     std::vector<Flight> Flights;
-    Clock::time_point TransferStart{}, LastProgress{};
+    Clock::time_point TransferStart{}, LastProgress{}, CreditTime{};
+    double UploadCredit{};
+    uint32_t UploadRateKiB{P::MaxRateKiB};
     size_t CachedSize{}, ReusedBytes{};
     std::filesystem::path CacheFile;
     std::vector<std::array<uint8_t, 32>> BaseBlocks;
@@ -777,7 +779,14 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
         case P::BeginUpload:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision) { Fail("Invalid upload response."); return; }
             s.NeedsBegin = false;
-            s.TransferStart = Clock::now();
+            s.UploadRateKiB = static_cast<uint32_t>(std::clamp<uint64_t>(acReply.Offset, P::MinRateKiB, P::MaxRateKiB));
+            s.TransferStart = s.CreditTime = Clock::now();
+            s.UploadCredit = P::ChunkSize + P::HeaderSize;
+            {
+                const auto status = World::Get().GetTransport().GetConnectionStatus();
+                spdlog::info("Checkpoint upload: configured {} KiB/s, estimated socket rate {} KiB/s, ping {} ms",
+                    s.UploadRateKiB, status.m_nSendRateBytesPerSecond / 1024, status.m_nPing);
+            }
             return;
         case P::UploadCopy:
         case P::UploadChunk:
@@ -1005,9 +1014,22 @@ void Tick(TransportService& aTransport) noexcept
                 Send(aTransport, request);
                 return;
             }
-            const size_t budget = aTransport.IsOnline() ? 2 : P::WindowSize;
-            for (size_t i = 0; i < budget && s.Flights.size() < P::WindowSize && s.SentOffset < s.Bytes.size(); ++i)
+            const bool online = aTransport.IsOnline();
+            const size_t budget = online ? 2 : 8;
+            const size_t window = online ? 4 : P::WindowSize;
+            if (uploading)
             {
+                const double elapsed = std::chrono::duration<double>(now - s.CreditTime).count();
+                s.CreditTime = now;
+                s.UploadCredit = (std::min)(static_cast<double>(P::WindowSize * (P::ChunkSize + P::HeaderSize)),
+                    s.UploadCredit + (std::max)(0.0, elapsed) * s.UploadRateKiB * 1024.0);
+            }
+            for (size_t i = 0; i < budget && s.Flights.size() < window && s.SentOffset < s.Bytes.size(); ++i)
+            {
+                // Do not build a bulk reliable backlog while gameplay is active.
+                const auto status = aTransport.GetConnectionStatus();
+                const auto pending = static_cast<int64_t>(status.m_cbPendingReliable) + status.m_cbPendingUnreliable;
+                if (pending >= (online ? 64 * 1024 : 2 * 1024 * 1024)) break;
                 RequestCharacterSave request{};
                 request.Revision = s.Revision;
                 request.Offset = s.SentOffset;
@@ -1027,7 +1049,7 @@ void Tick(TransportService& aTransport) noexcept
                     if (block < s.BaseBlocks.size() && BlockDigest(s.SentOffset, count) == s.BaseBlocks[block])
                     {
                         request.Action = P::UploadCopy;
-                        s.ReusedBytes += count;
+                        // Account for reuse only after successfully scheduling the request.
                     }
                     else
                     {
@@ -1047,7 +1069,11 @@ void Tick(TransportService& aTransport) noexcept
                         }
                     }
                 }
+                const size_t charge = P::HeaderSize + request.Count + 1;
+                if (uploading && s.UploadCredit < charge) break;
                 if (!SendFlight(aTransport, request, s.SentOffset + count)) return;
+                if (uploading) s.UploadCredit -= charge;
+                if (request.Action == P::UploadCopy) s.ReusedBytes += count;
             }
             if (uploading && s.Offset == s.Bytes.size() && s.Flights.empty())
             {
