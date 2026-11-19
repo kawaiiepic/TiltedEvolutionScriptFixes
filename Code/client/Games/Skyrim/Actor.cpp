@@ -24,6 +24,7 @@
 #include <Games/TES.h>
 #include <World.h>
 #include <Services/PapyrusService.h>
+#include <Services/InventoryService.h>
 
 #include <Forms/ActorValueInfo.h>
 #include <Forms/TESRace.h>
@@ -1081,7 +1082,11 @@ void TP_MAKE_THISCALL(HookAddInventoryItem, Actor, TESBoundObject* apItem, Extra
 
 void* TP_MAKE_THISCALL(HookPickUpObject, Actor, TESObjectREFR* apObject, int32_t aCount, bool aUnk1, float aUnk2)
 {
-    if (!ScopedInventoryOverride::IsOverriden())
+    if (apObject && apObject->IsTemporary() && World::Get().GetTransport().IsOnline() &&
+        World::Get().ctx().at<InventoryService>().ClaimGroundItem(apObject->formID, apThis == PlayerCharacter::Get()))
+        return nullptr;
+
+    if (!ScopedInventoryOverride::IsOverriden() && apObject && apObject->baseForm)
     {
         auto& modSystem = World::Get().GetModSystem();
 
@@ -1109,20 +1114,39 @@ void Actor::PickUpObject(TESObjectREFR* apObject, int32_t aCount, bool aUnk1, fl
 
 void* TP_MAKE_THISCALL(HookDropObject, Actor, void* apResult, TESBoundObject* apObject, ExtraDataList* apExtraData, int32_t aCount, NiPoint3* apLocation, NiPoint3* apRotation)
 {
-    auto& modSystem = World::Get().GetModSystem();
+    if (ScopedInventoryOverride::IsOverriden() || !apObject || aCount <= 0)
+        return TiltedPhoques::ThisCall(RealDropObject, apThis, apResult, apObject, apExtraData, aCount, apLocation, apRotation);
 
+    auto& world = World::Get();
+    auto& mods = world.GetModSystem();
     Inventory::Entry item{};
-    modSystem.GetServerModId(apObject->formID, item.BaseId);
-    item.Count = -aCount;
-
+    mods.GetServerModId(apObject->formID, item.BaseId);
     if (apExtraData)
         apThis->GetItemFromExtraData(item, apExtraData);
+    item.Count = -aCount;
+    const bool hasCustomName = apExtraData && apExtraData->Contains(ExtraDataType::TextDisplayData);
 
-    QueueActorInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item), true));
+    ScopedInventoryOverride override;
+    auto* pResult = TiltedPhoques::ThisCall(RealDropObject, apThis, apResult, apObject, apExtraData, aCount, apLocation, apRotation);
+    const auto* pHandle = static_cast<const BSPointerHandle<TESObjectREFR>*>(apResult);
+    const auto* pDrop = pHandle && *pHandle ? TESObjectREFR::GetByHandle(pHandle->handle.iBits) : nullptr;
+    if (!pDrop || pDrop->baseForm != apObject)
+        return pResult;
 
-    ScopedInventoryOverride _;
-
-    return TiltedPhoques::ThisCall(RealDropObject, apThis, apResult, apObject, apExtraData, aCount, apLocation, apRotation);
+    InventoryChangeEvent event(apThis->formID, std::move(item), true);
+    const auto* pCell = pDrop->GetParentCellEx();
+    if (apThis == PlayerCharacter::Get() && world.GetTransport().IsOnline() && world.GetServerSettings().ShareGroundItems &&
+        aCount <= 32767 && !hasCustomName && event.Item.IsPlainStock() && mods.GetGameId(event.Item.BaseId) == apObject->formID &&
+        InventoryService::IsShareableGroundItem(*apObject) && pDrop->IsTemporary() && pCell &&
+        mods.GetServerModId(pCell->formID, event.GroundCell) && Utils::GetLocalOwnershipToken(apThis->formID))
+    {
+        event.GroundReference = pDrop->formID;
+        event.GroundPosition = pDrop->position;
+        event.GroundRotation = pDrop->rotation;
+        world.ctx().at<InventoryService>().TrackGroundDrop(event.GroundReference, event.GroundCell);
+    }
+    QueueActorInventoryChange(apThis, std::move(event));
+    return pResult;
 }
 
 void Actor::DropOrPickUpObject(const Inventory::Entry& arEntry, NiPoint3* apLocation, NiPoint3* apRotation) noexcept

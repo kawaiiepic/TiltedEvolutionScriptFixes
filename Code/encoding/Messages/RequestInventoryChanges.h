@@ -19,7 +19,10 @@ struct RequestInventoryChanges final : ClientMessage
 
     bool operator==(const RequestInventoryChanges& acRhs) const noexcept
     {
-        return GetOpcode() == acRhs.GetOpcode() && ServerId == acRhs.ServerId && OwnershipEpoch == acRhs.OwnershipEpoch && Item == acRhs.Item && Drop == acRhs.Drop && UpdateClients == acRhs.UpdateClients;
+        return GetOpcode() == acRhs.GetOpcode() && ServerId == acRhs.ServerId && OwnershipEpoch == acRhs.OwnershipEpoch && Item == acRhs.Item && Drop == acRhs.Drop && UpdateClients == acRhs.UpdateClients &&
+               GroundReference == acRhs.GroundReference &&
+               (!GroundReference || (GroundCell == acRhs.GroundCell && GroundPosition == acRhs.GroundPosition &&
+                                     GroundRotation == acRhs.GroundRotation));
     }
 
     uint32_t ServerId{};
@@ -27,4 +30,8 @@ struct RequestInventoryChanges final : ClientMessage
     Inventory::Entry Item{};
     bool Drop = false;
     bool UpdateClients = true;
+    uint32_t GroundReference{};
+    GameId GroundCell{};
+    glm::vec3 GroundPosition{0.f};
+    glm::vec3 GroundRotation{0.f};
 };

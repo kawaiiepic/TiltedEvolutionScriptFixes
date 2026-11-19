@@ -13,6 +13,7 @@
 #include <Events/RemoveWaypointEvent.h>
 
 #include <World.h>
+#include <Services/InventoryService.h>
 
 #include <Games/Skyrim/Forms/ActorValueInfo.h>
 #include <Games/ActorExtension.h>
@@ -169,8 +170,15 @@ void PlayerCharacter::RemoveWaypoint() noexcept
 
 char TP_MAKE_THISCALL(HookPickUpObject, PlayerCharacter, TESObjectREFR* apObject, int32_t aCount, bool aUnk1, bool aUnk2)
 {
-    auto& modSystem = World::Get().GetModSystem();
+    auto& world = World::Get();
+    if (apObject && apObject->IsTemporary() && world.GetTransport().IsOnline() &&
+        world.ctx().at<InventoryService>().ClaimGroundItem(apObject->formID, true))
+        return 0;
 
+    if (!apObject || !apObject->baseForm)
+        return TiltedPhoques::ThisCall(RealPickUpObject, apThis, apObject, aCount, aUnk1, aUnk2);
+
+    auto& modSystem = world.GetModSystem();
     Inventory::Entry item{};
     modSystem.GetServerModId(apObject->baseForm->formID, item.BaseId);
     item.Count = aCount;

@@ -20,4 +20,5 @@ struct ServerSettings
     bool ShareCombatExperience{};
     uint32_t PlayerRespawnDelay{30};
     bool ShareMapDiscoveries{};
+    bool ShareGroundItems{};
 };

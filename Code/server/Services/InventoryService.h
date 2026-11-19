@@ -1,6 +1,8 @@
 #pragma once
 
 #include <Events/PacketEvent.h>
+#include <Messages/GroundItems.h>
+#include <map>
 
 struct World;
 struct UpdateEvent;
@@ -17,6 +19,7 @@ class InventoryService
 {
 public:
     InventoryService(World& aWorld, entt::dispatcher& aDispatcher);
+    static bool SharesGroundItems() noexcept;
 
     /**
      * @brief Relays inventory changes to other clients and updates server side inventories.
@@ -32,6 +35,14 @@ public:
     void OnWeaponDrawnRequest(const PacketEvent<DrawWeaponRequest>& acMessage) noexcept;
 
 private:
+    void OnGroundItems(const PacketEvent<RequestGroundItems>& acMessage) noexcept;
+    void RegisterGroundDrop(const Player& acPlayer, const RequestInventoryChanges& acRequest,
+                            const Inventory& acInventory) noexcept;
+
+    std::map<uint64_t, NotifyGroundItem> m_groundItems;
+    uint64_t m_nextGroundId{};
+    entt::scoped_connection m_groundItemsConnection;
+
     World& m_world;
 
     entt::scoped_connection m_inventoryChangeConnection;

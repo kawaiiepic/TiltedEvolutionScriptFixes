@@ -10,6 +10,7 @@
 #include <Messages/NotifyDrawWeapon.h>
 
 #include <Events/UpdateEvent.h>
+#include <Events/DisconnectedEvent.h>
 #include <Events/InventoryChangeEvent.h>
 #include <Events/EquipmentChangeEvent.h>
 
@@ -32,6 +33,8 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher,
     , m_dispatcher(aDispatcher)
     , m_transport(aTransport)
 {
+    m_groundItemConnection = aDispatcher.sink<NotifyGroundItem>().connect<&InventoryService::OnGroundItem>(this);
+    m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&InventoryService::OnDisconnected>(this);
     m_updateConnection = m_dispatcher.sink<UpdateEvent>().connect<&InventoryService::OnUpdate>(this);
     m_inventoryConnection = m_dispatcher.sink<InventoryChangeEvent>().connect<&InventoryService::OnInventoryChangeEvent>(this);
     m_equipmentConnection = m_dispatcher.sink<EquipmentChangeEvent>().connect<&InventoryService::OnEquipmentChangeEvent>(this);
@@ -42,19 +45,274 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher,
 void InventoryService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
 {
     RunWeaponStateUpdates();
+    RunGroundItemUpdates();
+}
+
+bool InventoryService::IsShareableGroundItem(const TESForm& acForm) noexcept
+{
+    switch (acForm.formType)
+    {
+    case FormType::Scroll:
+    case FormType::Armor:
+    case FormType::Ingredient:
+    case FormType::Misc:
+    case FormType::Weapon:
+    case FormType::Ammo:
+    case FormType::Alchemy:
+        return !acForm.IsTemporary();
+    default:
+        return false;
+    }
+}
+
+void InventoryService::TrackGroundDrop(uint32_t aFormId, const GameId& acCell) noexcept
+{
+    std::lock_guard lock(m_groundMutex);
+    m_groundReferences.insert_or_assign(aFormId, GroundReference{0, acCell});
+}
+
+bool InventoryService::IsTrackedGroundItem(uint32_t aFormId) noexcept
+{
+    std::lock_guard lock(m_groundMutex);
+    return m_groundReferences.contains(aFormId);
+}
+
+bool InventoryService::ClaimGroundItem(uint32_t aFormId, bool aLocalPlayer) noexcept
+{
+    RequestGroundItems request{};
+    {
+        std::lock_guard lock(m_groundMutex);
+        const auto it = m_groundReferences.find(aFormId);
+        if (it == m_groundReferences.end())
+            return false;
+        if (!aLocalPlayer || !it->second.Id || !m_groundClaims.insert(it->second.Id).second)
+            return true;
+        request.Id = it->second.Id;
+        request.Cell = it->second.Cell;
+    }
+
+    m_world.GetRunner().Queue([this, request]()
+    {
+        if (m_groundCell != request.Cell || !m_transport.Send(request))
+        {
+            std::lock_guard lock(m_groundMutex);
+            m_groundClaims.erase(request.Id);
+        }
+    });
+    return true;
+}
+
+void InventoryService::RemoveGroundReferences(uint64_t aId, bool aAll) noexcept
+{
+    Vector<uint32_t> references;
+    {
+        std::lock_guard lock(m_groundMutex);
+        for (auto it = m_groundReferences.begin(); it != m_groundReferences.end();)
+        {
+            if (it->second.Id && (aAll || it->second.Id == aId))
+            {
+                references.push_back(it->first);
+                it = m_groundReferences.erase(it);
+            }
+            else
+                ++it;
+        }
+        if (aAll)
+            m_groundClaims.clear();
+        else
+            m_groundClaims.erase(aId);
+    }
+
+    for (const auto formId : references)
+        if (auto* pRef = Cast<TESObjectREFR>(TESForm::GetById(formId)); pRef && pRef->IsTemporary())
+        {
+            pRef->Disable();
+            pRef->Delete();
+        }
+}
+
+void InventoryService::OnDisconnected(const DisconnectedEvent&) noexcept
+{
+    RemoveGroundReferences(0, true);
+    m_groundItems.clear();
+    m_failedGroundSpawns.clear();
+    m_groundCell = {};
+    m_groundSnapshotComplete = false;
+    m_nextGroundQuery = {};
+    std::lock_guard lock(m_groundMutex);
+    m_groundReferences.clear();
+}
+
+void InventoryService::OnGroundItem(const NotifyGroundItem& acMessage) noexcept
+{
+    if (acMessage.Kind == NotifyGroundItem::SnapshotComplete)
+    {
+        if (acMessage.Cell == m_groundCell)
+            m_groundSnapshotComplete = true;
+        return;
+    }
+
+    if (acMessage.Kind == NotifyGroundItem::RejectDrop)
+    {
+        std::lock_guard lock(m_groundMutex);
+        if (const auto it = m_groundReferences.find(acMessage.LocalReference); it != m_groundReferences.end() && !it->second.Id)
+            m_groundReferences.erase(it);
+        return;
+    }
+
+    if (acMessage.Kind == NotifyGroundItem::RejectClaim)
+    {
+        std::lock_guard lock(m_groundMutex);
+        m_groundClaims.erase(acMessage.Id);
+        return;
+    }
+
+    if (acMessage.Kind == NotifyGroundItem::Remove || acMessage.Kind == NotifyGroundItem::Award)
+    {
+        m_groundItems.erase(acMessage.Id);
+        m_failedGroundSpawns.erase(acMessage.Id);
+        RemoveGroundReferences(acMessage.Id);
+        if (acMessage.Kind == NotifyGroundItem::Award)
+            if (auto* pPlayer = PlayerCharacter::Get())
+            {
+                ScopedInventoryOverride override;
+                pPlayer->AddOrRemoveItem(acMessage.Item);
+            }
+        return;
+    }
+
+    if (acMessage.Kind != NotifyGroundItem::Spawn || !acMessage.Id || acMessage.Item.Count <= 0 ||
+        acMessage.Item.Count > 32767 || !acMessage.Item.IsPlainStock())
+        return;
+
+    if (acMessage.LocalReference)
+    {
+        TESObjectREFR* pOriginal = nullptr;
+        {
+            std::lock_guard lock(m_groundMutex);
+            const auto it = m_groundReferences.find(acMessage.LocalReference);
+            if (it != m_groundReferences.end() && !it->second.Id && it->second.Cell == acMessage.Cell)
+            {
+                pOriginal = Cast<TESObjectREFR>(TESForm::GetById(it->first));
+                if (pOriginal && pOriginal->IsTemporary())
+                    it->second.Id = acMessage.Id;
+                else
+                {
+                    pOriginal = nullptr;
+                    m_groundReferences.erase(it);
+                }
+            }
+        }
+        if (pOriginal)
+        {
+            pOriginal->SetSkipSaveFlag(true);
+            if (acMessage.Cell != m_groundCell)
+                RemoveGroundReferences(acMessage.Id);
+        }
+    }
+
+    if (acMessage.Cell == m_groundCell)
+        m_groundItems.insert_or_assign(acMessage.Id, acMessage);
+}
+
+void InventoryService::RunGroundItemUpdates() noexcept
+{
+    if (!m_transport.IsOnline() || !m_world.GetServerSettings().ShareGroundItems)
+        return;
+
+    const auto* pPlayer = PlayerCharacter::Get();
+    auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    GameId cell{};
+    if (!pCell || !m_world.GetModSystem().GetServerModId(pCell->formID, cell))
+        return;
+
+    if (cell != m_groundCell)
+    {
+        RemoveGroundReferences(0, true);
+        m_groundItems.clear();
+        m_failedGroundSpawns.clear();
+        m_groundCell = cell;
+        m_groundSnapshotComplete = false;
+        m_nextGroundQuery = {};
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!m_groundSnapshotComplete && now >= m_nextGroundQuery)
+    {
+        RequestGroundItems request{};
+        request.Cell = cell;
+        m_transport.Send(request);
+        m_nextGroundQuery = now + std::chrono::seconds(1);
+    }
+    SpawnGroundReferences(*pCell);
+}
+
+void InventoryService::SpawnGroundReferences(TESObjectCELL& aCell) noexcept
+{
+    if (!aCell.IsAttached())
+        return;
+    const auto& mods = m_world.GetModSystem();
+    for (const auto& [id, drop] : m_groundItems)
+    {
+        if (m_failedGroundSpawns.contains(id))
+            continue;
+        {
+            std::lock_guard lock(m_groundMutex);
+            if (std::any_of(m_groundReferences.begin(), m_groundReferences.end(),
+                [id](const auto& entry) { return entry.second.Id == id; }))
+                continue;
+        }
+
+        auto* pBase = TESForm::GetById(mods.GetGameId(drop.Item.BaseId));
+        if (!pBase || !IsShareableGroundItem(*pBase))
+        {
+            m_failedGroundSpawns.insert(id);
+            continue;
+        }
+
+        NiPoint3 position(drop.Position);
+        NiPoint3 rotation(drop.Rotation);
+        const uint32_t handle = ModManager::Get()->SpawnGroundItem(pBase, position, rotation, &aCell);
+        auto* pRef = handle ? TESObjectREFR::GetByHandle(handle) : nullptr;
+        if (!pRef || !pRef->IsTemporary())
+        {
+            m_failedGroundSpawns.insert(id);
+            continue;
+        }
+
+        pRef->SetSkipSaveFlag(true);
+        if (drop.Item.Count > 1)
+            pRef->extraData.SetStackCount(static_cast<uint16_t>(drop.Item.Count));
+        std::lock_guard lock(m_groundMutex);
+        m_groundReferences.emplace(pRef->formID, GroundReference{id, drop.Cell});
+    }
 }
 
 void InventoryService::OnInventoryChangeEvent(const InventoryChangeEvent& acEvent) noexcept
 {
+    const auto releasePendingDrop = [&]()
+    {
+        if (acEvent.GroundReference)
+        {
+            std::lock_guard lock(m_groundMutex);
+            m_groundReferences.erase(acEvent.GroundReference);
+        }
+    };
     if (!m_transport.IsConnected())
+    {
+        releasePendingDrop();
         return;
+    }
 
     auto view = m_world.view<FormIdComponent>();
 
     const auto iter = std::find_if(std::begin(view), std::end(view), [view, formId = acEvent.FormId](auto entity) { return view.get<FormIdComponent>(entity).Id == formId; });
 
     if (iter == std::end(view))
+    {
+        releasePendingDrop();
         return;
+    }
 
     uint32_t serverId = 0;
     if (acEvent.OwnershipEpoch != 0)
@@ -67,6 +325,7 @@ void InventoryService::OnInventoryChangeEvent(const InventoryChangeEvent& acEven
         if (!ownershipMatches)
         {
             spdlog::debug("Discarded an inventory change for actor {:X} because ownership changed after it was queued (epoch {})", acEvent.ServerId, acEvent.OwnershipEpoch);
+            releasePendingDrop();
             return;
         }
 
@@ -94,7 +353,13 @@ void InventoryService::OnInventoryChangeEvent(const InventoryChangeEvent& acEven
     request.Drop = acEvent.Drop;
     request.UpdateClients = acEvent.UpdateClients;
 
-    m_transport.Send(request);
+    request.GroundReference = acEvent.GroundReference;
+    request.GroundCell = acEvent.GroundCell;
+    request.GroundPosition = acEvent.GroundPosition;
+    request.GroundRotation = acEvent.GroundRotation;
+
+    if (!m_transport.Send(request))
+        releasePendingDrop();
 
     spdlog::info("Sending item request, item: {:X}, count: {}, target object: {:X}", acEvent.Item.BaseId.BaseId, acEvent.Item.Count, acEvent.FormId);
 }

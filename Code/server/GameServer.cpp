@@ -1,6 +1,7 @@
 ﻿#include <Components.h>
 #include <GameServer.h>
 #include <Services/MapService.h>
+#include <Services/InventoryService.h>
 #include <Packet.hpp>
 
 #include <Events/CharacterRemoveEvent.h>
@@ -152,6 +153,7 @@ ServerSettings GetSettings()
     settings.AutoPartyJoin = true;
     settings.ShareCombatExperience = bEnableXpSync;
     settings.ShareMapDiscoveries = MapService::SharesDiscoveries();
+    settings.ShareGroundItems = InventoryService::SharesGroundItems();
     return settings;
 }
 

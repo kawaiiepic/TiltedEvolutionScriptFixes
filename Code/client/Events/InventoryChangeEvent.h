@@ -37,4 +37,8 @@ struct InventoryChangeEvent
     Inventory::Entry Item{};
     bool Drop = false;
     bool UpdateClients = true;
+    uint32_t GroundReference{};
+    GameId GroundCell{};
+    glm::vec3 GroundPosition{0.f};
+    glm::vec3 GroundRotation{0.f};
 };
