@@ -64,6 +64,7 @@ private:
     };
 
     void UpdateTravelInvitation(const UpdateEvent&) noexcept;
+    void PublishTravelInvitation(bool aClosed = false) const noexcept;
     void EndTravelInvitation(std::string_view aMessage) noexcept;
     bool CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept;
 

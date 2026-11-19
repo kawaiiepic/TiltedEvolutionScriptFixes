@@ -5,7 +5,7 @@ import { environment } from '../../environments/environment';
 import { Debug } from '../models/debug';
 import { PartyInfo } from '../models/party-info';
 import { Player } from '../models/player';
-import { ChatService } from './chat.service';
+import { ChatService, MessageTypes } from './chat.service';
 import { ErrorEvents, ErrorService } from './error.service';
 import { LoadingService } from './loading.service';
 
@@ -14,6 +14,16 @@ export interface CharacterCheckpoint {
 }
 export interface CharacterSlot { label: string; key: string; name?: string; race?: string; level?: number; location?: string; playtime?: string; portrait?: string; }
 const emptyCheckpoint: CharacterCheckpoint = { required: false, phase: 'disabled', name: '', revision: '0', detail: '' };
+
+export interface TravelInvitation {
+  id: number;
+  expiresAt: number;
+  count: number;
+  canCancel: boolean;
+  accepted: boolean;
+  leader: string;
+  destination: string;
+}
 
 export interface SharedDialoguePanel {
   actorId: number;
@@ -40,6 +50,7 @@ export interface SharedDialoguePanel {
 })
 export class ClientService implements OnDestroy {
   /** Initialization done. */
+  public readonly travelInvitation = new BehaviorSubject<TravelInvitation | undefined>(undefined);
   public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
   public readonly dialogueFocus = new BehaviorSubject<{ open: boolean; actorId: number }>({ open: false, actorId: 0 });
   public readonly characterPortraits = new BehaviorSubject<ReadonlyMap<number, string>>(new Map());
@@ -208,6 +219,15 @@ export class ClientService implements OnDestroy {
       'partyInviteReceived',
       this.onPartyInviteReceived.bind(this),
     );
+    skyrimtogether.on('travelInvitation', (id, remainingMs, count, canCancel, accepted, leader, destination) => {
+      this.zone.run(() => {
+        if (remainingMs > 0) {
+          this.travelInvitation.next({ id, expiresAt: performance.now() + remainingMs, count, canCancel, accepted, leader, destination });
+        } else if (this.travelInvitation.value?.id === id) {
+          this.travelInvitation.next(undefined);
+        }
+      });
+    });
     skyrimtogether.on('sharedDialogue', this.onSharedDialogue.bind(this));
     skyrimtogether.on('dialogueFocus', (open, actorId) => this.zone.run(() => this.dialogueFocus.next({ open, actorId })));
     skyrimtogether.on('characterPortrait', this.onCharacterPortrait.bind(this));
@@ -251,6 +271,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyLeft');
     skyrimtogether.off('partyInviteReceived');
     skyrimtogether.off('sharedDialogue');
+    skyrimtogether.off('travelInvitation');
     skyrimtogether.off('dialogueFocus');
     skyrimtogether.off('characterPortrait');
     skyrimtogether.off('questUpdated');
@@ -401,6 +422,13 @@ export class ClientService implements OnDestroy {
     this._remainingReconnectionAttempt = 0;
   }
 
+  public respondToTravelInvitation(id: number, action: 'join' | 'decline' | 'cancel'): void {
+    const invitation = this.travelInvitation.value;
+    if (invitation?.id === id && invitation.expiresAt > performance.now()) {
+      skyrimtogether.sendMessage(MessageTypes.GLOBAL_CHAT, `/travel ${action} ${id}`);
+    }
+  }
+
   public teleportToPlayer(playerId: number): void {
     skyrimtogether.teleportToPlayer(playerId);
   }
@@ -449,6 +477,7 @@ export class ClientService implements OnDestroy {
   private onExitGame(): void {
     this.zone.run(() => {
       this.sharedDialogueChange.next([]);
+      this.travelInvitation.next(undefined);
       this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.inGameStateChange.next(false);
@@ -488,6 +517,7 @@ export class ClientService implements OnDestroy {
       this.checkpointChange.next(emptyCheckpoint);
       this.characterSlotsChange.next([]);
       this.sharedDialogueChange.next([]);
+      this.travelInvitation.next(undefined);
       this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.lobbyStateChange.next(false);

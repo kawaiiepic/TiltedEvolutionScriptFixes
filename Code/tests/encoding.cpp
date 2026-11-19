@@ -972,3 +972,33 @@ TEST_CASE("Movement packets retain the ownership grant", "[encoding.campaign]")
     REQUIRE(message->GetOpcode() == ClientReferencesMoveRequest::Opcode);
     REQUIRE(*CastUnique<ClientReferencesMoveRequest>(std::move(message)) == movement);
 }
+
+TEST_CASE("Travel invitation snapshots preserve consent and countdown fields", "[encoding.travel]")
+{
+    NotifyTravelInvitation sent{};
+    sent.Id = 314;
+    sent.RemainingMs = 8250;
+    sent.ParticipantCount = 3;
+    sent.CanCancel = false;
+    sent.Accepted = true;
+    sent.CellId = GameId(2, 0x820);
+    sent.WorldSpaceId = GameId(1, 0x3C);
+    sent.LeaderName = "Leader";
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ServerMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == NotifyTravelInvitation::Opcode);
+    auto parsed = CastUnique<NotifyTravelInvitation>(std::move(message));
+    CHECK(parsed->Id == sent.Id);
+    CHECK(parsed->RemainingMs == sent.RemainingMs);
+    CHECK(parsed->ParticipantCount == sent.ParticipantCount);
+    CHECK(parsed->CanCancel == sent.CanCancel);
+    CHECK(parsed->Accepted == sent.Accepted);
+    CHECK(parsed->CellId == sent.CellId);
+    CHECK(parsed->WorldSpaceId == sent.WorldSpaceId);
+    CHECK(parsed->LeaderName == sent.LeaderName);
+}

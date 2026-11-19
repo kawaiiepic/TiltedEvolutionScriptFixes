@@ -1,7 +1,7 @@
 import { Overlay } from '@angular/cdk/overlay';
 import { Component, OnInit, ViewChild } from '@angular/core';
 import { TranslocoService } from '@ngneat/transloco';
-import { combineLatest, takeUntil } from 'rxjs';
+import { combineLatest, of, switchMap, takeUntil, takeWhile, timer } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.animation';
 import { View } from '../../models/view.enum';
@@ -39,6 +39,18 @@ export class RootComponent implements OnInit {
   readonly RootView = View;
 
   view$ = this.uiRepository.view$;
+
+  travelInvitation$ = this.client.travelInvitation.pipe(
+    switchMap(invitation => invitation ? timer(0, 250).pipe(
+      map(() => Math.ceil((invitation.expiresAt - performance.now()) / 1000)),
+      takeWhile(seconds => seconds > 0, true),
+      map(seconds => seconds > 0 ? { ...invitation, seconds } : undefined),
+    ) : of(undefined)),
+  );
+
+  respondToTravel(id: number, action: 'join' | 'decline' | 'cancel'): void {
+    this.client.respondToTravelInvitation(id, action);
+  }
 
   dialogueFocus$ = this.client.dialogueFocus.asObservable();
   sharedDialogues$ = this.client.sharedDialogueChange.asObservable();

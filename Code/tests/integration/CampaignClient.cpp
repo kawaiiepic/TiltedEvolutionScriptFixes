@@ -273,6 +273,26 @@ public:
             return;
         }
 
+        if (message->GetOpcode() == NotifyTravelInvitation::Opcode && Mode.starts_with("carriage-"))
+        {
+            const auto invitation = CastUnique<NotifyTravelInvitation>(std::move(message));
+            if (Mode == "carriage-catchup" && invitation->RemainingMs)
+            {
+                assert(invitation->Id == 1 && invitation->RemainingMs <= 10000);
+                assert(invitation->LeaderName == "carriage-leader" && !invitation->CanCancel);
+                assert(invitation->CellId == GameId(VanillaMod, 0xA22));
+                if (invitation->Accepted)
+                {
+                    assert(invitation->ParticipantCount == 2);
+                    SawTravelConsent = true;
+                }
+            }
+            if ((Mode == "carriage-catchup" || Mode == "carriage-ignore" ||
+                 Mode == "carriage-cancel-observer") && !invitation->RemainingMs)
+                SawTravelClose = true;
+            return;
+        }
+
         if (message->GetOpcode() == NotifyTeleport::Opcode && Mode.starts_with("carriage-"))
         {
             assert(!SawCarriageTeleport);
@@ -856,6 +876,8 @@ public:
     bool DialogueStarted{};
     unsigned DialogueStage{};
     bool SawCarriageTeleport{};
+    bool SawTravelConsent{};
+    bool SawTravelClose{};
     std::optional<std::chrono::steady_clock::time_point> TravelOfferedAt;
     std::chrono::steady_clock::time_point ReadyAt{};
     std::optional<std::chrono::steady_clock::time_point> DepartureAt;
@@ -900,6 +922,10 @@ int main(int argc, char** argv)
         assert(client.Authed && client.Received == 0 && (client.Mode == "missing" || client.SawNpc));
     else
         assert(client.Done);
+    if (client.Mode == "carriage-catchup")
+        assert(client.SawTravelConsent && client.SawTravelClose && client.SawCarriageTeleport);
+    if (client.Mode == "carriage-ignore" || client.Mode == "carriage-cancel-observer")
+        assert(client.SawTravelClose && !client.SawCarriageTeleport);
     if (client.Mode.starts_with("death-"))
         assert(client.SawRevive && client.SawPenalty);
     if (client.Mode == "death-helper" || client.Mode == "death-distant")

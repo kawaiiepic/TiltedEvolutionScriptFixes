@@ -351,3 +351,27 @@ hr {
   object-position: center;
   background: #292723;
 }
+
+.travel-invitation {
+  position: absolute;
+  top: 12vh;
+  right: 3vw;
+  max-width: 22rem;
+  padding: .6rem .8rem;
+  background: rgba(16, 17, 18, .85);
+  color: #eee9db;
+  pointer-events: none;
+  z-index: 4;
+
+  p { margin: .35rem 0 0; }
+}
+
+.travel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  margin-top: .5rem;
+  pointer-events: auto;
+}
+
+.travel-actions button:focus-visible { outline: 1px solid currentColor; }

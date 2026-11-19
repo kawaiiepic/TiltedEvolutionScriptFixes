@@ -22,6 +22,7 @@
 #include <Messages/NotifyPlayerLevel.h>
 #include <Messages/NotifyPlayerCellChanged.h>
 #include <Messages/NotifyTeleport.h>
+#include <Messages/NotifyTravelInvitation.h>
 #include <Messages/NotifyChatMessageBroadcast.h>
 #include <ChatMessageTypes.h>
 #include <Messages/RequestCarriageTravel.h>
@@ -160,6 +161,7 @@ void PlayerService::OnCarriageTravel(const PacketEvent<RequestCarriageTravel>& a
             SendTravelMessage(*pRider, message);
     SendTravelMessage(player, fmt::format("Catch-up invitation sent. Type /travel cancel {} to cancel.", invitation->Id));
     m_travelInvitation = std::move(invitation);
+    PublishTravelInvitation();
 }
 
 bool PlayerService::CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept
@@ -208,12 +210,14 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
         SendTravelMessage(acPlayer, "You cannot change that travel invitation.");
     else if (action == "decline")
     {
-        invitation.Accepted.erase(playerId);
+        if (invitation.Accepted.erase(playerId))
+            PublishTravelInvitation();
         SendTravelMessage(acPlayer, "You will stay here.");
     }
     else if (CanJoinTravel(acPlayer, invitation))
     {
-        invitation.Accepted.insert(playerId);
+        if (invitation.Accepted.insert(playerId).second)
+            PublishTravelInvitation();
         SendTravelMessage(acPlayer, fmt::format("Accepted. {} travelers have joined.", invitation.Accepted.size()));
     }
     else
@@ -260,11 +264,45 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
             else
                 SendTravelMessage(*pRider, "Travel skipped because you are no longer eligible.");
         }
+    PublishTravelInvitation(true);
     m_travelInvitation.reset();
+}
+
+void PlayerService::PublishTravelInvitation(bool aClosed) const noexcept
+{
+    const auto& invitation = *m_travelInvitation;
+    const auto& players = m_world.GetPlayerManager();
+    const auto* pLeader = players.GetById(invitation.Leader);
+    NotifyTravelInvitation notify{};
+    notify.Id = invitation.Id;
+    if (!aClosed)
+    {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            invitation.ExpiresAt - std::chrono::steady_clock::now()).count();
+        notify.RemainingMs = static_cast<uint32_t>(std::clamp<int64_t>(remaining, 1, 10000));
+        notify.ParticipantCount = static_cast<uint32_t>(invitation.Accepted.size()) + 1;
+        notify.CellId = invitation.Cell;
+        notify.WorldSpaceId = invitation.WorldSpace;
+        if (pLeader)
+            notify.LeaderName = pLeader->GetUsername();
+    }
+    for (const uint32_t id : invitation.Invited)
+        if (const auto* pPlayer = players.GetById(id))
+        {
+            notify.Accepted = !aClosed && invitation.Accepted.contains(id);
+            pPlayer->Send(notify);
+        }
+    if (pLeader)
+    {
+        notify.CanCancel = !aClosed;
+        notify.Accepted = false;
+        pLeader->Send(notify);
+    }
 }
 
 void PlayerService::EndTravelInvitation(std::string_view aMessage) noexcept
 {
+    PublishTravelInvitation(true);
     for (const uint32_t id : m_travelInvitation->Invited)
         if (const auto* pPlayer = m_world.GetPlayerManager().GetById(id))
             SendTravelMessage(*pPlayer, aMessage);
@@ -282,7 +320,8 @@ void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
         else
         {
             m_travelInvitation->Invited.erase(playerId);
-            m_travelInvitation->Accepted.erase(playerId);
+            if (m_travelInvitation->Accepted.erase(playerId))
+                PublishTravelInvitation();
         }
     }
     if (const auto character = acEvent.pPlayer->GetCharacter())

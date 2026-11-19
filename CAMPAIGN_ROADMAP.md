@@ -156,7 +156,7 @@ Two-client Skyrim validation should cover one player buying a Whiterun-to-Riften
 
 ## Experimental carriage catch-up
 
-With `bCarriageCatchUp=true` under `[Gameplay]`, a validated native carriage arrival offers eligible players ten seconds to catch up. Use `/travel join ID` or `/travel decline ID` in multiplayer chat. The arriving player can cancel with `/travel cancel ID`. The original ride and regular boarding still use Skyrim's existing carriage and fare path. The server closes the invitation if the leader leaves the destination, and at expiry checks that they are still standing near the arrival point. Clients skip catch-up during combat, loading, and incompatible menus. In-game validation is still needed for shared arrival positions and modded carriages.
+With `bCarriageCatchUp=true` under `[Gameplay]`, a validated native carriage arrival offers eligible players ten seconds to catch up. The countdown panel shows the destination when Skyrim can resolve its name. Open the multiplayer overlay to join, stay, or cancel as the arriving player. The equivalent chat commands are `/travel join ID`, `/travel decline ID`, and `/travel cancel ID`. The original ride and regular boarding still use Skyrim's existing carriage and fare path. The server closes the invitation if the leader leaves the destination, and at expiry checks that they are still standing near the arrival point. Clients skip catch-up during combat, loading, and incompatible menus. In-game validation is still needed for shared arrival positions and modded carriages.
 
 ## Player revival and respawn
 

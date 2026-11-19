@@ -21,6 +21,7 @@ struct DisconnectedEvent;
 struct ServerLobbyEvent;
 struct TransportService;
 struct NotifyChatMessageBroadcast;
+struct NotifyTravelInvitation;
 struct NotifyPlayerList;
 struct NotifyPlayerJoined;
 struct NotifyPlayerLeft;
@@ -87,6 +88,7 @@ protected:
     void OnWaitingFor3DRemoved(entt::registry& aRegistry, entt::entity aEntity) const noexcept;
     void OnPlayerComponentRemoved(entt::registry& aRegistry, entt::entity aEntity) const noexcept;
     void OnConnectionError(const ConnectionErrorEvent& acConnectedEvent) const noexcept;
+    void OnTravelInvitation(const NotifyTravelInvitation&) noexcept;
     void OnChatMessageReceived(const NotifyChatMessageBroadcast&) noexcept;
     void OnPlayerDialogue(const NotifyPlayerDialogue&) noexcept;
     void OnPlayerJoined(const NotifyPlayerJoined&) noexcept;
@@ -143,6 +145,7 @@ private:
     entt::scoped_connection m_connectionErrorConnection;
     entt::scoped_connection m_cellChangeEventConnection;
     entt::scoped_connection m_chatMessageConnection;
+    entt::scoped_connection m_travelInvitationConnection;
     entt::scoped_connection m_playerDialogueConnection;
     entt::scoped_connection m_playerJoinedConnection;
     entt::scoped_connection m_playerLeftConnection;

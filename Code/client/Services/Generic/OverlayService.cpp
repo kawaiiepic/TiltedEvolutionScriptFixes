@@ -20,6 +20,7 @@
 #include <Services/TransportService.h>
 
 #include <Messages/NotifyChatMessageBroadcast.h>
+#include <Messages/NotifyTravelInvitation.h>
 #include <Messages/NotifyPlayerList.h>
 #include <Messages/NotifyPlayerLeft.h>
 #include <Messages/NotifyPlayerJoined.h>
@@ -109,14 +110,16 @@ String GetCellName(const GameId& aWorldSpaceId, const GameId& aCellId) noexcept
         const uint32_t worldSpaceId = modSystem.GetGameId(aWorldSpaceId);
         TESWorldSpace* pWorldSpace = Cast<TESWorldSpace>(TESForm::GetById(worldSpaceId));
         if (pWorldSpace)
-            cellName = pWorldSpace->GetName();
+            if (const char* pName = pWorldSpace->GetName(); pName && *pName)
+                cellName = pName;
     }
     else
     {
         const uint32_t cellId = modSystem.GetGameId(aCellId);
         TESObjectCELL* pCell = Cast<TESObjectCELL>(TESForm::GetById(cellId));
         if (pCell)
-            cellName = pCell->GetName();
+            if (const char* pName = pCell->GetName(); pName && *pName)
+                cellName = pName;
     }
 
     return cellName;
@@ -147,6 +150,7 @@ OverlayService::OverlayService(World& aWorld, TransportService& transport, entt:
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&OverlayService::OnDisconnectedEvent>(this);
     m_lobbyConnection = aDispatcher.sink<ServerLobbyEvent>().connect<&OverlayService::OnServerLobbyEvent>(this);
     m_connectionErrorConnection = aDispatcher.sink<ConnectionErrorEvent>().connect<&OverlayService::OnConnectionError>(this);
+    m_travelInvitationConnection = aDispatcher.sink<NotifyTravelInvitation>().connect<&OverlayService::OnTravelInvitation>(this);
     m_chatMessageConnection = aDispatcher.sink<NotifyChatMessageBroadcast>().connect<&OverlayService::OnChatMessageReceived>(this);
     m_playerJoinedConnection = aDispatcher.sink<NotifyPlayerJoined>().connect<&OverlayService::OnPlayerJoined>(this);
     m_playerLeftConnection = aDispatcher.sink<NotifyPlayerLeft>().connect<&OverlayService::OnPlayerLeft>(this);
@@ -512,6 +516,29 @@ void OverlayService::OnPlayerComponentRemoved(entt::registry& aRegistry, entt::e
     pArguments->SetInt(0, playerComponent.Id);
 
     m_pOverlay->ExecuteAsync("setPlayer3dUnloaded", pArguments);
+}
+
+void OverlayService::OnTravelInvitation(const NotifyTravelInvitation& acMessage) noexcept
+{
+    if (!m_pOverlay)
+        return;
+    auto args = CefListValue::Create();
+    args->SetDouble(0, acMessage.Id);
+    args->SetInt(1, acMessage.RemainingMs);
+    args->SetInt(2, acMessage.ParticipantCount);
+    args->SetBool(3, acMessage.CanCancel);
+    args->SetBool(4, acMessage.Accepted);
+    args->SetString(5, acMessage.LeaderName.c_str());
+    if (acMessage.RemainingMs)
+    {
+        auto destination = GetCellName({}, acMessage.CellId);
+        if (destination == "UNKNOWN" && acMessage.WorldSpaceId)
+            destination = GetCellName(acMessage.WorldSpaceId, {});
+        args->SetString(6, destination.c_str());
+    }
+    else
+        args->SetString(6, "");
+    m_pOverlay->ExecuteAsync("travelInvitation", args);
 }
 
 void OverlayService::OnChatMessageReceived(const NotifyChatMessageBroadcast& acMessage) noexcept
