@@ -6,6 +6,7 @@
 #include <Events/PacketEvent.h>
 #include <Events/PlayerEnterWorldEvent.h>
 #include <map>
+#include <set>
 #include <vector>
 #include <chrono>
 
@@ -27,6 +28,7 @@ public:
     OverlayService(World& aWorld, entt::dispatcher& aDispatcher);
     uint32_t GetPublicDialogueOwner(const GameId& acReference) const noexcept;
     bool CanRelayDialogue(const Player& acPlayer, uint32_t aActorId, uint32_t aToken) const noexcept;
+    void RecordConversationSubtitle(uint32_t aActorId, const String& acText) noexcept;
     void SendConversationLine(const ServerMessage& acMessage, uint32_t aActorId, const Player& acSpeaker) const noexcept;
 
 protected:
@@ -47,6 +49,9 @@ private:
         bool Private{};
         std::map<uint32_t, uint32_t> Participants; // Native menu participants only.
         uint32_t Revision{};
+        std::set<uint32_t> Listeners;
+        String Subtitle;
+        std::chrono::steady_clock::time_point SubtitleExpires{};
         std::vector<String> Options;
         std::map<uint32_t, uint32_t> Votes; // Player id -> current option index.
     };
@@ -55,6 +60,7 @@ private:
     void RefreshDialoguePanels() noexcept;
     void InvalidateOptions(DialogueSession& aSession) noexcept;
     bool IsDialogueActorInRange(uint32_t aActorId, const Player& acPlayer) const noexcept;
+    bool CanListen(uint32_t aActorId, const DialogueSession& acSession, const Player& acPlayer) const noexcept;
     void LeaveDialogue(uint32_t aPlayerId) noexcept;
     void SetDialoguePrivacy(uint32_t aActorId, DialogueSession& aSession, bool aPrivate) noexcept;
     void SendDialogueState(uint32_t aActorId, const DialogueSession& acSession) const noexcept;

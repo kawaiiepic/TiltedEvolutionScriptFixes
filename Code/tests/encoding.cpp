@@ -664,7 +664,10 @@ TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
     {
         NotifyPlayerDialogue panel{};
         panel.Kind = NotifyPlayerDialogue::Panel;
-        panel.CanPass = true;
+        panel.CanVote = true;
+        panel.Remote = true;
+        panel.Listening = true;
+        panel.Text = "The road is closed.";
         panel.Private = false;
         panel.ActorId = 0xDEADBEEF;
         panel.Revision = 7;

@@ -641,7 +641,7 @@ void CharacterService::OnDialogueRequest(const PacketEvent<DialogueRequest>& acM
 void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept
 {
     auto& message = acMessage.Packet;
-    const auto& overlay = m_world.ctx().at<OverlayService>();
+    auto& overlay = m_world.ctx().at<OverlayService>();
 
     if (!overlay.CanRelayDialogue(*acMessage.pPlayer, message.ServerId, message.DialogueToken))
         return;
@@ -655,6 +655,7 @@ void CharacterService::OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acM
     if (message.DialogueToken)
     {
         overlay.SendConversationLine(notify, message.ServerId, *acMessage.pPlayer);
+        overlay.RecordConversationSubtitle(message.ServerId, message.Text);
         return;
     }
 

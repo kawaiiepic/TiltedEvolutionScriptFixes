@@ -39,7 +39,6 @@
           <span class="native-suggestion-voters" *ngIf="portraits$ | async as portraits">
             <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
               <img *ngIf="portraits.get(voter) as portrait; else voterInitial" [src]="portrait" class="character-avatar" [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
-            <ng-template #dialogueInitial><span class="character-avatar" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
               <ng-template #voterInitial><span class="character-avatar voter-initial" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
             </ng-container>
             <span class="native-suggestion-count">{{ panel.votes[i] }}</span>
@@ -51,7 +50,10 @@
   <div class="shared-dialogues interactive" *ngIf="active$ | async">
     <section class="shared-dialogue" *ngFor="let panel of sharedDialogues$ | async; trackBy: trackDialogue">
       <header>{{ panel.npc }} <small>{{ panel.canChoose ? 'You control dialogue' : panel.owner + ' controls dialogue' }}</small></header>
-      <p *ngIf="!panel.options.length">Waiting for dialogue options...</p>
+      <button *ngIf="panel.remote && !panel.listening" type="button" (click)="setDialogueListening(panel, true)">Listen</button>
+      <button *ngIf="panel.listening" type="button" (click)="setDialogueListening(panel, false)">Stop listening</button>
+      <p *ngIf="panel.subtitle" class="remote-dialogue-subtitle" aria-live="polite">{{ panel.subtitle }}</p>
+      <p *ngIf="!panel.options.length && (!panel.remote || panel.listening)">Waiting for dialogue options...</p>
       <button type="button" *ngFor="let option of panel.options; let i = index"
         [class.selected]="panel.selected === i"
         [disabled]="!panel.canVote || !(active$ | async) || !option"

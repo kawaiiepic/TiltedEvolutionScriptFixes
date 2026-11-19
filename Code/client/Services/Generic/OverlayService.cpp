@@ -664,6 +664,16 @@ void OverlayService::PublishDialogueOptions() noexcept
 
 void OverlayService::ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept
 {
+    if (aAction == 3 || aAction == 4)
+    {
+        PlayerDialogueRequest request{};
+        request.Action = aAction == 3 ? PlayerDialogueRequest::Listen : PlayerDialogueRequest::StopListening;
+        request.ActorId = aActorId;
+        request.Revision = aRevision;
+        m_transport.Send(request);
+        return;
+    }
+
     RefreshDialogueSession();
     if (!m_dialogueGranted || !m_dialogueCanChoose || aActorId != m_dialogueActorId ||
         !aRevision || aRevision != m_dialoguePanelRevision)
@@ -790,6 +800,9 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         }
         pArguments->SetList(12, voterIds);
         pArguments->SetList(13, voterOptions);
+        pArguments->SetBool(14, acMessage.Remote);
+        pArguments->SetBool(15, acMessage.Listening);
+        pArguments->SetString(16, acMessage.Text.c_str());
         m_pOverlay->ExecuteAsync("sharedDialogue", pArguments);
         return;
     }

@@ -26,7 +26,7 @@
 
 namespace
 {
-Console::Setting bRemoteDialogueSpectating{"Gameplay:bRemoteDialogueSpectating", "Show public conversations as read-only panels to players in the same worldspace or interior", false};
+Console::Setting bRemoteDialogueSpectating{"Gameplay:bRemoteDialogueSpectating", "Allow remote listening to public conversations in the same worldspace or interior", false};
 
 void SendDialogueDenied(const Player& acPlayer, uint32_t aActorId, uint32_t aToken)
 {
@@ -158,9 +158,32 @@ void OverlayService::SendConversationLine(const ServerMessage& acMessage, uint32
     }
 }
 
+bool OverlayService::CanListen(uint32_t aActorId, const DialogueSession& acSession, const Player& acPlayer) const noexcept
+{
+    if (!bRemoteDialogueSpectating || acSession.Private || !acPlayer.GetCharacter() || acPlayer.GetId() == acSession.Owner)
+        return false;
+    const auto* pOwner = m_world.GetPlayerManager().GetById(acSession.Owner);
+    if (!pOwner || !IsDialogueActorInRange(aActorId, *pOwner))
+        return false;
+    const auto& speaker = pOwner->GetCellComponent();
+    const auto& listener = acPlayer.GetCellComponent();
+    return DialogueLocation::IsCompatible(speaker.Cell, speaker.WorldSpaceId, listener.Cell, listener.WorldSpaceId);
+}
+
+void OverlayService::RecordConversationSubtitle(uint32_t aActorId, const String& acText) noexcept
+{
+    const auto session = m_dialogueSessions.find(aActorId);
+    if (session == m_dialogueSessions.end() || !bRemoteDialogueSpectating || session->second.Private)
+        return;
+    auto& state = session->second;
+    state.Subtitle = acText.size() <= 2048 ? acText : String{};
+    state.SubtitleExpires = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+}
+
 void OverlayService::InvalidateOptions(DialogueSession& aSession) noexcept
 {
     aSession.Options.clear();
+    aSession.Subtitle.clear();
     aSession.Votes.clear();
     if (++m_nextDialogueRevision == 0)
         ++m_nextDialogueRevision;
@@ -197,12 +220,26 @@ void OverlayService::OnDialogueUpdate(const UpdateEvent&) noexcept
 
 void OverlayService::RefreshDialoguePanels() noexcept
 {
+    const auto now = std::chrono::steady_clock::now();
     for (auto& [actorId, session] : m_dialogueSessions)
     {
+        if (now >= session.SubtitleExpires)
+            session.Subtitle.clear();
+        for (auto it = session.Listeners.begin(); it != session.Listeners.end();)
+        {
+            const auto* pListener = m_world.GetPlayerManager().GetById(*it);
+            if (!pListener || !CanListen(actorId, session, *pListener))
+            {
+                session.Votes.erase(*it);
+                it = session.Listeners.erase(it);
+            }
+            else
+                ++it;
+        }
         for (auto it = session.Votes.begin(); it != session.Votes.end();)
         {
             const auto* pVoter = m_world.GetPlayerManager().GetById(it->first);
-            if (!pVoter || !IsDialogueActorInRange(actorId, *pVoter))
+            if (!pVoter || (!session.Listeners.contains(it->first) && !IsDialogueActorInRange(actorId, *pVoter)))
                 it = session.Votes.erase(it);
             else
                 ++it;
@@ -222,21 +259,17 @@ void OverlayService::RefreshDialoguePanels() noexcept
             const auto* pOwner = m_world.GetPlayerManager().GetById(session.Owner);
             if (!pOwner || !IsDialogueActorInRange(actorId, *pOwner))
                 continue;
-            if (!cNearby)
-            {
-                const auto& speaker = pOwner->GetCellComponent();
-                const auto& listener = pPlayer->GetCellComponent();
-                if (!bRemoteDialogueSpectating || !pPlayer->GetCharacter() ||
-                    !DialogueLocation::IsCompatible(speaker.Cell, speaker.WorldSpaceId,
-                                                   listener.Cell, listener.WorldSpaceId))
-                    continue;
-            }
+            const bool cListening = session.Listeners.contains(pPlayer->GetId());
+            if (!cNearby && !CanListen(actorId, session, *pPlayer))
+                continue;
             NotifyPlayerDialogue panel{};
             panel.Kind = NotifyPlayerDialogue::Panel;
             panel.ActorId = actorId;
             panel.Revision = session.Revision;
             panel.CanChoose = cOwner;
-            panel.CanVote = cNearby && !cOwner;
+            panel.CanVote = (cNearby || cListening) && !cOwner;
+            panel.Remote = !cNearby || cListening;
+            panel.Listening = cListening;
             panel.CanPass = cOwner && std::any_of(session.Participants.begin(), session.Participants.end(),
                 [&](const auto& participant)
                 {
@@ -245,16 +278,17 @@ void OverlayService::RefreshDialoguePanels() noexcept
                 });
             panel.Private = session.Private;
             panel.Name = pOwner->GetUsername();
-            panel.Options = session.Options;
+            if (cNearby || cListening)
+                panel.Options = session.Options;
+            if (cListening && !cNearby)
+                panel.Text = session.Subtitle;
             panel.Votes.resize(panel.Options.size(), 0);
             for (const auto& [voter, index] : session.Votes)
             {
                 if (index < panel.Votes.size())
                 {
                     ++panel.Votes[index];
-                    // Distant spectating remains aggregate-only; private conversations
-                    // do not expose the identities of previous voters.
-                    if (cNearby && !session.Private && panel.VoterChoices.size() < NotifyPlayerDialogue::MaxVoterChoices)
+                    if (!session.Private && panel.VoterChoices.size() < NotifyPlayerDialogue::MaxVoterChoices)
                         panel.VoterChoices.emplace_back(voter, index);
                 }
                 if (voter == pPlayer->GetId())
@@ -358,8 +392,10 @@ void OverlayService::SetDialoguePrivacy(uint32_t aActorId, DialogueSession& aSes
 
     aSession.Private = aPrivate;
     aSession.Votes.clear();
+    aSession.Subtitle.clear();
     if (aPrivate)
     {
+        aSession.Listeners.clear();
         for (auto it = aSession.Participants.begin(); it != aSession.Participants.end();)
         {
             if (it->first == aSession.Owner)
@@ -385,7 +421,10 @@ void OverlayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
     LeaveDialogue(acEvent.pPlayer->GetId());
     m_visiblePanels.erase(acEvent.pPlayer->GetId());
     for (auto& [actorId, session] : m_dialogueSessions)
+    {
         session.Votes.erase(acEvent.pPlayer->GetId());
+        session.Listeners.erase(acEvent.pPlayer->GetId());
+    }
 }
 
 void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& acMessage) noexcept
@@ -394,15 +433,47 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
     Player* pPlayer = acMessage.pPlayer;
     const uint32_t cPlayerId = pPlayer->GetId();
 
-    if (request.Action > PlayerDialogueRequest::SetPrivacy || request.Text.size() > 1024 || request.Options.size() > 64)
+    if (request.Action > PlayerDialogueRequest::StopListening || request.Text.size() > 1024 || request.Options.size() > 64)
         return;
+
+    if (request.Action == PlayerDialogueRequest::Listen || request.Action == PlayerDialogueRequest::StopListening)
+    {
+        const auto session = m_dialogueSessions.find(request.ActorId);
+        if (session == m_dialogueSessions.end())
+            return;
+        auto& state = session->second;
+        if (request.Action == PlayerDialogueRequest::StopListening)
+        {
+            if (!state.Listeners.erase(cPlayerId))
+                return;
+            state.Votes.erase(cPlayerId);
+        }
+        else
+        {
+            if (request.Revision != state.Revision || !CanListen(request.ActorId, state, *pPlayer) ||
+                IsDialogueActorInRange(request.ActorId, *pPlayer))
+                return;
+            for (auto& [actorId, other] : m_dialogueSessions)
+                if (actorId != request.ActorId && other.Listeners.erase(cPlayerId))
+                    other.Votes.erase(cPlayerId);
+            state.Listeners.insert(cPlayerId);
+        }
+        RefreshDialoguePanels();
+        return;
+    }
 
     if (request.Action == PlayerDialogueRequest::Vote)
     {
         const auto session = m_dialogueSessions.find(request.ActorId);
-        if (session == m_dialogueSessions.end() || !IsDialogueActorInRange(request.ActorId, *pPlayer))
+        if (session == m_dialogueSessions.end())
             return;
         auto& state = session->second;
+        const auto* pOwner = m_world.GetPlayerManager().GetById(state.Owner);
+        if (!pOwner || !IsDialogueActorInRange(request.ActorId, *pOwner))
+            return;
+        if (!IsDialogueActorInRange(request.ActorId, *pPlayer) &&
+            (!state.Listeners.contains(cPlayerId) || !CanListen(request.ActorId, state, *pPlayer)))
+            return;
         if (state.Private || state.Owner == cPlayerId || request.Revision != state.Revision || request.Index >= state.Options.size() ||
             state.Options[request.Index].empty())
             return;

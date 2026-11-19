@@ -97,7 +97,7 @@ declare namespace SkyrimTogetherTypes {
 
   type QuestUpdatedCallback = () => void;
   type CharacterPortraitCallback = (playerId: number, width: number, height: number, rgba: string) => void;
-  type SharedDialogueCallback = (actorId: number, visible: boolean, owner: string, canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number, canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[], voterOptions: number[]) => void;
+  type SharedDialogueCallback = (actorId: number, visible: boolean, owner: string, canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number, canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[], voterOptions: number[], remote: boolean, listening: boolean, subtitle: string) => void;
 }
 
 /** Global Skyrim: Together object. */

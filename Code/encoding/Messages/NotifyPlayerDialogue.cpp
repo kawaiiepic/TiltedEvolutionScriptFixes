@@ -10,6 +10,8 @@ void NotifyPlayerDialogue::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) 
     aWriter.WriteBits(CanVote, 1);
     aWriter.WriteBits(CanPass, 1);
     aWriter.WriteBits(Private, 1);
+    aWriter.WriteBits(Remote, 1);
+    aWriter.WriteBits(Listening, 1);
     aWriter.WriteBits(Revision, 32);
     aWriter.WriteBits(Selected, 32);
     const uint32_t cCount = static_cast<uint32_t>(std::min<size_t>(Options.size(), 64));
@@ -49,6 +51,10 @@ void NotifyPlayerDialogue::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader
     CanPass = value != 0;
     aReader.ReadBits(value, 1);
     Private = value != 0;
+    aReader.ReadBits(value, 1);
+    Remote = value != 0;
+    aReader.ReadBits(value, 1);
+    Listening = value != 0;
     aReader.ReadBits(value, 32);
     Revision = static_cast<uint32_t>(value);
     aReader.ReadBits(value, 32);

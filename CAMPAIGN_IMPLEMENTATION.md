@@ -4,9 +4,9 @@ Baseline is master at `92a8552`. Source, automated builds, and gameplay verifica
 
 | Status | Requirement and evidence |
 | --- | --- |
-| IN PROGRESS | Circular 1px portraits and matching fallbacks across player HUD, player list, character picker and saved previews, and dialogue participants and suggestions. Future travel portraits should reuse the same style. |
+| IMPLEMENTED | Circular 1px portraits and matching fallbacks across player HUD, player list, character picker and saved previews, and dialogue participants and suggestions. Shared class in `Code/skyrim_ui/src/styles.scss` at `20347ff`. Future travel portraits should reuse the same style. |
 | BLOCKED | Near-identical custom clone of Skyrim's option list. Existing native list stays active. A distinct replacement would still need verified option identity, list-only visibility, layout/scroll tracking, safe keyboard/mouse/controller forwarding, and restoration for disconnect, stale CEF, and conflicting SWFs. Preserve native camera, effects, subtitles, voice, scripts, and lifecycle. |
-| IN PROGRESS | Same-worldspace public discovery and explicit remote listen/leave, option snapshots, suggestion lifecycle, and subtitle fallback via server dialogue sessions, existing protocol and CEF. |
+| IMPLEMENTED | Same-worldspace public discovery and explicit remote listen/leave, option snapshots, suggestion lifecycle, and subtitle fallback via server dialogue sessions, existing protocol and CEF. Server `OverlayService.cpp` validates grants and revokes them on region changes, privacy and departure. Remote registration grants suggestions only. Angular exposes Listen and Stop listening in the overlay. |
 | PENDING | Remote voice for unloaded speakers needs non-spatial playback, interruption, missing/modded asset handling, and duplicate suppression. Nearby shared native presentation and remote camera need verified lifecycle without opening duplicate native conversations or forcing cell loads. |
 | IMPLEMENTED | Existing native owner grant, advisory nearby suggestions, voluntary handoff and disconnect transfer, privacy and compatible location filtering. Runtime regression validation remains due. |
 | PENDING | Character settings for auto-join, remote notices and auto-listen, portraits and cinematic presentation. Avoid interrupting gameplay and provide a native-compatible notification path. |
@@ -30,4 +30,4 @@ Baseline is master at `92a8552`. Source, automated builds, and gameplay verifica
 | PENDING | Cross-runtime gameplay, performance and mod compatibility. Preserve global partyless campaign and individual characters, persistent NPCs/containers/locks, trading, proximity voice, revival, nameplates, waypoints, animation, HUD and Phantasm. |
 | IN PROGRESS | Incremental master pushes, Windows and Linux CI, Angular production builds and preview release workflow. Baseline preview run 44469160804. |
 
-Resume next from explicit remote subscription and subtitle presentation after the avatar build.
+Resume next from remote voice playback research and a transport-level conversation test for privacy, stale revisions and worldspace transitions.

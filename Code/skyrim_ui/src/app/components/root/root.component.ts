@@ -70,6 +70,10 @@ export class RootComponent implements OnInit {
     if (panel.canVote) this.client.voteDialogue(panel.actorId, panel.revision, index);
   }
 
+  setDialogueListening(panel: SharedDialoguePanel, listening: boolean): void {
+    this.client.manageDialogue(panel, listening ? 3 : 4);
+  }
+
   passDialogue(panel: SharedDialoguePanel): void {
     if (panel.canPass) this.client.manageDialogue(panel, 0);
   }

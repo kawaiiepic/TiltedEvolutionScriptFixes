@@ -27,7 +27,9 @@ struct PlayerDialogueRequest final : ClientMessage
         Choose,
         PublishOptions,
         Vote,
-        SetPrivacy
+        SetPrivacy,
+        Listen,
+        StopListening
     };
 
     uint8_t Action{Join};

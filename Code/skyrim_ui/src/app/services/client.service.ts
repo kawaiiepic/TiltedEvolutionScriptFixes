@@ -29,6 +29,9 @@ export interface SharedDialoguePanel {
   voterIds: number[];
   voterOptions: number[];
   selected: number;
+  remote: boolean;
+  listening: boolean;
+  subtitle: string;
 }
 
 /** Client game service. */
@@ -880,11 +883,11 @@ export class ClientService implements OnDestroy {
 
   private onSharedDialogue(actorId: number, visible: boolean, owner: string,
     canChoose: boolean, revision: number, npc: string, options: string[], votes: number[], selected: number,
-    canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[] = [], voterOptions: number[] = []): void {
+    canVote: boolean, canPass: boolean, isPrivate: boolean, voterIds: number[] = [], voterOptions: number[] = [], remote = false, listening = false, subtitle = ''): void {
     this.zone.run(() => {
       const panels = this.sharedDialogueChange.getValue().filter(panel => panel.actorId !== actorId);
       if (visible) {
-        panels.push({ actorId, owner, canChoose, canVote, canPass, isPrivate, revision, npc, options, votes, voterIds, voterOptions, selected });
+        panels.push({ actorId, owner, canChoose, canVote, canPass, isPrivate, revision, npc, options, votes, voterIds, voterOptions, selected, remote, listening, subtitle });
       }
       panels.sort((a, b) => Number(b.canChoose) - Number(a.canChoose) || a.actorId - b.actorId);
       this.sharedDialogueChange.next(panels);
