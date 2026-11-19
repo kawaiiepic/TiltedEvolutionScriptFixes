@@ -26,6 +26,7 @@ struct Messaging
     };
     uint32_t interfaceVersion;
     bool (*RegisterListener)(uint32_t, const char*, void (*)(Message*));
+    bool (*Dispatch)(uint32_t, uint32_t, void*, uint32_t, const char*);
 };
 struct PluginVersion
 {
@@ -41,6 +42,8 @@ using namespace STCheckpointBridge;
 
 std::mutex s_mutex;
 bool s_registered{};
+const Messaging* s_messaging{};
+uint32_t s_pluginHandle{};
 uint64_t s_loadGeneration{}, s_newGameGeneration{};
 struct PendingOperation
 {
@@ -188,8 +191,26 @@ __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSKSE)
     if (handle == UINT32_MAX || !messaging->RegisterListener(handle, "SKSE", &OnMessage)) return false;
     std::lock_guard lock(s_mutex);
     s_registered = true;
+    s_messaging = messaging;
+    s_pluginHandle = handle;
     return true;
 }
+// RaceMenu's public SKEE interface exchange. Called from the game window thread.
+__declspec(dllexport) void* STQueryRaceMenuInterfaces() noexcept
+{
+    const Messaging* messaging;
+    uint32_t handle;
+    {
+        std::lock_guard lock(s_mutex);
+        messaging = s_messaging;
+        handle = s_pluginHandle;
+    }
+    struct Exchange { void* InterfaceMap{}; } exchange;
+    if (messaging && messaging->Dispatch)
+        messaging->Dispatch(handle, 0x9E3779B9, &exchange, sizeof(exchange), "skee");
+    return exchange.InterfaceMap;
+}
+
 __declspec(dllexport) const STCheckpointBridge::Api* STCheckpointGetApi(uint32_t aVersion) noexcept
 {
     std::lock_guard lock(s_mutex);

@@ -47,6 +47,7 @@ struct World : entt::registry
     void SetServerSettings(ServerSettings aServerSettings) noexcept { m_serverSettings = aServerSettings; }
 
     [[nodiscard]] uint64_t GetTick() const noexcept;
+    [[nodiscard]] bool IsGameThread() const noexcept;
 
     static void Create() noexcept;
     [[nodiscard]] static World& Get() noexcept;
