@@ -1,0 +1,79 @@
+name: Number Existing Campaign Previews
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/release-order.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: campaign-preview-publication
+  cancel-in-progress: false
+
+jobs:
+  number-previews:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Number historical releases without changing tags or assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          releases=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" | jq -s 'add')
+          while read -r number sha; do
+            tag="campaign-preview-$sha"
+            id=$(jq -r --arg tag "$tag" '.[] | select(.tag_name == $tag and .draft == false) | .id' <<< "$releases")
+            if [[ -z "$id" ]]; then
+              echo "Missing historical release: $tag"
+              continue
+            fi
+            title="Skyrim Together Campaign Preview #$number ($sha)"
+            gh api --method PATCH "repos/$GH_REPO/releases/$id" -f name="$title" --silent
+            echo "Numbered $tag as #$number"
+          done <<'HISTORY'
+          1 5dd7cab
+          2 e4c83a5
+          3 f9d38e6
+          4 c4ed335
+          5 6c6800c
+          6 8a4c148
+          8 daaf3c0
+          9 fbea182
+          11 88e7f6e
+          12 e3c2c75
+          13 a9e79ac
+          14 9968542
+          15 b6f9af0
+          16 c746c0c
+          17 abb9914
+          18 4780d78
+          19 41af5fc
+          20 e3b6fb8
+          21 f1e5914
+          22 a76a69d
+          23 ea07d65
+          24 f48a537
+          25 5d1efa5
+          26 775b40d
+          29 a4e9cb5
+          31 779b816
+          HISTORY
+          # Publish a chronological index in the most recent historical release notes.
+          id=$(jq -r '.[] | select(.tag_name == "campaign-preview-779b816") | .id' <<< "$releases")
+          if [[ -n "$id" ]]; then
+            note=$(gh api "repos/$GH_REPO/releases/$id" --jq '.body // ""')
+            if [[ "$note" != *"<!-- numbered-preview-index -->"* ]]; then
+              {
+                printf '%s\n\n' "$note"
+                printf '<!-- numbered-preview-index -->\n### Historical preview builds (newest first)\n\n'
+                gh api --paginate "repos/$GH_REPO/releases?per_page=100" | jq -sr --arg repo "$GH_REPO" '[.[][] | select(.draft == false and (.name | startswith("Skyrim Together Campaign Preview #"))) | {number: (.name | capture("#(?<n>[0-9]+)").n | tonumber), tag: .tag_name}] | sort_by(.number) | reverse | .[] | "- [Preview #\(.number)](https://github.com/\($repo)/releases/tag/\(.tag))"'
+              } > release-notes.md
+              gh release edit campaign-preview-779b816 --notes-file release-notes.md
+            fi
+          fi

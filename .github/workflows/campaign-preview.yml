@@ -47,6 +47,9 @@ jobs:
   publish:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-24.04
+    concurrency:
+      group: campaign-preview-publication
+      cancel-in-progress: false
     permissions:
       contents: write
     env:
@@ -65,7 +68,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           mkdir -p publish
-          version="campaign-preview-${GITHUB_SHA:0:7}"
+          printf -v build_number "%06d" "$GITHUB_RUN_NUMBER"
+          version="campaign-preview-${build_number}-${GITHUB_SHA:0:7}"
           echo "PREVIEW_TAG=$version" >> "$GITHUB_ENV"
 
           for suffix in "" "-sse1.6.1170"; do
@@ -104,12 +108,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          newest=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" | jq -s '[.[][] | select(.draft == false) | .tag_name | capture("^campaign-preview-(?<number>[0-9]{6})-[0-9a-f]{7}$")? | .number | tonumber] | max // 0')
+          if (( newest > GITHUB_RUN_NUMBER )); then
+            echo "A newer numbered preview has already been published; skipping this older build."
+            exit 0
+          fi
           if gh release view "$PREVIEW_TAG" >/dev/null 2>&1; then
             echo "Release already exists; refusing to overwrite binaries."
             exit 1
           fi
           gh release create "$PREVIEW_TAG" publish/* \
             --target "$GITHUB_SHA" \
-            --title "Skyrim Together Server-Owned Characters Preview (${GITHUB_SHA:0:7})" \
+            --title "Skyrim Together Campaign Preview #${GITHUB_RUN_NUMBER} (${GITHUB_SHA:0:7})" \
             --prerelease \
             --notes "Experimental server-owned characters build from commit $GITHUB_SHA. Includes optional Phantasm character portraits captured with committed saves and metadata from the native save header. Includes a configurable 10 MiB/s network ceiling, 32-chunk lobby pipeline, queue-aware gameplay pacing, pipelined compressed checkpoint uploads, incremental downloads, and server-owned character rosters. Includes a source-backed native Play-menu adapter and the bundled Interface/startmenu.swf, F2/Right Ctrl fallback, character slots, native New Game invocation from the character picker with the patched menu, automatic initial save after RaceMenu closes, and server-owned checkpoints. No separate menu patch is needed. If another main-menu mod overrides the bundled SWF, prefer the bundled file or restore your original menu and use the F2 fallback. Windows archives include the client, bundled SKSE checkpoint bridge and Windows dedicated server. Linux server ZIP and tar.gz archives are provided for amd64 and arm64. Install matching builds on all clients and servers; select your Skyrim runtime (1.7.104 or 1.6.1170). SKSE is required for native automation. Existing server INIs explicitly setting bRequireServerSaves=false must be changed to true. Native engine calls are source-backed but not binary-verified or tested in game. Use a fresh test campaign and back up existing saves and journals. Native menu adapter needs in-game validation; save-on-disconnect remains pending."
