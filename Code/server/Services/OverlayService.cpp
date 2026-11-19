@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include <Services/OverlayService.h>
+#include <PluginMessagingProtocol.h>
 #include <Services/PlayerService.h>
 #include <Services/DialogueLocation.h>
 #include <Setting.h>
@@ -85,6 +86,14 @@ void sendPlayerMessage(const ChatMessageType acType, const String acContent, Pla
 void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) noexcept
 {
     const auto& text = acMessage.Packet.ChatMessage;
+    const std::string_view command{text.data(), text.size()};
+    const bool pluginEnvelope = PluginMessagingProtocol::IsEnvelope(command);
+    if (pluginEnvelope && PluginMessagingRelay::IsEnabled())
+    {
+        if (acMessage.Packet.MessageType == kGlobalChat)
+            m_pluginMessaging.Relay(m_world, *acMessage.pPlayer, command);
+        return;
+    }
     if (acMessage.Packet.MessageType == kCustodyStatus)
     {
         const auto& player = *acMessage.pPlayer;
@@ -105,7 +114,6 @@ void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>
         }
         return;
     }
-    const std::string_view command{text.data(), text.size()};
     if (m_world.GetPlayerService().HandleTravelCommand(*acMessage.pPlayer, command) ||
         m_world.GetCalendarService().HandleRestCommand(*acMessage.pPlayer, command))
         return;
@@ -113,7 +121,8 @@ void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>
     if (!character)
         return;
     auto [canceled, reason] = m_world.GetScriptService().HandleChatMessage(*character, text);
-    if (canceled)
+    // Keep existing Lua relays usable when the native relay is disabled.
+    if (canceled || pluginEnvelope)
         return;
 
     sendPlayerMessage(acMessage.Packet.MessageType, acMessage.Packet.ChatMessage, acMessage.pPlayer);
@@ -454,6 +463,7 @@ void OverlayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
     LeaveDialogue(acEvent.pPlayer->GetId());
     m_visiblePanels.erase(acEvent.pPlayer->GetId());
     m_playersInCustody.erase(acEvent.pPlayer->GetId());
+    m_pluginMessaging.Forget(acEvent.pPlayer->GetId());
     for (auto& [actorId, session] : m_dialogueSessions)
     {
         session.Votes.erase(acEvent.pPlayer->GetId());

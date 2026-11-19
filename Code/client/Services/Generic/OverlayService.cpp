@@ -27,6 +27,7 @@
 #include <Services/TransportService.h>
 
 #include <Messages/NotifyChatMessageBroadcast.h>
+#include <PluginMessagingProtocol.h>
 #include <Messages/NotifyTravelInvitation.h>
 #include <Messages/NotifyPlayerList.h>
 #include <Messages/NotifyPlayerLeft.h>
@@ -556,7 +557,7 @@ void OverlayService::OnTravelInvitation(const NotifyTravelInvitation& acMessage)
 
 void OverlayService::OnChatMessageReceived(const NotifyChatMessageBroadcast& acMessage) noexcept
 {
-    if (!m_pOverlay)
+    if (!m_pOverlay || PluginMessagingProtocol::IsEnvelope({acMessage.ChatMessage.data(), acMessage.ChatMessage.size()}))
         return;
 
     auto pArguments = CefListValue::Create();

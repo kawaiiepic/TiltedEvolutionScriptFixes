@@ -219,7 +219,8 @@ void OverlayClient::ProcessChatMessage(CefRefPtr<CefListValue> aEventArgs)
         messageRequest.MessageType = static_cast<ChatMessageType>(aEventArgs->GetInt(0));
         messageRequest.ChatMessage = contents;
 
-        spdlog::info(L"Send chat message of type {}: '{}' ", messageRequest.MessageType, aEventArgs->GetString(1).ToWString());
+        // The STR Plugin Messaging bridge uses this narrow string to locate the chat send call.
+        spdlog::info("Send chat message of type {}: '{}' ", messageRequest.MessageType, contents);
 
         m_transport.Send(messageRequest);
     }

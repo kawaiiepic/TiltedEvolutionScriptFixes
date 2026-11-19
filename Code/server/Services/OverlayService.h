@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Messages/SendChatMessageRequest.h>
+#include <Services/PluginMessagingRelay.h>
 #include <Messages/NotifyPlayerDialogue.h>
 
 #include <Events/PacketEvent.h>
@@ -66,6 +67,7 @@ private:
     void SendDialogueState(uint32_t aActorId, const DialogueSession& acSession) const noexcept;
 
     World& m_world;
+    PluginMessagingRelay m_pluginMessaging;
     std::set<uint32_t> m_playersInCustody;
     std::map<uint32_t, DialogueSession> m_dialogueSessions;
     std::map<uint32_t, uint32_t> m_playerDialogues; // Player id -> actor id.
