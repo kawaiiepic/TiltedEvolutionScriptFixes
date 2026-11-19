@@ -20,4 +20,5 @@ struct NotifyTravelInvitation final : ServerMessage
     GameId CellId{};
     GameId WorldSpaceId{};
     TiltedPhoques::String LeaderName;
+    TiltedPhoques::String NativeRoute;
 };

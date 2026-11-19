@@ -62,6 +62,7 @@ private:
         GameId WorldSpace{};
         glm::vec3 Position{};
         std::chrono::steady_clock::time_point ExpiresAt{};
+        TiltedPhoques::String NativeRoute;
         std::set<uint32_t> Invited;
         std::set<uint32_t> Accepted;
     };
@@ -69,6 +70,7 @@ private:
     void OnFastTravelCatchUp(const PacketEvent<RequestFastTravelCatchUp>& acMessage) noexcept;
     void OfferCatchUp(const Player& acLeader, const glm::vec3& acPosition, const std::set<uint32_t>& acAlreadyTraveling,
                       bool aFastTravel) noexcept;
+    void OfferNativeTravel(const Player& acLeader, std::string_view aRoute) noexcept;
     uint32_t NextTravelInvitationId() noexcept;
     void RetryTravel(const Player& acPlayer, uint32_t aPreviousId) noexcept;
     void OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept;

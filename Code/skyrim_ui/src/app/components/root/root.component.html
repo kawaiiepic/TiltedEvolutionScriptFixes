@@ -33,7 +33,8 @@
   <div *ngIf="inGame$ | async" class="travel-invitations" [class.travel-invitations-active]="active$ | async">
     <aside *ngFor="let travel of travelInvitations$ | async; trackBy: trackTravel" class="travel-invitation">
       <strong>{{ travel.canCancel ? 'Travel invitation' : travel.leader + ' invited you to travel' }}</strong>
-      <p *ngIf="travel.destination && travel.destination !== 'UNKNOWN'">{{ travel.destination }}</p>
+      <p *ngIf="travel.nativeRoute">{{ travel.nativeRoute }}. Use the in-game interaction when the countdown ends.</p>
+      <p *ngIf="!travel.nativeRoute && travel.destination && travel.destination !== 'UNKNOWN'">{{ travel.destination }}</p>
       <p>{{ travel.seconds }} seconds · {{ travel.count }} joining</p>
       <div *ngIf="active$ | async; else travelHint" class="travel-actions">
         <button *ngIf="travel.canCancel" type="button" (click)="respondToTravel(travel.id, 'cancel')">Cancel invitation</button>
