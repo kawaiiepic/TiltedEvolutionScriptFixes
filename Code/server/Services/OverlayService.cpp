@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include <Services/OverlayService.h>
+#include <Services/DialogueLocation.h>
 #include <Setting.h>
 
 #include <ChatMessageTypes.h>
@@ -25,7 +26,7 @@
 
 namespace
 {
-Console::Setting bRemoteDialogueSpectating{"Gameplay:bRemoteDialogueSpectating", "Show public conversations to distant players as read-only panels", false};
+Console::Setting bRemoteDialogueSpectating{"Gameplay:bRemoteDialogueSpectating", "Show public conversations as read-only panels to players in the same worldspace or interior", false};
 
 void SendDialogueDenied(const Player& acPlayer, uint32_t aActorId, uint32_t aToken)
 {
@@ -97,8 +98,10 @@ bool OverlayService::IsDialogueActorInRange(uint32_t aActorId, const Player& acP
 
     const auto* pCharacter = m_world.try_get<CharacterComponent>(entity);
     const auto* pCell = m_world.try_get<CellIdComponent>(entity);
+    const auto& playerCell = acPlayer.GetCellComponent();
     if (!pCharacter || pCharacter->IsPlayer() || pCharacter->IsDead() || !pCell ||
-        !pCell->IsInRange(acPlayer.GetCellComponent(), false))
+        !DialogueLocation::IsCompatible(pCell->Cell, pCell->WorldSpaceId, playerCell.Cell, playerCell.WorldSpaceId) ||
+        !pCell->IsInRange(playerCell, false))
         return false;
 
     const auto* pActorMovement = m_world.try_get<MovementComponent>(entity);
@@ -214,11 +217,20 @@ void OverlayService::RefreshDialoguePanels() noexcept
         {
             const bool cOwner = pPlayer->GetId() == session.Owner;
             const bool cNearby = IsDialogueActorInRange(actorId, *pPlayer);
-            if ((session.Private && !cOwner) || (!cNearby && (!bRemoteDialogueSpectating || !pPlayer->GetCharacter())))
+            if (session.Private && !cOwner)
                 continue;
             const auto* pOwner = m_world.GetPlayerManager().GetById(session.Owner);
-            if (!pOwner)
+            if (!pOwner || !IsDialogueActorInRange(actorId, *pOwner))
                 continue;
+            if (!cNearby)
+            {
+                const auto& speaker = pOwner->GetCellComponent();
+                const auto& listener = pPlayer->GetCellComponent();
+                if (!bRemoteDialogueSpectating || !pPlayer->GetCharacter() ||
+                    !DialogueLocation::IsCompatible(speaker.Cell, speaker.WorldSpaceId,
+                                                   listener.Cell, listener.WorldSpaceId))
+                    continue;
+            }
             NotifyPlayerDialogue panel{};
             panel.Kind = NotifyPlayerDialogue::Panel;
             panel.ActorId = actorId;

@@ -42,46 +42,10 @@ export class RootComponent implements OnInit {
 
   dialogueFocus$ = this.client.dialogueFocus.asObservable();
   sharedDialogues$ = this.client.sharedDialogueChange.asObservable();
-  // Temporary visual test, local only. Remove or disable after checking the layout.
-  private readonly fakeDialogueSuggestions = true;
-  private fakeSuggestionActor = 0;
-  private fakeSuggestionKey = '';
-  private fakeSuggestionIndex = -1;
   focusedDialogue$ = combineLatest([this.sharedDialogues$, this.dialogueFocus$]).pipe(
-    map(([panels, focus]) => {
-      const panel = focus.open ? panels.find(candidate => candidate.actorId === focus.actorId) : undefined;
-      if (!focus.open || this.fakeSuggestionActor !== focus.actorId) {
-        this.fakeSuggestionActor = focus.open ? focus.actorId : 0;
-        this.fakeSuggestionKey = '';
-        this.fakeSuggestionIndex = -1;
-      }
-      if (!panel || !this.fakeDialogueSuggestions || !panel.canChoose || panel.isPrivate) return panel;
-      const eligible = panel.options.map((option, index) => option.trim() ? index : -1).filter(index => index >= 0);
-      if (!eligible.length) {
-        this.fakeSuggestionKey = '';
-        this.fakeSuggestionIndex = -1;
-        return panel;
-      }
-      const key = JSON.stringify(panel.options);
-      if (key !== this.fakeSuggestionKey || this.fakeSuggestionIndex < 0) {
-        this.fakeSuggestionKey = key;
-        this.fakeSuggestionIndex = eligible[Math.floor(Math.random() * eligible.length)];
-      }
-      const votes = panel.options.map((_, index) => panel.votes[index] || 0);
-      votes[this.fakeSuggestionIndex]++;
-      // Reuse the owner's cached portrait if available, otherwise use a labeled initial.
-      // This is a display-only clone: never submit a fake vote to the server.
-      return { ...panel, votes, voterIds: [...panel.voterIds, -1], voterOptions: [...panel.voterOptions, this.fakeSuggestionIndex] };
-    }),
+    map(([panels, focus]) => focus.open ? panels.find(panel => panel.actorId === focus.actorId) : undefined),
   );
-  portraits$ = this.client.characterPortraits.asObservable().pipe(map(portraits => {
-    const local = this.client.localPlayerId;
-    const image = local === undefined ? undefined : portraits.get(local);
-    if (!image) return portraits;
-    const display = new Map(portraits);
-    display.set(-1, image);
-    return display;
-  }));
+  portraits$ = this.client.characterPortraits.asObservable();
 
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
 
@@ -90,7 +54,6 @@ export class RootComponent implements OnInit {
   }
 
   dialogueVoterName(id: number): string {
-    if (id === -1) return 'Test player';
     if (id === this.client.localPlayerId) return 'You';
     return this.playerList.playerList.getValue()?.players.find(player => player.id === id)?.name || `Player ${id}`;
   }
