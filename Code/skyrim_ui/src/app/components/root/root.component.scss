@@ -202,7 +202,7 @@
   justify-content: flex-end;
   max-width: 44%;
   gap: 0.2rem;
-  img { width: 1.8rem; height: 1.8rem; object-fit: cover; border-radius: 50%; border: 1px solid #8a8068; background: #292723; }
+  .character-avatar { width: 1.8rem; height: 1.8rem; }
 }
 
 .first-save-status,
@@ -290,10 +290,7 @@
   width: 5rem;
   height: 5rem;
   flex: 0 0 5rem;
-  object-fit: contain;
-  border: 1px solid rgba(154, 137, 103, .5);
   background: radial-gradient(ellipse at center, #514537, #191714);
-  border-radius: .25rem;
 }
 .slot-portrait-placeholder { display: grid; place-items: center; font-size: 2rem; color: #9a8967; }
 .slot-details { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
@@ -332,8 +329,7 @@
 }
 .native-suggestion-voters { display: flex; align-items: center; gap: .15rem; flex-shrink: 0; }
 .native-suggestion-voters img, .voter-initial {
-  width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover;
-  border: 1px solid #a59b80; background: rgba(24, 23, 20, .7);
+  width: 1.6rem; height: 1.6rem;
 }
 .voter-initial { display: grid; place-items: center; font-size: .8rem; }
 .native-suggestion-count { color: #d1c4a1; font-size: .85rem; padding-inline: .15rem; }

@@ -25,7 +25,6 @@
       min-width: 0;
 
       &.not-loaded { opacity: .72; }
-      &.local-player .member-portrait { border-color: #e4d3a3; }
       .member-portrait {
         position: relative;
         display: grid;
@@ -34,7 +33,6 @@
         aspect-ratio: 1;
         flex-shrink: 0;
         overflow: hidden;
-        border: 1px solid #8c8066;
         background: radial-gradient(ellipse, #564b39, #171715);
         color: #d1c4a1;
 

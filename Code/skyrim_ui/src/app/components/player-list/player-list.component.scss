@@ -55,6 +55,5 @@
 }
 
 .campaign-character { display: flex; align-items: center; gap: .65rem; }
-.campaign-character img, .campaign-avatar-fallback { width: 2.8rem; height: 2.8rem; border: 1px solid #8c8066; background: #28241e; object-fit: cover; flex-shrink: 0; }
-.campaign-avatar-fallback { display: grid; place-items: center; }
+.campaign-character img, .campaign-avatar-fallback { width: 2.8rem; height: 2.8rem; }
 .campaign-character small { color: #d1c4a1; }

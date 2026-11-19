@@ -38,8 +38,9 @@
           <span class="native-suggestion-option">{{ option }}</span>
           <span class="native-suggestion-voters" *ngIf="portraits$ | async as portraits">
             <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
-              <img *ngIf="portraits.get(voter) as portrait; else voterInitial" [src]="portrait" [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
-              <ng-template #voterInitial><span class="voter-initial" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
+              <img *ngIf="portraits.get(voter) as portrait; else voterInitial" [src]="portrait" class="character-avatar" [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
+            <ng-template #dialogueInitial><span class="character-avatar" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
+              <ng-template #voterInitial><span class="character-avatar voter-initial" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
             </ng-container>
             <span class="native-suggestion-count">{{ panel.votes[i] }}</span>
           </span>
@@ -58,8 +59,9 @@
         <span [attr.title]="dialogueVoters(panel, i) || null">{{ option }}<ng-container *ngIf="panel.votes[i]"> ({{ panel.votes[i] }})</ng-container></span>
         <span class="dialogue-portraits" *ngIf="portraits$ | async as portraits">
           <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
-            <img *ngIf="portraits.get(voter) as portrait" [src]="portrait"
+            <img *ngIf="portraits.get(voter) as portrait; else dialogueInitial" [src]="portrait" class="character-avatar"
               [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
+            <ng-template #dialogueInitial><span class="character-avatar" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
           </ng-container>
         </span>
       </button>
@@ -160,8 +162,8 @@
               <ul *ngIf="slots.length" class="character-slots">
                 <li *ngFor="let slot of slots">
                   <button type="button" (click)="selectCharacter(slot)" class="character-slot-card">
-                    <img *ngIf="slot.portrait; else portraitPlaceholder" [src]="slot.portrait" alt="" class="slot-portrait">
-                    <ng-template #portraitPlaceholder><span class="slot-portrait slot-portrait-placeholder" aria-hidden="true">◇</span></ng-template>
+                    <img *ngIf="slot.portrait; else portraitPlaceholder" [src]="slot.portrait" alt="" class="character-avatar slot-portrait">
+                    <ng-template #portraitPlaceholder><span class="character-avatar slot-portrait slot-portrait-placeholder" aria-hidden="true">◇</span></ng-template>
                     <span class="slot-details">
                       <strong>{{ slot.name || slot.label }}</strong>
                       <small *ngIf="slot.race || slot.level">{{ slot.race }}<ng-container *ngIf="slot.race && slot.level"> · </ng-container><ng-container *ngIf="slot.level">Level {{ slot.level }}</ng-container></small>

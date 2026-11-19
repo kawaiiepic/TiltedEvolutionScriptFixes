@@ -338,3 +338,16 @@ hr {
     margin-right: -100%;
   }
 }
+
+.character-avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  aspect-ratio: 1;
+  border: 1px solid rgba(165, 155, 128, .65);
+  border-radius: 50%;
+  overflow: hidden;
+  object-fit: cover;
+  object-position: center;
+  background: #292723;
+}
