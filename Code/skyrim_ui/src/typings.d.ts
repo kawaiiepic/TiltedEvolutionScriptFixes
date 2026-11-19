@@ -111,7 +111,7 @@ interface SkyrimTogether {
   off(event: 'mainMenu' | 'serverLobby', callback?: (state: boolean) => void): void;
   uiReady(): void;
   enterWorld(): void;
-  selectCharacter(key: string): void;
+  selectCharacter(key: string, label: string): void;
   on(event: 'characterCheckpoint', callback: (required: boolean, phase: string, name: string, revision: string, detail: string) => void): void;
   off(event: 'characterCheckpoint', callback?: (required: boolean, phase: string, name: string, revision: string, detail: string) => void): void;
   on(event: 'characterPortrait', callback: SkyrimTogetherTypes.CharacterPortraitCallback): void;

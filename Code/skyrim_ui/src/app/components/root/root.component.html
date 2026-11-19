@@ -126,7 +126,7 @@
           <section *ngIf="checkpoint.phase === 'choose'" class="character-selector">
             <h4>Select character</h4>
             <button type="button" *ngFor="let slot of characterSlots$ | async" (click)="selectCharacter(slot)">{{ slot.label }}</button>
-            <input #label type="text" maxlength="64" placeholder="New character name" [value]="characterLabel" (input)="characterLabel = label.value">
+            <input #label type="text" maxlength="26" placeholder="New character name" [value]="characterLabel" (input)="characterLabel = label.value">
             <button type="button" [disabled]="!characterLabel.trim()" (click)="createCharacter()">Create new character</button>
             <small>Character keys are stored on this device for this server address.</small>
           </section>

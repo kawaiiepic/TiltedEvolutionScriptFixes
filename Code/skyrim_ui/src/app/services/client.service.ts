@@ -274,14 +274,14 @@ export class ClientService implements OnDestroy {
 
   public selectCharacter(slot: CharacterSlot): void {
     if (this.lobbyStateChange.value && this.checkpointChange.value.phase === 'choose')
-      skyrimtogether.selectCharacter(slot.key);
+      skyrimtogether.selectCharacter(slot.key, slot.label);
   }
 
   public createCharacter(label: string): void {
     if (!this.lobbyStateChange.value || this.checkpointChange.value.phase !== 'choose') return;
-    const name = label.trim().slice(0, 64);
+    const name = label.trim();
     const slots = this.characterSlotsChange.value;
-    if (!name || slots.length >= 32) return;
+    if (!name || name.length > 26 || slots.length >= 32) return;
     try {
       // The key is a private capability, not a character name or a password
       // shared with the server. Never log it through StoreService.

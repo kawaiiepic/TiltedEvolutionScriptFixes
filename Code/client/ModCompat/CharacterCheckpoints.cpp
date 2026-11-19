@@ -56,7 +56,8 @@ struct State
     std::array<uint8_t, 32> Digest{};
     std::vector<uint8_t> Bytes;
     std::filesystem::path Directory;
-    std::string Name, Detail;
+    std::string Name, Detail, CharacterLabel;
+    Clock::time_point NextNameAttempt{};
     PairStamp Baseline{}, Candidate{}, Captured{};
     Clock::time_point StableSince{}, NextPoll{}, Deadline{};
 };
@@ -348,7 +349,7 @@ bool CanEnter() noexcept
     return !s.Required || ((s.Step == Phase::Ready || (!s.NativeEnabled && s.Step == Phase::Staged)) && !s.Pending && s.Revision);
 }
 
-void Select(TransportService& aTransport, const std::string& acKey) noexcept
+void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept
 {
     if (!aTransport.IsInLobby() || s.Step != Phase::Choose || acKey.size() != 64) return;
     try
@@ -363,6 +364,8 @@ void Select(TransportService& aTransport, const std::string& acKey) noexcept
             request.Key[i] = static_cast<uint8_t>((hi << 4) | lo);
         }
         if (!ChoosePath()) { Change(Phase::Choose, "Save directory unavailable; configure ST_SAVE_DIRECTORY."); return; }
+        s.CharacterLabel = acLabel;
+        s.NextNameAttempt = {};
         Change(Phase::Selecting, "Checking server character...");
         Send(aTransport, request);
     }
@@ -539,6 +542,18 @@ void Tick(TransportService& aTransport) noexcept
             auto* ui = UI::Get();
             if (newGames == 1 && ui && ui->GetMenuOpen("RaceSex Menu"))
             {
+                if (!s.CharacterLabel.empty() && now >= s.NextNameAttempt)
+                {
+                    s.NextNameAttempt = now + std::chrono::seconds(1);
+                    const auto generation = s.InitialNewGame;
+                    World::Get().QueueCheckpointTask([generation]()
+                    {
+                        if (s.Step == Phase::NewCharacter && s.AwaitCharacterCreation &&
+                            s.InitialNewGame == generation && NativeCheckpointDriver::NewGameGeneration() - generation == 1 &&
+                            !s.CharacterLabel.empty() && MainMenuBridge::PrefillCharacterName(s.CharacterLabel.c_str()))
+                            s.CharacterLabel.clear();
+                    });
+                }
                 s.SawRaceMenu = true;
                 s.CharacterReadySince = {};
                 return;
@@ -547,6 +562,11 @@ void Tick(TransportService& aTransport) noexcept
             {
                 s.CharacterReadySince = {};
                 return;
+            }
+            if (!s.CharacterLabel.empty())
+            {
+                spdlog::warn("RaceMenu closed before the campaign name could be prefilled");
+                s.CharacterLabel.clear();
             }
             if (s.CharacterReadySince == Clock::time_point{})
                 s.CharacterReadySince = now;

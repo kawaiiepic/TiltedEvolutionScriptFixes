@@ -236,6 +236,26 @@ bool ConsumePlayRequest() noexcept
     return s_play.exchange(false);
 }
 bool ConsumeSettingsRequest() noexcept { return s_settings.exchange(false); }
+bool PrefillCharacterName(const char* apName) noexcept
+{
+    auto* ui = UI::Get();
+    if (!s_invoke || !ui || !ui->GetMenuOpen("RaceSex Menu")) return false;
+    auto* menu = ui->FindMenuByName("RaceSex Menu");
+    if (!Accessible(menu, sizeof(IMenu))) return false;
+    void* movie = menu->uiMovie;
+    constexpr auto method = "_root.RaceSexMenuBaseInstance.RaceSexPanelsInstance.SetNameText";
+    const auto available = MovieFunction<IsAvailable>(movie, kIsAvailable);
+    if (!available || !available(movie, method)) return false;
+
+    // The supplied RaceMenu SWF copies this display name into its final text entry.
+    PrimitiveValue arg{};
+    arg.Type = 4;
+    arg.Data.String = apName;
+    s_invoke(movie, method, &arg, 1);
+    spdlog::info("Prefilled the campaign character name in RaceMenu");
+    return true;
+}
+
 bool RequestNewGame() noexcept
 {
     if (!s_ready.load() || !s_menu.load() || !s_invoke) return false;

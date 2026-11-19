@@ -64,9 +64,11 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         else if (eventName == "selectCharacter")
         {
             const std::string key = eventArgs->GetString(0).ToString();
-            World::Get().GetRunner().Queue([key]()
+            const auto name = eventArgs->GetString(1);
+            const std::string label = name.length() <= 26 ? name.ToString() : std::string{};
+            World::Get().GetRunner().Queue([key, label]()
             {
-                CharacterCheckpoints::Select(World::Get().GetTransport(), key);
+                CharacterCheckpoints::Select(World::Get().GetTransport(), key, label);
             });
         }
         else if (eventName == "enterWorld")

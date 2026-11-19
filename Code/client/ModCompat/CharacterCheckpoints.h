@@ -33,7 +33,7 @@ bool FinishCharacter(TransportService& aTransport) noexcept;
 
 void Begin(bool aRequired) noexcept;
 void Reset() noexcept;
-void Select(TransportService& aTransport, const std::string& acKey) noexcept;
+void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept;
 void Receive(const NotifyCharacterSave& acReply) noexcept;
 void Tick(TransportService& aTransport) noexcept;
 bool CanEnter() noexcept;
