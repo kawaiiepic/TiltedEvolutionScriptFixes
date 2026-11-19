@@ -23,7 +23,7 @@ struct CharacterSavePayload
         const size_t count = bytes[HeaderSize - 2] | (size_t(bytes[HeaderSize - 1]) << 8);
         return aSize == HeaderSize + count;
     }
-    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort, UploadCopy, DownloadIfChanged };
+    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort, UploadCopy, DownloadIfChanged, Roster, Create, SelectOwned };
     enum Result : uint8_t { Ok, Disabled, Invalid, Busy, Stale, Missing, IoError, Incomplete, HashMismatch, Quota };
     uint8_t Action{};
     uint8_t Status{};

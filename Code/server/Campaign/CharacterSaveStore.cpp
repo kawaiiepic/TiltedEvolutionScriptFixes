@@ -47,19 +47,19 @@ bool ValidSize(uint64_t aEss, uint64_t aCoSave)
     return aEss >= 13 && aEss <= P::MaxSize && aCoSave <= P::MaxSize - aEss;
 }
 
+std::string Hex(const std::array<uint8_t, 32>& bytes)
+{
+    constexpr char digits[] = "0123456789abcdef";
+    std::string text;
+    for (const auto byte : bytes) { text += digits[byte >> 4]; text += digits[byte & 15]; }
+    return text;
+}
+
 std::string Slot(const std::array<uint8_t, 32>& acKey)
 {
     std::array<uint8_t, 32> hash{};
     CryptoPP::SHA256().CalculateDigest(hash.data(), acKey.data(), acKey.size());
-    constexpr char hex[] = "0123456789abcdef";
-    std::string result;
-    result.reserve(64);
-    for (auto byte : hash)
-    {
-        result += hex[byte >> 4];
-        result += hex[byte & 15];
-    }
-    return result;
+    return Hex(hash);
 }
 
 bool SyncDirectory(const std::filesystem::path& acPath)
@@ -91,6 +91,30 @@ bool Publish(const std::filesystem::path& acPending, const std::filesystem::path
     return SyncDirectory(acFinal.parent_path());
 #endif
 }
+
+bool ValidLabel(std::string_view label)
+{
+    return !label.empty() && label.size() <= 104 &&
+        std::none_of(label.begin(), label.end(), [](unsigned char ch) { return ch < 32 || ch == 127; });
+}
+
+bool SaveOwner(const std::filesystem::path& dir, const std::string& record)
+{
+    const auto file = dir / "picker";
+    std::error_code ec;
+    if (std::filesystem::exists(file, ec))
+    {
+        std::ifstream input(file, std::ios::binary);
+        std::string existing;
+        return std::getline(input, existing) && existing == record;
+    }
+    const auto temp = dir / "picker.tmp";
+    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+    out.write(record.data(), record.size());
+    out.close();
+    return out && Publish(temp, file);
+}
+
 }
 
 CharacterSaveStore::CharacterSaveStore(std::filesystem::path aRoot) : m_root(std::move(aRoot)) {}
@@ -162,13 +186,18 @@ void CharacterSaveStore::Discard(Lease& aLease) noexcept
 
 void CharacterSaveStore::Release(uint64_t aSession) noexcept
 {
+    m_owners.erase(aSession);
     const auto it = m_leases.find(aSession);
     if (it == m_leases.end()) return;
     Discard(it->second);
     std::error_code ec;
     // Only removes an empty directory. Published revisions are never removed here.
-    if (!it->second.Latest.Number)
+    if (!it->second.Latest.Number && !it->second.Broken)
+    {
+        std::filesystem::remove(it->second.Directory / "picker", ec);
+        std::filesystem::remove(it->second.Directory / "picker.tmp", ec);
         std::filesystem::remove(it->second.Directory, ec);
+    }
     m_leases.erase(it);
 }
 
@@ -178,20 +207,97 @@ bool CharacterSaveStore::CanEnter(uint64_t aSession) const noexcept
     return it != m_leases.end() && it->second.Ready && !it->second.Uploading && !it->second.Broken && it->second.Latest.Number;
 }
 
+void CharacterSaveStore::ListCharacters(uint64_t session, const P& request, P& reply)
+{
+    if (m_leases.contains(session) || request.Count > 32 * (64 + 104 + 1) ||
+        request.Key == std::array<uint8_t, 32>{}) return;
+    const std::string owner = Slot(request.Key);
+    if (m_owners.contains(session) && m_owners.at(session) != owner) return;
+    std::string_view legacy(reinterpret_cast<const char*>(request.Data.data()), request.Count);
+    // Older clients alone knew the slot names and private keys. Bind a legacy slot
+    // only when possession is proved and a published checkpoint still exists.
+    size_t records = 0;
+    while (!legacy.empty())
+    {
+        const auto end = legacy.find('\n');
+        if (++records > 32 || end == legacy.npos || end <= 64 || !ValidLabel(legacy.substr(64, end - 64))) return;
+        std::array<uint8_t, 32> key{};
+        for (size_t i = 0; i < key.size(); ++i)
+        {
+            const auto digits = legacy.substr(2 * i, 2);
+            const auto parsed = std::from_chars(digits.data(), digits.data() + 2, key[i], 16);
+            if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + 2) return;
+        }
+        Lease slot;
+        slot.Directory = m_root / Slot(key);
+        std::error_code ec;
+        if (!Discover(slot)) { reply.Status = P::IoError; return; }
+        if (slot.Latest.Number && !std::filesystem::exists(slot.Directory / "picker", ec) &&
+            !SaveOwner(slot.Directory, owner + std::string(legacy.substr(64, end - 64))))
+        { reply.Status = P::IoError; return; }
+        legacy.remove_prefix(end + 1);
+    }
+
+    std::error_code ec;
+    std::string roster;
+    if (std::filesystem::exists(m_root, ec))
+    {
+        for (std::filesystem::directory_iterator it(m_root, ec), end; !ec && it != end; it.increment(ec))
+        {
+            const auto id = it->path().filename().string();
+            if (id.size() != 64 || id.find_first_not_of("0123456789abcdef") != id.npos) continue;
+            std::ifstream input(it->path() / "picker", std::ios::binary);
+            std::string record;
+            if (!std::getline(input, record) || !record.starts_with(owner) ||
+                !ValidLabel(std::string_view(record).substr(64))) continue;
+            Lease slot;
+            slot.Directory = it->path();
+            if (!Discover(slot)) { reply.Status = P::IoError; return; }
+            if (slot.Latest.Number) roster += id + record.substr(64) + "\n";
+        }
+    }
+    if (ec || roster.size() > P::ChunkSize) { reply.Status = P::IoError; return; }
+    std::copy(roster.begin(), roster.end(), reply.Data.begin());
+    reply.Count = static_cast<uint16_t>(roster.size());
+    m_owners[session] = owner;
+    reply.Status = P::Ok;
+}
+
 void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const CharacterSavePayload& acRequest, CharacterSavePayload& aReply)
 {
     aReply.Action = acRequest.Action;
     aReply.Status = P::Invalid;
-    if (acRequest.Status || acRequest.Action > P::DownloadIfChanged || acRequest.Count > P::ChunkSize)
+    if (acRequest.Status || acRequest.Action > P::SelectOwned || acRequest.Count > P::ChunkSize)
         return;
 
-    if (acRequest.Action == P::Select)
+    if (acRequest.Action == P::Roster)
+    {
+        if (!aInWorld) ListCharacters(aSession, acRequest, aReply);
+        return;
+    }
+    if (acRequest.Action == P::Select || acRequest.Action == P::Create || acRequest.Action == P::SelectOwned)
     {
         if (aInWorld || m_leases.contains(aSession) ||
             std::all_of(acRequest.Key.begin(), acRequest.Key.end(), [](uint8_t b) { return b == 0; }))
             return;
         Lease lease;
-        lease.Directory = m_root / Slot(acRequest.Key);
+        lease.Directory = m_root / (acRequest.Action == P::SelectOwned ? Hex(acRequest.Key) : Slot(acRequest.Key));
+        std::error_code ec;
+        if (acRequest.Action == P::SelectOwned)
+        {
+            std::ifstream input(lease.Directory / "picker", std::ios::binary);
+            std::string record;
+            if (!m_owners.contains(aSession) || !std::getline(input, record) ||
+                !record.starts_with(m_owners.at(aSession))) { aReply.Status = P::Missing; return; }
+        }
+        else if (acRequest.Action == P::Create)
+        {
+            if (!m_owners.contains(aSession) || std::filesystem::exists(lease.Directory, ec) || ec) return;
+            lease.Owner = m_owners.at(aSession);
+            lease.Label.assign(reinterpret_cast<const char*>(acRequest.Data.data()), acRequest.Count);
+            if (!ValidLabel(lease.Label)) return;
+        }
+        else if (std::filesystem::exists(lease.Directory / "picker", ec) || ec) return;
         for (const auto& [id, other] : m_leases)
         {
             if (other.Directory == lease.Directory)
@@ -205,6 +311,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             aReply.Status = P::IoError;
             return;
         }
+        if (acRequest.Action == P::SelectOwned && !lease.Latest.Number) { aReply.Status = P::Missing; return; }
         Discard(lease); // remove an incomplete upload after a process crash
         Describe(lease.Latest, aReply);
         m_leases.emplace(aSession, std::move(lease));
@@ -252,6 +359,8 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             if (ec) { aReply.Status = P::IoError; return; }
         }
 
+        if (!lease.Owner.empty() && !SaveOwner(lease.Directory, lease.Owner + lease.Label))
+        { aReply.Status = P::IoError; return; }
         if (!SyncDirectory(m_root)) { aReply.Status = P::IoError; return; }
         lease.Upload = {lease.Latest.Number + 1, acRequest.EssSize, acRequest.CoSaveSize, acRequest.Digest};
         std::array<uint8_t, HeaderSize> header{};

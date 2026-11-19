@@ -61,14 +61,24 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")
             ProcessDisconnectMessage();
+        else if (eventName == "requestCharacters")
+        {
+            const auto owner = eventArgs->GetString(0);
+            const auto legacy = eventArgs->GetString(1);
+            if (owner.length() <= 64 && legacy.length() <= 32 * 169)
+                World::Get().GetRunner().Queue([key = owner.ToString(), claims = legacy.ToString()]()
+                {
+                    CharacterCheckpoints::RequestRoster(World::Get().GetTransport(), key, claims);
+                });
+        }
         else if (eventName == "selectCharacter")
         {
             const std::string key = eventArgs->GetString(0).ToString();
             const auto name = eventArgs->GetString(1);
             const std::string label = name.length() <= 26 ? name.ToString() : std::string{};
-            World::Get().GetRunner().Queue([key, label]()
+            World::Get().GetRunner().Queue([key, label, create = eventArgs->GetBool(2)]()
             {
-                CharacterCheckpoints::Select(World::Get().GetTransport(), key, label);
+                CharacterCheckpoints::Select(World::Get().GetTransport(), key, label, create);
             });
         }
         else if (eventName == "enterWorld")
@@ -156,7 +166,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         // Wake the existing game-window dispatch for pre-game actions
         // without running any engine work on CEF's browser thread.
         if (eventName == "connect" || eventName == "disconnect" ||
-            eventName == "selectCharacter" || eventName == "enterWorld" ||
+            eventName == "requestCharacters" || eventName == "selectCharacter" || eventName == "enterWorld" ||
             eventName == "deactivate")
             BSGraphics::WakeMainMenuPump();
         return true;

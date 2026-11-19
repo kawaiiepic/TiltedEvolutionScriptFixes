@@ -156,15 +156,22 @@ export class ClientService implements OnDestroy {
     skyrimtogether.on('exitGame', this.onExitGame.bind(this));
     skyrimtogether.on('openingMenu', this.onOpeningMenu.bind(this));
     skyrimtogether.on('mainMenu', state => this.zone.run(() => this.mainMenuChange.next(state)));
-    skyrimtogether.on('characterCheckpoint', (required, phase, name, revision, detail) => this.zone.run(() => {
+    skyrimtogether.on('characterCheckpoint', (required, phase, name, revision, detail, roster) => this.zone.run(() => {
+      if (phase === 'choose') {
+        const slots: CharacterSlot[] = [];
+        for (const row of roster.split('\n')) {
+          if (/^[0-9a-f]{64}/.test(row) && row.length > 64)
+            slots.push({ key: row.slice(0, 64), label: row.slice(64) });
+        }
+        this.characterSlotsChange.next(slots);
+      }
       this.checkpointChange.next({ required, phase, name, revision, detail });
+      if (phase === 'request-roster') this.requestCharacterRoster();
     }));
     skyrimtogether.on('serverLobby', state => this.zone.run(() => {
       this.lobbyStateChange.next(state);
-      if (state) {
-        this.isConnectionInProgressChange.next(false);
-        this.readCharacterSlots();
-      }
+      if (state) this.isConnectionInProgressChange.next(false);
+      else this.characterSlotsChange.next([]);
     }));
     skyrimtogether.on('connect', this.onConnect.bind(this));
     skyrimtogether.on('disconnect', this.onDisconnect.bind(this));
@@ -257,44 +264,51 @@ export class ClientService implements OnDestroy {
     this._password = password;
   }
 
-  /**
-   * Disconnect from the server or cancel connection.
-   */
-  private get slotStorageKey(): string {
-    return 'st-character-slots-v1:' + JSON.stringify([this._host?.trim().toLowerCase(), this._port]);
+  private randomKey(): string {
+    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map(byte => byte.toString(16).padStart(2, '0')).join('');
   }
 
-  private readCharacterSlots(): void {
+  private requestCharacterRoster(): void {
+    this.characterSlotsChange.next([]);
+    const endpoint = JSON.stringify([this._host?.trim().toLowerCase(), this._port]);
+    let owner: string;
     try {
-      const slots = JSON.parse(localStorage.getItem(this.slotStorageKey) || '[]');
-      this.characterSlotsChange.next(Array.isArray(slots) ? slots.filter(s =>
-        typeof s?.label === 'string' && typeof s?.key === 'string' && /^[0-9a-f]{64}$/.test(s.key)).slice(0, 32) : []);
-    } catch { this.characterSlotsChange.next([]); }
+      const identityKey = 'st-character-owner-v1:' + endpoint;
+      owner = localStorage.getItem(identityKey) ?? this.randomKey();
+      if (!/^[0-9a-f]{64}$/.test(owner)) throw new Error('Invalid character identity');
+      localStorage.setItem(identityKey, owner);
+    } catch {
+      skyrimtogether.requestCharacters('', '');
+      return;
+    }
+
+    // Legacy saves have no owner metadata. Present the old private keys once the
+    // server is selected. Only the server response can populate the picker.
+    let claims = '';
+    try {
+      const old = JSON.parse(localStorage.getItem('st-character-slots-v1:' + endpoint) || '[]');
+      if (Array.isArray(old)) {
+        for (const slot of old.slice(0, 32)) {
+          if (/^[0-9a-f]{64}$/.test(slot?.key) && typeof slot?.label === 'string' &&
+              slot.label.length > 0 && slot.label.length <= 26 && !/[\x00-\x1f\x7f]/.test(slot.label))
+            claims += slot.key + slot.label + '\n';
+        }
+      }
+    } catch { /* An unreadable legacy list does not hide server-owned characters. */ }
+    skyrimtogether.requestCharacters(owner, claims);
   }
 
   public selectCharacter(slot: CharacterSlot): void {
     if (this.lobbyStateChange.value && this.checkpointChange.value.phase === 'choose')
-      skyrimtogether.selectCharacter(slot.key, slot.label);
+      skyrimtogether.selectCharacter(slot.key, slot.label, false);
   }
 
   public createCharacter(label: string): void {
     if (!this.lobbyStateChange.value || this.checkpointChange.value.phase !== 'choose') return;
     const name = label.trim();
-    const slots = this.characterSlotsChange.value;
-    if (!name || name.length > 26 || slots.length >= 32) return;
-    try {
-      // The key is a private capability, not a character name or a password
-      // shared with the server. Never log it through StoreService.
-      const key = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map(byte => byte.toString(16).padStart(2, '0')).join('');
-      const slot = { label: name, key };
-      const next = [...slots, slot];
-      localStorage.setItem(this.slotStorageKey, JSON.stringify(next));
-      this.characterSlotsChange.next(next);
-      this.selectCharacter(slot);
-    } catch {
-      this.checkpointChange.next({ ...this.checkpointChange.value, detail: 'Could not securely create or persist the slot.' });
-    }
+    if (!name || name.length > 26 || this.characterSlotsChange.value.length >= 32) return;
+    skyrimtogether.selectCharacter(this.randomKey(), name, true);
   }
 
   public uiReady(): void { skyrimtogether.uiReady(); }

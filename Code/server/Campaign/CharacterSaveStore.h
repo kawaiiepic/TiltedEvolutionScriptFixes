@@ -28,6 +28,7 @@ private:
     {
         std::filesystem::path Directory;
         Revision Latest, Upload;
+        std::string Owner, Label;
         uint64_t Written{}, Downloaded{};
         bool Uploading{}, Ready{}, Broken{};
     };
@@ -38,6 +39,8 @@ private:
     static bool Discover(Lease& aLease);
     static void Describe(const Revision& acRevision, CharacterSavePayload& aReply) noexcept;
     static void Discard(Lease& aLease) noexcept;
+    void ListCharacters(uint64_t aSession, const CharacterSavePayload& acRequest, CharacterSavePayload& aReply);
+    std::map<uint64_t, std::string> m_owners;
     std::filesystem::path m_root;
     std::map<uint64_t, Lease> m_leases;
 };

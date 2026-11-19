@@ -140,3 +140,76 @@ TEST_CASE("Checkpoint revisions reuse matching blocks and verify the reconstruct
     REQUIRE(std::equal(bytes.end() - 3, bytes.end(), reply->Data.begin()));
     REQUIRE(store.CanEnter(1));
 }
+
+TEST_CASE("Character picker follows committed server slots across reconnects and wipes", "[campaign.saves]")
+{
+    using P = CharacterSavePayload;
+    const auto root = std::filesystem::temp_directory_path() /
+        ("st-roster-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup
+    {
+        std::filesystem::path Path;
+        ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); }
+    } cleanup{root};
+    auto req = std::make_unique<P>();
+    auto reply = std::make_unique<P>();
+    Campaign::CharacterSaveStore store(root);
+    auto send = [&](uint64_t session, P::Operation action) {
+        req->Action = action;
+        *reply = {};
+        store.Handle(session, false, *req, *reply);
+    };
+    auto roster = [&](uint64_t session, uint8_t owner, const std::string& claims) {
+        *req = {};
+        req->Key[0] = owner;
+        req->Count = static_cast<uint16_t>(claims.size());
+        std::copy(claims.begin(), claims.end(), req->Data.begin());
+        send(session, P::Roster);
+        REQUIRE(reply->Status == P::Ok);
+        return std::string(reinterpret_cast<const char*>(reply->Data.data()), reply->Count);
+    };
+    const std::string legacy = "01" + std::string(62, '0') + "Mia\n";
+    REQUIRE(roster(1, 9, legacy).empty());
+    bool migrate = false;
+    SECTION("New slot") {}
+    SECTION("Existing checkpoint from an older client") { migrate = true; }
+    req->Key[0] = 1;
+    req->Count = 3;
+    std::memcpy(req->Data.data(), "Mia", 3);
+    send(1, migrate ? P::Select : P::Create);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(roster(2, 9, "").empty());
+    const std::string save = "TESV_SAVEGAME test";
+    req->Count = 0;
+    req->EssSize = save.size();
+    CryptoPP::SHA256().CalculateDigest(req->Digest.data(), reinterpret_cast<const uint8_t*>(save.data()), save.size());
+    send(1, P::BeginUpload);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(roster(2, 9, "").empty());
+    req->Count = static_cast<uint16_t>(save.size());
+    std::copy(save.begin(), save.end(), req->Data.begin());
+    send(1, P::UploadChunk);
+    REQUIRE(reply->Status == P::Ok);
+    req->Count = 0;
+    send(1, P::Commit);
+    REQUIRE(reply->Status == P::Ok);
+    store.Release(1);
+    const auto listed = roster(2, 9, migrate ? legacy : "");
+    REQUIRE(listed.size() == 68);
+    REQUIRE(listed.substr(64) == "Mia\n");
+    store.Release(2);
+    REQUIRE(roster(3, 9, "") == listed);
+    REQUIRE(roster(4, 8, legacy).empty());
+    std::array<uint8_t, 32> id{};
+    for (size_t i = 0; i < id.size(); ++i)
+        id[i] = static_cast<uint8_t>(std::stoul(listed.substr(2 * i, 2), nullptr, 16));
+    req->Key = id;
+    send(4, P::SelectOwned);
+    REQUIRE(reply->Status == P::Missing);
+    send(3, P::SelectOwned);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Revision == 1);
+    store.Release(3);
+    std::filesystem::remove_all(root);
+    REQUIRE(roster(5, 9, legacy).empty());
+}

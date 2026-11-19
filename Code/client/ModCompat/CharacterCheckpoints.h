@@ -36,7 +36,8 @@ bool NeedsStagingPump() noexcept;
 
 void Begin(bool aRequired) noexcept;
 void Reset() noexcept;
-void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept;
+void RequestRoster(TransportService& aTransport, const std::string& acOwner, const std::string& acLegacy) noexcept;
+void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel, bool aCreate) noexcept;
 void Receive(const NotifyCharacterSave& acReply) noexcept;
 void Tick(TransportService& aTransport) noexcept;
 bool CanEnter() noexcept;

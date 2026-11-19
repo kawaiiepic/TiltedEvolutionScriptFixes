@@ -47,7 +47,7 @@ struct PairStamp
 struct State
 {
     Phase Step{Phase::Disabled};
-    bool Required{}, Pending{}, NeedsBegin{};
+    bool Required{}, Pending{}, NeedsBegin{}, HasRoster{};
     bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
     bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
     Clock::time_point NewGameDeadline{};
@@ -66,7 +66,7 @@ struct State
     std::array<uint8_t, 32> Digest{};
     std::vector<uint8_t> Bytes;
     std::filesystem::path Directory;
-    std::string Name, Detail, CharacterLabel;
+    std::string Name, Detail, CharacterLabel, Roster;
     Clock::time_point NextNameAttempt{};
     PairStamp Baseline{}, Candidate{}, Captured{};
     Clock::time_point StableSince{}, NextPoll{}, Deadline{};
@@ -86,7 +86,7 @@ const char* PhaseName() noexcept
     case Phase::Disabled: return "disabled";
     case Phase::LoadingLobby: return "starting-staging";
     case Phase::WaitingForNewGame: return "waiting-for-new-game";
-    case Phase::Choose: return "choose";
+    case Phase::Choose: return s.HasRoster ? "choose" : "request-roster";
     case Phase::Selecting: return "selecting";
     case Phase::Download: return "downloading";
     case Phase::NewCharacter:
@@ -435,6 +435,7 @@ void PublishState() noexcept
     args->SetString(2, s.Name);
     args->SetString(3, std::to_string(s.Revision));
     args->SetString(4, s.Detail);
+    args->SetString(5, s.Step == Phase::Choose && s.HasRoster ? s.Roster : "");
     overlay->ExecuteAsync("characterCheckpoint", args);
 }
 bool RegisterNativeDriver(const NativeDriver& acDriver) noexcept
@@ -535,9 +536,37 @@ bool CanEnter() noexcept
     return !s.Required || ((s.Step == Phase::Ready || (!s.NativeEnabled && s.Step == Phase::Staged)) && !s.Pending && s.Revision);
 }
 
-void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept
+static bool DecodeKey(const std::string& text, std::array<uint8_t, 32>& key) noexcept
 {
-    if (!aTransport.IsInLobby() || s.Step != Phase::Choose || acKey.size() != 64) return;
+    if (text.size() != 64) return false;
+    for (size_t i = 0; i < key.size(); ++i)
+    {
+        const auto hi = std::string_view(kHex, 16).find(text[2 * i]);
+        const auto lo = std::string_view(kHex, 16).find(text[2 * i + 1]);
+        if (hi == std::string_view::npos || lo == std::string_view::npos) return false;
+        key[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return true;
+}
+
+void RequestRoster(TransportService& transport, const std::string& owner, const std::string& legacy) noexcept
+{
+    if (!transport.IsInLobby() || s.Step != Phase::Choose || s.HasRoster || s.Pending) return;
+    RequestCharacterSave request{};
+    if (!DecodeKey(owner, request.Key) || legacy.size() > 32 * (64 + 104 + 1))
+    {
+        Fail("Could not access the local identity for this server.");
+        return;
+    }
+    request.Action = P::Roster;
+    request.Count = static_cast<uint16_t>(legacy.size());
+    std::copy(legacy.begin(), legacy.end(), request.Data.begin());
+    Send(transport, request);
+}
+
+void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel, bool aCreate) noexcept
+{
+    if (!aTransport.IsInLobby() || s.Step != Phase::Choose || !s.HasRoster || s.Pending) return;
     if (s.LobbySaveLoaded && !CanReplaceStagingWorld())
     {
         Fail("The temporary character lobby was interrupted. Return to the main menu and reconnect.");
@@ -546,13 +575,12 @@ void Select(TransportService& aTransport, const std::string& acKey, const std::s
     try
     {
         RequestCharacterSave request{};
-        request.Action = P::Select;
-        for (size_t i = 0; i < request.Key.size(); ++i)
+        request.Action = aCreate ? P::Create : P::SelectOwned;
+        if (!DecodeKey(acKey, request.Key) || acLabel.empty() || acLabel.size() > 104) return;
+        if (aCreate)
         {
-            const auto hi = std::string_view(kHex, 16).find(acKey[2 * i]);
-            const auto lo = std::string_view(kHex, 16).find(acKey[2 * i + 1]);
-            if (hi == std::string_view::npos || lo == std::string_view::npos) return;
-            request.Key[i] = static_cast<uint8_t>((hi << 4) | lo);
+            request.Count = static_cast<uint16_t>(acLabel.size());
+            std::copy(acLabel.begin(), acLabel.end(), request.Data.begin());
         }
         if (!ChoosePath()) { Change(Phase::Choose, "Save directory unavailable; configure ST_SAVE_DIRECTORY."); return; }
         std::array<uint8_t, 32> slotHash{};
@@ -563,6 +591,7 @@ void Select(TransportService& aTransport, const std::string& acKey, const std::s
             cacheName += kHex[byte >> 4];
             cacheName += kHex[byte & 15];
         }
+        if (!aCreate) cacheName = acKey;
         s.CacheFile = s.Directory / L"SkyrimTogetherCache" / (cacheName + ".checkpoint");
         s.CharacterLabel = acLabel;
         s.NextNameAttempt = {};
@@ -580,8 +609,10 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
     {
         if (acReply.Status != P::Ok)
         {
+            if (acReply.Action == P::Roster) { Fail("Could not read the server character list. Reconnect to retry."); return; }
             if (s.Step == Phase::Selecting)
             {
+                if (acReply.Status == P::Missing) s.HasRoster = false;
                 Change(Phase::Choose, acReply.Status == P::Busy ? "Character is already in use." : "Server could not select the character.");
                 return;
             }
@@ -590,7 +621,15 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
         }
         switch (acReply.Action)
         {
-        case P::Select:
+        case P::Roster:
+        {
+            s.Roster.assign(reinterpret_cast<const char*>(acReply.Data.data()), acReply.Count);
+            s.HasRoster = true;
+            Change(Phase::Choose, "Choose a character to enter the campaign.");
+            return;
+        }
+        case P::Create:
+        case P::SelectOwned:
             s.Revision = acReply.Revision;
             if (!s.Revision)
             {
