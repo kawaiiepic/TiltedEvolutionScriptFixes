@@ -1,27 +1,25 @@
 <div [@fadeInOutActive]="isShown | async" class="group-container-wrapper">
-  <div
-    *ngIf="group$ | async"
-    class="group-container"
-    [ngStyle]="positionStyle | async"
-  >
-    <div
-      *ngFor="let player of groupMembers$ | async"
-      [title]="player.cellName"
-      class="group-member"
-      [class.not-loaded]="!player.isLoaded"
-    >
-      <b class="group-member-level">{{ player.level }} </b>
-      <div *ngIf="player.health === 0" class="group-member-dead"></div>
-      <span class="member-name">{{ player.name }}</span>
-      <div
-        *ngIf="player.health !== undefined && player.isLoaded"
-        class="group-member-health"
-      >
-        <div
-          class="group-member-health-value"
-          [app-health]="player.health"
-        ></div>
+  <div *ngIf="group$ | async" class="group-container" [ngStyle]="positionStyle | async">
+    <ng-container *ngIf="portraits$ | async as portraits">
+      <div *ngFor="let player of groupMembers$ | async; trackBy: trackPlayer"
+        [title]="player.cellName" class="group-member"
+        [class.not-loaded]="!player.isLoaded" [class.local-player]="isLocal(player.id)">
+        <div class="member-portrait">
+          <img *ngIf="portraits.get(player.id) as portrait; else placeholder" [src]="portrait" alt="">
+          <ng-template #placeholder><span>{{ player.name.slice(0, 1) || '?' }}</span></ng-template>
+          <div *ngIf="player.health === 0" class="group-member-dead"></div>
+        </div>
+        <div class="member-details">
+          <div class="member-heading">
+            <b class="group-member-level">{{ player.level || '?' }}</b>
+            <span class="member-name">{{ player.name }} <small *ngIf="isLocal(player.id)">(You)</small></span>
+          </div>
+          <div class="group-member-health" *ngIf="player.health !== undefined && player.isLoaded; else unknownHealth">
+            <div class="group-member-health-value" [app-health]="player.health"></div>
+          </div>
+          <ng-template #unknownHealth><div class="group-member-health unknown"></div></ng-template>
+        </div>
       </div>
-    </div>
+    </ng-container>
   </div>
 </div>

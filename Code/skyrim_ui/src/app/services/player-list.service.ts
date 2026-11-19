@@ -74,7 +74,9 @@ export class PlayerListService implements OnDestroy {
         const playerList = this.getPlayerList();
 
         if (playerList) {
-          playerList.players.push(player);
+          const existing = playerList.players.findIndex(p => p.id === player.id);
+          if (existing < 0) playerList.players.push(player);
+          else playerList.players[existing] = player;
 
           this.playerList.next(playerList);
         }
@@ -118,6 +120,7 @@ export class PlayerListService implements OnDestroy {
           const p = this.getPlayerById(player.id);
           if (p) {
             p.cellName = player.cellName;
+            this.playerList.next(playerList);
           }
         }
       },

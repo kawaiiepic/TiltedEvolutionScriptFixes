@@ -2,68 +2,68 @@
   position: fixed;
   top: 0;
   left: 0;
+  pointer-events: none;
 
   .group-container {
     position: absolute;
     display: flex;
     flex-direction: column;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
+    gap: .55rem;
     padding: 1vw;
-    width: 16vw;
+    width: clamp(15rem, 23vw, 28rem);
+    max-height: 78vh;
+    overflow: hidden;
 
     .group-member {
-      font-size: 1.5em;
-      color: rgb(192, 192, 192);
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      padding: .35rem .55rem .35rem .35rem;
+      background: linear-gradient(90deg, rgba(15, 15, 15, .72), rgba(15, 15, 15, .1));
+      color: #eee9dc;
+      font-size: 1.12rem;
+      min-width: 0;
 
-      &.not-loaded {
-        opacity: 0.6;
+      &.not-loaded { opacity: .72; }
+      &.local-player .member-portrait { border-color: #e4d3a3; }
+      .member-portrait {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: clamp(3rem, 4.3vw, 4.7rem);
+        aspect-ratio: 1;
+        flex-shrink: 0;
+        overflow: hidden;
+        border: 1px solid #8c8066;
+        background: radial-gradient(ellipse, #564b39, #171715);
+        color: #d1c4a1;
+
+        img { width: 100%; height: 100%; object-fit: cover; }
+        span { font-size: 1.5rem; }
       }
-
-      .member-name {
-        text-shadow: 1px 1px 2px #000000;
-      }
-
-      .group-member-level {
-        text-align: center;
-        font-size: 1.2em;
-        color: rgb(221, 221, 221);
-        text-shadow: 1px 1px 2px #000000;
-      }
-
-      .group-member-leader {
-        display: inline-block;
-        background: url(../../../assets/images/group/crown.svg) right / cover
-          no-repeat;
-        width: 1vw;
-        height: 1vw;
-        margin-right: 0.25em;
-      }
-
+      .member-details { min-width: 0; flex: 1; }
+      .member-heading { display: flex; align-items: baseline; gap: .5rem; }
+      .member-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-shadow: 1px 1px 3px #000; }
+      .member-name small { font-size: .7em; color: #d1c4a1; }
+      .group-member-level { color: #d1c4a1; font-size: 1.12em; text-shadow: 1px 1px 3px #000; }
       .group-member-dead {
-        display: inline-block;
-        background: url(../../../assets/images/group/skull.svg) right / cover
-          no-repeat;
-        width: 1vw;
-        height: 1vw;
+        position: absolute; right: .2rem; bottom: .2rem;
+        width: 1.2rem; height: 1.2rem;
+        background: url(../../../assets/images/group/skull.svg) center / contain no-repeat;
       }
-
       .group-member-health {
-        width: 14vw;
-        background: url(../../../assets/images/group/healthbar.svg) center /
-          contain no-repeat;
-        padding-left: 1vw;
-        padding-right: 1vw;
-        margin-bottom: 5%;
-        margin-top: 1%;
-
+        box-sizing: border-box;
+        width: 100%;
+        height: .75rem;
+        background: #291d1b;
+        border: 1px solid #7d7362;
+        margin-top: .4rem;
+        overflow: hidden;
+        &.unknown { opacity: .5; }
         .group-member-health-value {
-          transition: width 0.8s ease-in-out;
-          height: 0.79vw;
-          position: relative;
-          overflow: hidden;
-          background: url(../../../assets/images/group/healthamount.svg) center /
-            cover no-repeat;
+          transition: width .35s ease-in-out;
+          height: 100%;
+          background: linear-gradient(#ad423c, #6c231f);
         }
       }
     }

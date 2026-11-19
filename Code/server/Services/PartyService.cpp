@@ -91,7 +91,7 @@ void PartyService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
 
     spdlog::debug("[Party] New notify player {:x} {}", notify.PlayerId, notify.Username.c_str());
 
-    GameServer::Get()->SendToPlayers(notify, acEvent.pPlayer);
+    GameServer::Get()->SendToPlayers(notify);
 
     auto* player = acEvent.pPlayer;
     auto& party = m_parties[kGlobalPartyId];

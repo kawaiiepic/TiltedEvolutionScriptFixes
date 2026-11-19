@@ -11,14 +11,20 @@
       <thead class="list-header">
         <tr>
           <th>{{ 'COMPONENT.PARTY_LIST.TABLE_HEADERS.LEVEL' | transloco }}</th>
-          <th>{{ 'COMPONENT.PARTY_LIST.TABLE_HEADERS.NAME' | transloco }}</th>
+          <th>Character</th>
           <th>Location</th>
         </tr>
       </thead>
       <tbody class="listBody">
         <tr *ngFor="let player of playerList$ | async">
           <td>{{ player.level }}</td>
-          <td>{{ player.name }}</td>
+          <td class="campaign-character">
+            <ng-container *ngIf="portraits$ | async as portraits">
+              <img *ngIf="portraits.get(player.id) as portrait; else avatarFallback" [src]="portrait" alt="">
+              <ng-template #avatarFallback><span class="campaign-avatar-fallback">{{ player.name.slice(0, 1) || '?' }}</span></ng-template>
+            </ng-container>
+            <span>{{ player.name }} <small *ngIf="isLocal(player.id)">(You)</small></span>
+          </td>
           <td>{{ player.cellName }}</td>
         </tr>
       </tbody>

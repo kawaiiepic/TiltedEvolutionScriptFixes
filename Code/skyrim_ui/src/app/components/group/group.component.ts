@@ -45,6 +45,9 @@ export class GroupComponent implements OnInit, OnDestroy {
     left: '0%',
   });
   public settings = this.settingService.settings;
+  get portraits$() { return this.clientService.characterPortraits; }
+  isLocal(id: number): boolean { return id === this.clientService.localPlayerId; }
+  trackPlayer(_index: number, player: Player): number { return player.id; }
 
   constructor(
     private readonly destroy$: DestroyService,
@@ -64,13 +67,7 @@ export class GroupComponent implements OnInit, OnDestroy {
         }
         return members
           .map(member => ({ ...member, isOwner: member.id === group.owner }))
-          .sort((a, b) =>
-            (group.owner === a.id) === (group.owner === b.id)
-              ? 0
-              : group.owner === a.id
-              ? -1
-              : 1,
-          );
+          .sort((a, b) => Number(this.isLocal(b.id)) - Number(this.isLocal(a.id)) || a.name.localeCompare(b.name));
       }),
     );
   }

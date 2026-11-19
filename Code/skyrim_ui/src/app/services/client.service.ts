@@ -579,6 +579,8 @@ export class ClientService implements OnDestroy {
           name: username,
           id: playerId,
           connected: true,
+          online: true,
+          isLoaded: playerId === this.localPlayerId,
           level: level,
           cellName: cellName,
         }),

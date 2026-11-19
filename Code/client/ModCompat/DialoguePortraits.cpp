@@ -3,6 +3,7 @@
 #include "Phantasm_API.h"
 
 #include <World.h>
+#include <Services/PartyService.h>
 #include <Actor.h>
 #include <Messages/NotifyPlayerDialogue.h>
 #include <OverlayApp.hpp>
@@ -142,15 +143,11 @@ void Update(World& aWorld, TiltedPhoques::OverlayApp* apOverlay, uint32_t aLocal
     if (!apOverlay || now < s_nextUpdate)
         return;
     s_nextUpdate = now + std::chrono::milliseconds(500);
-    if (s_panels.empty())
-    {
-        CancelShot();
-        return;
-    }
     if (!Discover())
         return;
 
     std::set<uint32_t> wanted;
+    if (aLocalPlayerId) wanted.insert(aLocalPlayerId);
     for (const auto& [actorId, voters] : s_panels)
     {
         for (const uint32_t id : voters)
@@ -159,6 +156,11 @@ void Update(World& aWorld, TiltedPhoques::OverlayApp* apOverlay, uint32_t aLocal
                 break;
             wanted.insert(id);
         }
+    }
+    for (const uint32_t id : aWorld.GetPartyService().GetPartyMembers())
+    {
+        if (wanted.size() >= kCacheLimit) break;
+        wanted.insert(id);
     }
     if (s_shot.Request && !wanted.contains(s_shot.Player))
         CancelShot();

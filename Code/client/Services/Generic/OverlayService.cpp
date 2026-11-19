@@ -857,6 +857,13 @@ void OverlayService::OnPlayerJoined(const NotifyPlayerJoined& acMessage) noexcep
     pArguments->SetString(3, cellName.c_str());
 
     m_pOverlay->ExecuteAsync("playerConnected", pArguments);
+    if (acMessage.PlayerId == m_transport.GetLocalPlayerId())
+    {
+        auto loaded = CefListValue::Create();
+        loaded->SetInt(0, acMessage.PlayerId);
+        loaded->SetInt(1, static_cast<int>(CalculateHealthPercentage(PlayerCharacter::Get())));
+        m_pOverlay->ExecuteAsync("setPlayer3dLoaded", loaded);
+    }
 }
 
 void OverlayService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
@@ -947,12 +954,23 @@ void OverlayService::RunPlayerHealthUpdates() noexcept
     lastSendTimePoint = now;
 
     static float s_previousPercentage = -1.f;
+    static uint32_t s_previousPlayer = 0;
+    const uint32_t localId = m_transport.GetLocalPlayerId();
+    if (localId != s_previousPlayer)
+    {
+        s_previousPlayer = localId;
+        s_previousPercentage = -1.f;
+    }
 
     const float newPercentage = CalculateHealthPercentage(PlayerCharacter::Get());
     if (newPercentage == s_previousPercentage)
         return;
 
     s_previousPercentage = newPercentage;
+    auto local = CefListValue::Create();
+    local->SetInt(0, localId);
+    local->SetDouble(1, static_cast<double>(newPercentage));
+    m_pOverlay->ExecuteAsync("setHealth", local);
 
     RequestPlayerHealthUpdate request{};
     request.Percentage = newPercentage;

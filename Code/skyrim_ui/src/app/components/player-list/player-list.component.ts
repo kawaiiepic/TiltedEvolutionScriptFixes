@@ -16,6 +16,8 @@ export class PlayerListComponent {
   playerList$: Observable<(Player & { isMember: boolean })[]>;
   playerListLength$: Observable<number>;
   isPartyLeader$: Observable<boolean>;
+  get portraits$() { return this.clientService.characterPortraits; }
+  isLocal(id: number): boolean { return id === this.clientService.localPlayerId; }
 
   constructor(
     private readonly playerListService: PlayerListService,
@@ -32,8 +34,8 @@ export class PlayerListComponent {
         }
         return players.map(player => ({
           ...player,
-          isMember: members.includes(player.id),
-        }));
+          isMember: !!members?.includes(player.id),
+        })).sort((a, b) => Number(this.isLocal(b.id)) - Number(this.isLocal(a.id)) || a.name.localeCompare(b.name));
       }),
       share({
         connector: () => new ReplaySubject(1),
@@ -46,7 +48,7 @@ export class PlayerListComponent {
     this.isPartyLeader$ = this.groupService.group.asObservable().pipe(
       map(
         group =>
-          group.isEnabled && group.owner == this.clientService.localPlayerId,
+          !!group?.isEnabled && group.owner == this.clientService.localPlayerId,
       ),
       share({
         connector: () => new ReplaySubject(1),
