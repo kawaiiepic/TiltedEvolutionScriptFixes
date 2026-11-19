@@ -2,6 +2,7 @@
 
 #include <World.h>
 #include <Games/Overrides.h>
+#include <Games/ActorExtension.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
 #include <Events/CellChangeEvent.h>
@@ -34,6 +35,12 @@ namespace
 constexpr uint64_t kObjectAnimationDelayMs = 50;
 constexpr uint64_t kMaxAnimationClockSkewMs = 1000;
 constexpr size_t kMaxPendingObjectAnimations = 128;
+
+bool IsPlayerTravelDoor(const TESObjectREFR& acObject, Actor& aActivator) noexcept
+{
+    return acObject.baseForm && acObject.baseForm->formType == FormType::Door &&
+        aActivator.GetExtension()->IsPlayer() && acObject.extraData.GetByType(ExtraDataType::Teleport);
+}
 }
 
 ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport)
@@ -340,6 +347,10 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
     if (acEvent.pObject->baseForm && acEvent.pObject->baseForm->formType == FormType::Furniture)
         return;
 
+    // The local activation already runs the transition and any attached scripts.
+    if (IsPlayerTravelDoor(*acEvent.pObject, *acEvent.pActivator))
+        return;
+
     if (Lock* pLock = acEvent.pObject->GetLock())
     {
         if (pLock->flags & 0xFF)
@@ -406,7 +417,8 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
         return;
     }
 
-    if (!pObject->baseForm || pObject->baseForm->formType == FormType::Furniture)
+    if (!pObject->baseForm || pObject->baseForm->formType == FormType::Furniture ||
+        IsPlayerTravelDoor(*pObject, *pActor))
         return;
 
     if (pObject->baseForm->formType == FormType::Door)

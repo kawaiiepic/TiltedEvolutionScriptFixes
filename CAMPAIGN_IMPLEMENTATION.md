@@ -20,6 +20,7 @@ Baseline is master at `92a8552`. Preview run 44469160804 passed Windows builds f
 | PENDING | Stable native dialogue choice and outcome, authoritatively relay persuasion, intimidation, bribery, skill checks, gold and relationships while isolating personal effects. |
 | PENDING | Server travel invitation state, ten-second countdown, accept/decline/change/cancel, expiry, disconnection and partial failures, destination validation, idempotent transition acknowledgements and arrival coordination. |
 | PENDING | Native fast travel, carriage, boat, dungeon/interior/worldspace and modded or scripted transport. Preserve native restrictions, fares, quest fragments, safe arrivals, and one campaign time advance. Existing carriage arrival relay is narrower. |
+| IMPLEMENTED | Generic activation skips replication of player-operated doors with native teleport extra data. Ordinary doors, NPC activations and lock messages keep their existing paths. See `ObjectService.cpp`. In-game validation with a scripted load door is pending. |
 | PENDING | Exclude non-gameplay moves including save loads, respawns, arrests and corrections. Support follow-up invitations where transitions cannot be safely delayed. |
 | PENDING | Crime and arrest isolation, surrender, fines, jail and escape, confiscation/stolen inventory and shared guard/world effects without shared bounties. |
 | PENDING | Persistent reset-aware dungeon puzzle states, activation deduplication, recovery and late joins without script or reward replay. |
