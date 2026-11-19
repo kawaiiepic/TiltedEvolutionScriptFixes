@@ -7,7 +7,7 @@ import select
 import socket
 import subprocess
 import tempfile
-import time
+import threading
 
 parser = argparse.ArgumentParser(description="Exercise the shared campaign over the server's real transport.")
 parser.add_argument("server", type=pathlib.Path)
@@ -28,7 +28,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as bound:
 class Runner:
     def __init__(self, directory):
         self.directory = directory
-        self.log = b""
+        self.log = bytearray()
+        self.log_changed = threading.Condition()
+        self.log_finished = False
         self.master, slave = pty.openpty()
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = os.pathsep.join(filter(None, (str(server.parent), env.get("LD_LIBRARY_PATH"))))
@@ -37,16 +39,28 @@ class Runner:
             stdin=slave, stdout=slave, stderr=slave, env=env
         )
         os.close(slave)
+        # Keep draining the PTY while the clients run. A full PTY blocks the server logger.
+        self.reader = threading.Thread(target=self.read_log, daemon=True)
+        self.reader.start()
+
+    def read_log(self):
+        try:
+            while data := os.read(self.master, 65536):
+                with self.log_changed:
+                    self.log.extend(data)
+                    self.log_changed.notify_all()
+        except OSError:
+            pass  # Linux returns EIO when the server closes the slave PTY.
+        finally:
+            with self.log_changed:
+                self.log_finished = True
+                self.log_changed.notify_all()
 
     def expect(self, output, timeout=20):
-        deadline = time.monotonic() + timeout
-        while output.encode() not in self.log and time.monotonic() < deadline:
-            if select.select([self.master], [], [], 0.15)[0]:
-                try:
-                    self.log += os.read(self.master, 65536)
-                except OSError:
-                    break
-        assert output.encode() in self.log, self.log.decode(errors="replace")
+        expected = output.encode()
+        with self.log_changed:
+            self.log_changed.wait_for(lambda: expected in self.log or self.log_finished, timeout)
+            assert expected in self.log, self.log.decode(errors="replace")
 
     def command(self, line):
         os.write(self.master, (line + "\n").encode())
@@ -64,13 +78,10 @@ class Runner:
                     self.proc.kill()
                     self.proc.wait(timeout=5)
         finally:
-            if select.select([self.master], [], [], 0)[0]:
-                try:
-                    self.log += os.read(self.master, 65536)
-                except OSError:
-                    pass
+            self.reader.join(timeout=5)
             os.close(self.master)
-        print(self.log.decode(errors="replace"))
+        with self.log_changed:
+            print(self.log.decode(errors="replace"))
 
 def test_client(mode, build_id=version):
     timeout = 30 if mode == "carriage-leader" else 15
