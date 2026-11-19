@@ -86,6 +86,12 @@ void World::Update() noexcept
 
     auto& overlay = GetOverlayService();
     overlay.ProcessBrowserReady();
+    if (m_hasLoadedCharacter)
+    {
+        const auto* pUI = UI::Get();
+        if (pUI && pUI->GetMenuOpen("Main Menu"))
+            m_hasLoadedCharacter = false;
+    }
     if (!m_hasLoadedCharacter)
     {
         m_hasLoadedCharacter = m_transport.CanEnterWorld();
@@ -152,7 +158,10 @@ void World::UpdateMainMenu() noexcept
         now - m_lastMenuUpdate < 30 || m_transport.IsOnline()) return;
     m_lastMenuUpdate = now;
     auto* ui = UI::Get();
-    if (!ui || (!ui->IsMainMenuOpen() && !overlay.GetMainMenu() && !CharacterCheckpoints::NeedsStagingPump())) return;
+    if (!ui) return;
+    const bool mainMenu = ui->IsMainMenuOpen();
+    if (mainMenu) m_hasLoadedCharacter = false;
+    if (!mainMenu && !overlay.GetMainMenu() && !CharacterCheckpoints::NeedsStagingPump()) return;
 
     const auto frame = std::chrono::high_resolution_clock::now();
     const double delta = std::chrono::duration<double>(frame - m_lastFrameTime).count();

@@ -192,7 +192,7 @@ void OverlayClient::ProcessConnectMessage(CefRefPtr<CefListValue> aEventArgs)
 void OverlayClient::ProcessDisconnectMessage(CefRefPtr<CefListValue> aEventArgs)
 {
     using Action = CharacterCheckpoints::DisconnectAction;
-    const auto command = aEventArgs->GetString(0).ToString();
+    const auto command = aEventArgs && aEventArgs->GetSize() ? aEventArgs->GetString(0).ToString() : std::string{};
     Action action = Action::Request;
     if (command == "retry") action = Action::Retry;
     else if (command == "cancel") action = Action::Cancel;
