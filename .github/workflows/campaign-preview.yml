@@ -19,6 +19,7 @@ on:
       - 'Code/client/Services/Generic/TransportService.cpp'
       - 'Code/client/Services/Generic/InputService.cpp'
       - 'Code/client/Services/InputService.h'
+      - 'Code/skyrim_ui/**'
 
 permissions:
   contents: read
