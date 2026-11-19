@@ -21,6 +21,7 @@
 #include <Services/CombatService.h>
 #include <Services/WeatherService.h>
 #include <Services/MapService.h>
+#include <Services/PluginMessagingService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -28,7 +29,8 @@
 #include <Games/Skyrim/Interface/UI.h>
 #include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 #include <ModCompat/CharacterCheckpoints.h>
-#include <ModCompat/BehaviorVar.h>  
+#include <ModCompat/BehaviorVar.h>
+#include <ModCompat/ImmersiveInteractions.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -58,6 +60,8 @@ World::World()
     ctx().emplace<CombatService>(*this, m_transport, m_dispatcher);
     ctx().emplace<WeatherService>(*this, m_transport, m_dispatcher);
     ctx().emplace<MapService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<PluginMessagingService>(m_dispatcher);
+    ImmersiveInteractions::RegisterMessaging();
 
     BehaviorVar::Get()->Init();
 }
@@ -120,6 +124,11 @@ void World::SetMenuWindowThread(uint32_t aThreadId) noexcept
 {
     if (aThreadId && entt::locator<World>::has_value())
         Get().m_gameThreadId.store(aThreadId, std::memory_order_release);
+}
+
+bool World::IsGameThread() const noexcept
+{
+    return GetCurrentThreadId() == m_gameThreadId.load(std::memory_order_acquire);
 }
 
 void World::QueueCheckpointTask(std::function<void()> aTask) noexcept

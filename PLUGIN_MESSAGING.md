@@ -1,0 +1,39 @@
+# Skyrim Together plugin messaging
+
+SKSE plug-ins can use the existing Skyrim Together connection to exchange binary messages with other installed add-ons. The server treats the payload as opaque and attaches the authenticated sender's session player ID. No script resource or extra port is required.
+
+Include [PluginMessagingAPI.h](Code/client/PluginMessagingAPI.h) and resolve the versioned export from the Skyrim Together launcher at runtime.
+
+```cpp
+#include <Windows.h>
+#include "PluginMessagingAPI.h"
+
+const SkyrimTogether::PluginMessagingInterface* FindMessaging()
+{
+    auto module = GetModuleHandleW(L"SkyrimTogether.exe");
+    if (!module)
+        module = GetModuleHandleW(nullptr);
+
+    const auto query = reinterpret_cast<SkyrimTogether::QueryPluginMessaging>(
+        GetProcAddress(module, SkyrimTogether::PluginMessagingExport));
+    if (!query)
+        return nullptr;
+
+    const SkyrimTogether::PluginMessagingInterface* api = nullptr;
+    return query(SkyrimTogether::PluginMessagingVersion, &api) ==
+                   SkyrimTogether::PluginMessageResult::Ok ? api : nullptr;
+}
+```
+
+- Register one callback for a namespaced channel such as `example.interactions.v1`. A channel accepts up to 64 ASCII characters. Use letters, digits, dots, underscores and hyphens.
+- Call `Send` on the game window thread. Pass a session player ID, `Nearby` for Skyrim Together's replication range, or `Broadcast` for all other loaded players. Each reliable message accepts up to 4 KiB. The server rate-limits each sender. A successful send means the local transport accepted the message.
+- Receive callbacks run on the game window thread. Copy the payload inside the callback if you need it later. Unregister on the game thread before unloading callback code or freeing its context.
+- Use `LocalPlayerId` and `ResolvePlayerFormId` on the game window thread. A FormID of zero means the player is unavailable locally. Resolve the proxy again when needed because it can change when the player leaves range or reconnects.
+
+## Immersive Interactions
+
+The built-in adapter forwards successful standalone Papyrus `Actor.PlayIdle` calls using idle forms owned by `ImmersiveInteractions.esp`. It resolves those forms through the normal load-order mapping and replays them on the sender's loaded proxy. Install the mod and its animation dependencies on participating clients.
+
+This adapter covers the idle playback path. Paired or target-driven actions, script effects and animation replacer conditions that apply only to the local player still need separate integration. In-game validation is pending.
+
+[Immersive Interactions – Animated Actions](https://www.nexusmods.com/skyrimspecialedition/mods/47670)

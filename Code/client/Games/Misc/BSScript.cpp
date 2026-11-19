@@ -1,5 +1,6 @@
 #include <Misc/BSScript.h>
 #include <Misc/NativeFunction.h>
+#include <ModCompat/ImmersiveInteractions.h>
 
 #include <World.h>
 #include <Events/PapyrusFunctionRegisterEvent.h>
@@ -27,6 +28,7 @@ void TP_MAKE_THISCALL(HookRegisterPapyrusFunction, BSScript::IVirtualMachine, Na
     PapyrusFunctionRegisterEvent event(apFunction->functionName.AsAscii(), apFunction->typeName.AsAscii(), apFunction->functionAddress);
 
     runner.Trigger(std::move(event));
+    ImmersiveInteractions::BindPlayIdle(*apFunction);
 
     TiltedPhoques::ThisCall(RealRegisterPapyrusFunction, apThis, apFunction);
 }
