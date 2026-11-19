@@ -1026,7 +1026,9 @@ bool TP_MAKE_THISCALL(HookActivate, TESObjectREFR, TESObjectREFR* apActivator, u
 
     // Exclude books from activation since only reading them removes them from the cell
     // Note: Books are now unsynced 
-    if (!ScopedAnimationOverride::IsOverriden() && pActivator && apThis->baseForm &&
+    // A replicated activation can activate other references through the native call.
+    if (!ScopedAnimationOverride::IsOverriden() && !ScopedActivateOverride::IsOverriden() &&
+        pActivator && apThis->baseForm &&
         apThis->baseForm->formType != FormType::Book)
     {
         auto openState = TESObjectREFR::kNone;
