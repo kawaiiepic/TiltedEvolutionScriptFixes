@@ -82,10 +82,32 @@ void sendPlayerMessage(const ChatMessageType acType, const String acContent, Pla
     }
 }
 
-void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) const noexcept
+void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) noexcept
 {
     const auto& text = acMessage.Packet.ChatMessage;
-    if (m_world.GetPlayerService().HandleTravelCommand(*acMessage.pPlayer, {text.data(), text.size()}))
+    if (acMessage.Packet.MessageType == kCustodyStatus)
+    {
+        const auto& player = *acMessage.pPlayer;
+        if (!player.GetCharacter() || !player.GetCellComponent() || !player.GetParty().JoinedPartyId ||
+            (text != "1" && text != "0"))
+            return;
+
+        const bool inCustody = text == "1";
+        const bool changed = inCustody ? m_playersInCustody.insert(player.GetId()).second :
+                                       m_playersInCustody.erase(player.GetId()) != 0;
+        if (changed)
+        {
+            NotifyChatMessageBroadcast notify{};
+            notify.MessageType = kSystemMessage;
+            notify.ChatMessage = fmt::format("{} {}.", player.GetUsername().c_str(),
+                inCustody ? "is in custody" : "is no longer in custody").c_str();
+            GameServer::Get()->SendToParty(notify, player.GetParty(), &player);
+        }
+        return;
+    }
+    const std::string_view command{text.data(), text.size()};
+    if (m_world.GetPlayerService().HandleTravelCommand(*acMessage.pPlayer, command) ||
+        m_world.GetCalendarService().HandleRestCommand(*acMessage.pPlayer, command))
         return;
     const auto character = acMessage.pPlayer->GetCharacter();
     if (!character)
@@ -431,6 +453,7 @@ void OverlayService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
     LeaveDialogue(acEvent.pPlayer->GetId());
     m_visiblePanels.erase(acEvent.pPlayer->GetId());
+    m_playersInCustody.erase(acEvent.pPlayer->GetId());
     for (auto& [actorId, session] : m_dialogueSessions)
     {
         session.Votes.erase(acEvent.pPlayer->GetId());

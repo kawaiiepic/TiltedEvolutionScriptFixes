@@ -35,7 +35,7 @@ protected:
     /**
      * @brief Applies regex on chat message and relays it to other clients.
      */
-    void HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) const noexcept;
+    void HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) noexcept;
     void HandlePlayerJoin(const PlayerEnterWorldEvent& acEvent) const noexcept;
     void OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& acMessage) noexcept;
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
@@ -66,6 +66,7 @@ private:
     void SendDialogueState(uint32_t aActorId, const DialogueSession& acSession) const noexcept;
 
     World& m_world;
+    std::set<uint32_t> m_playersInCustody;
     std::map<uint32_t, DialogueSession> m_dialogueSessions;
     std::map<uint32_t, uint32_t> m_playerDialogues; // Player id -> actor id.
     std::map<uint32_t, std::map<uint32_t, NotifyPlayerDialogue>> m_visiblePanels;

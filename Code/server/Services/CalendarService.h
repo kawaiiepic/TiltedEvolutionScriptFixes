@@ -3,8 +3,13 @@
 #include <Events/PacketEvent.h>
 #include <DateTime.h>
 #include <Structs/GameId.h>
+#include <chrono>
+#include <optional>
+#include <set>
+#include <string_view>
 
 struct World;
+struct Player;
 struct UpdateEvent;
 struct PlayerJoinEvent;
 
@@ -22,6 +27,7 @@ public:
     using TTime = std::pair<int, int>;
     using TDate = std::tuple<int, int, int>;
 
+    bool HandleRestCommand(const Player& acPlayer, std::string_view aCommand) noexcept;
     bool SetTime(int aHour, int aMinutes, float aScale) noexcept;
     bool SetDate(int aDay, int aMonth, float aYear) noexcept;
 
@@ -38,7 +44,22 @@ public:
 private:
     void OnUpdate(const UpdateEvent&) noexcept;
     void OnPlayerJoin(const PlayerJoinEvent&) noexcept;
-    void SendTimeResync() noexcept;
+    void SendTimeResync(uint8_t aRestHours = 0) noexcept;
+    std::set<uint32_t> GetRestVoters() const;
+    void UpdateRestVote() noexcept;
+
+    struct RestVote
+    {
+        uint32_t Id{};
+        uint32_t Organizer{};
+        uint32_t Hours{};
+        bool Sleep{};
+        std::set<uint32_t> Voters;
+        std::set<uint32_t> Approved;
+        std::chrono::steady_clock::time_point Deadline;
+    };
+    std::optional<RestVote> m_restVote;
+    uint32_t m_nextRestVote{};
 
     DateTime m_dateTime;
     uint64_t m_lastTick = 0;

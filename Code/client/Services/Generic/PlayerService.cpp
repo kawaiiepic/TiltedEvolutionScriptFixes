@@ -25,6 +25,8 @@
 #include <Messages/RequestCarriageTravel.h>
 #include <Messages/RequestFastTravelCatchUp.h>
 #include <Messages/RequestTravelResult.h>
+#include <ChatMessageTypes.h>
+#include <Messages/SendChatMessageRequest.h>
 
 #include <Structs/CarriageTravel.h>
 #include <Structs/PlayerRevive.h>
@@ -80,6 +82,26 @@ void PlayerService::OnUpdate(const UpdateEvent&) noexcept
     RunCarriageTravelUpdates();
     RunFastTravelCatchUp();
     UpdateGroupTravelArrival();
+    ReportCustodyStatus();
+}
+
+void PlayerService::ReportCustodyStatus() noexcept
+{
+    const auto* pPlayer = PlayerCharacter::Get();
+    const auto* pUI = UI::Get();
+    static const BSFixedString s_loadingMenu("Loading Menu");
+    if (!m_transport.IsOnline() || !m_reportedCell || !pPlayer || !pUI || pUI->GetMenuOpen(s_loadingMenu))
+        return;
+
+    const bool inCustody = pPlayer->currentPrisonFaction != nullptr;
+    if (inCustody == m_reportedInCustody)
+        return;
+
+    SendChatMessageRequest request{};
+    request.MessageType = kCustodyStatus;
+    request.ChatMessage = inCustody ? "1" : "0";
+    if (m_transport.Send(request))
+        m_reportedInCustody = inCustody;
 }
 
 void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -97,6 +119,7 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     m_carriage.reset();
     m_carriageTeleport.reset();
     m_lastGroupTravelId = 0;
+    m_reportedInCustody = false;
     m_groupTravelArrival.reset();
     m_reportedCell = {};
     m_fastTravelOrigin = {};

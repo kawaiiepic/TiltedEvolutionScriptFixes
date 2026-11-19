@@ -36,6 +36,7 @@ private:
     Campaign::FormSyncPolicies m_lockPolicies;
     Campaign::FormSyncPolicies m_cellLockPolicies;
     Campaign::LockJournal m_lockJournal;
+    Campaign::FormSyncPolicies m_puzzleGates{"shared-puzzle-gates.conf"};
     Campaign::FormSyncPolicies m_stockCells;
     Campaign::ContainerJournal m_stockJournal;
 

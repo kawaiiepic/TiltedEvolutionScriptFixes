@@ -6,6 +6,7 @@ void LockChangeRequest::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) con
     CellId.Serialize(aWriter);
     Serialization::WriteBool(aWriter, IsLocked);
     aWriter.WriteBits(LockLevel, 8);
+    Serialization::WriteBool(aWriter, NativeReset);
 }
 
 void LockChangeRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -19,4 +20,5 @@ void LockChangeRequest::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) n
     uint64_t lockLevel = 0;
     aReader.ReadBits(lockLevel, 8);
     LockLevel = lockLevel & 0xFF;
+    NativeReset = Serialization::ReadBool(aReader);
 }

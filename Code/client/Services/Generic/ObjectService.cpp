@@ -57,6 +57,31 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_assignObjectConnection = aDispatcher.sink<AssignObjectsResponse>().connect<&ObjectService::OnAssignObjectsResponse>(this);
     m_scriptAnimationConnection = aDispatcher.sink<ScriptAnimationEvent>().connect<&ObjectService::OnScriptAnimationEvent>(this);
     m_scriptAnimationNotifyConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&ObjectService::OnNotifyScriptAnimation>(this);
+    EventDispatcherManager::Get()->resetEvent.RegisterSink(this);
+}
+
+ObjectService::~ObjectService()
+{
+    EventDispatcherManager::Get()->resetEvent.UnRegisterSink(this);
+}
+
+BSTEventResult ObjectService::OnEvent(const TESResetEvent* apEvent, const EventDispatcher<TESResetEvent>*)
+{
+    if (!apEvent || !apEvent->object)
+        return BSTEventResult::kOk;
+
+    const uint32_t formId = apEvent->object->formID;
+    m_world.GetRunner().Queue([this, formId]()
+    {
+        auto* pObject = Cast<TESObjectREFR>(TESForm::GetById(formId));
+        if (!pObject || !pObject->baseForm || pObject->baseForm->formType != FormType::Door ||
+            pObject->IsTemporary() || pObject->extraData.GetByType(ExtraDataType::Teleport))
+            return;
+
+        const auto* pLock = pObject->GetLock();
+        SendLockChange(LockChangeEvent(formId, pLock && pLock->IsLocked(), pLock ? pLock->lockLevel : 0), true);
+    });
+    return BSTEventResult::kOk;
 }
 
 static bool IsNoResetZone(const TESObjectCELL* apCell) noexcept
@@ -121,8 +146,25 @@ bool ShouldSyncObject(const TESObjectREFR* apObject, const Set<const TESObjectRE
 
 bool ShouldSyncInteraction(const TESObjectREFR& acObject) noexcept
 {
-    return !acObject.baseForm || acObject.baseForm->formType != FormType::Container ||
-           ShouldSyncObject(&acObject, GetPlayerStashContainers());
+    if (!acObject.baseForm)
+        return true;
+    if (acObject.baseForm->formType == FormType::Container)
+        return ShouldSyncObject(&acObject, GetPlayerStashContainers());
+    if (acObject.baseForm->formType != FormType::Door)
+        return true;
+
+    const auto* pCell = acObject.GetParentCellEx();
+    if (!pCell || pCell->worldspace)
+        return true;
+
+    const auto* pModManager = ModManager::Get();
+    if (!pModManager)
+        return true;
+    for (const auto* pFaction : pModManager->factions)
+        if (pFaction && pFaction->crimeData.jailMarker &&
+            pFaction->crimeData.jailMarker->GetParentCellEx() == pCell)
+            return false;
+    return true;
 }
 
 static void ApplyLockState(TESObjectREFR& aObject, bool aLocked, uint8_t aLevel) noexcept
@@ -206,7 +248,8 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 
     for (TESObjectREFR* pObject : objects)
     {
-        if (!ShouldSyncObject(pObject, playerStashContainers))
+        if (!ShouldSyncObject(pObject, playerStashContainers) ||
+            (pObject->baseForm && pObject->baseForm->formType == FormType::Door && !ShouldSyncInteraction(*pObject)))
         {
             spdlog::warn("Excluding sync for {:X}", pObject->formID);
             continue;
@@ -292,7 +335,8 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
             continue;
         }
 
-        if (!ShouldSyncObject(pObject, playerStashContainers))
+        if (!ShouldSyncObject(pObject, playerStashContainers) ||
+            (pObject->baseForm && pObject->baseForm->formType == FormType::Door && !ShouldSyncInteraction(*pObject)))
             continue;
 
         CreateObjectEntity(pObject->formID, objectData.ServerId);
@@ -457,6 +501,11 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
 
 void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
 {
+    SendLockChange(acEvent, false);
+}
+
+void ObjectService::SendLockChange(const LockChangeEvent& acEvent, bool aNativeReset) noexcept
+{
     if (!m_transport.IsConnected())
         return;
 
@@ -485,6 +534,10 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
         return;
     }
 
+    if (aNativeReset && request.CellId != m_cell)
+        return;
+
+    request.NativeReset = aNativeReset;
     request.IsLocked = acEvent.IsLocked;
     request.LockLevel = acEvent.LockLevel;
 
@@ -522,7 +575,8 @@ void ObjectService::OnScriptAnimationEvent(const ScriptAnimationEvent& acEvent) 
     auto& mods = m_world.GetModSystem();
     auto* pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormID));
     auto* pCell = pObject ? pObject->GetParentCellEx() : nullptr;
-    if (!m_transport.IsOnline() || !pCell || !mods.GetServerModId(acEvent.FormID, request.Id) ||
+    if (!m_transport.IsOnline() || !pCell || !ShouldSyncInteraction(*pObject) ||
+        !mods.GetServerModId(acEvent.FormID, request.Id) ||
         mods.GetGameId(request.Id) != acEvent.FormID ||
         !mods.GetServerModId(pCell->formID, request.Cell) || request.Cell != m_cell)
         return;
@@ -583,7 +637,7 @@ void ObjectService::OnUpdate(const UpdateEvent&) noexcept
             continue;
         }
 
-        if (!Cast<Actor>(pObject))
+        if (!Cast<Actor>(pObject) && ShouldSyncInteraction(*pObject))
         {
             BSFixedString eventName(it->EventName.c_str());
             pObject->PlayAnimation(&eventName);

@@ -599,9 +599,9 @@ void OverlayService::RefreshDialogueSession() noexcept
     const uint32_t cHandle = pManager->speaker.handle.iBits;
     auto* pSpeaker = TESObjectREFR::GetByHandle(cHandle);
 
-    // Talking activators and other non-actor speakers never participate in
-    // shared NPC dialogue. Release any previous grant before leaving them local.
-    if (pSpeaker && !Cast<Actor>(pSpeaker))
+    // Guard dialogue can apply personal crime and custody consequences.
+    const auto* pActor = Cast<Actor>(pSpeaker);
+    if (pSpeaker && (!pActor || pActor->IsGuard()))
     {
         if (m_dialogueToken)
             CloseDialogueSession();
@@ -745,15 +745,14 @@ bool OverlayService::CanSelectDialogue(const char* apText) noexcept
 
     RefreshDialogueSession();
 
-    // A resolved non-actor speaker (for example a talking statue) cannot
-    // receive an NPC ownership grant. Let Skyrim execute its native choice.
-    // An unresolved speaker is not evidence that the conversation is local:
-    // normal NPCs must still wait for a grant.
+    // Talking activators and guards use local native choices. Keep waiting
+    // for a grant when the speaker cannot be resolved yet.
     const auto* pManager = MenuTopicManager::Get();
     if (pManager && pManager->menuOpen && pManager->speaker)
     {
         auto* pSpeaker = TESObjectREFR::GetByHandle(pManager->speaker.handle.iBits);
-        if (pSpeaker && !Cast<Actor>(pSpeaker))
+        const auto* pActor = Cast<Actor>(pSpeaker);
+        if (pSpeaker && (!pActor || pActor->IsGuard()))
             return true;
     }
 
