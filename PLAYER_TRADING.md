@@ -1,0 +1,7 @@
+# Player trading
+
+The native Together client and dedicated server include a lightweight two-player trade session. Install Prisma UI (SKSE) on each client; the server does not need Prisma UI, SKSE or a plugin messaging relay. The view ships under Data/PrismaUI/views/SkyrimTogetherTrade/index.html.
+
+In the world, look at a nearby player and press Shift+E. Accept the invitation, choose quantities in the inventory panel (gold is an ordinary inventory item), and confirm on both clients. Editing an offer clears both confirmations. One-sided gifts are allowed. Cancellation, moving out of range, logout and idle timeout close a session. Trade uses native inventory entry deltas, including the existing improvement and enchantment fields. Quest and equipped items are excluded. The inventory display is limited to 256 stacks per player per session. Only the existing inventory replication fields are preserved; custom names and exact instance removal are not newly implemented. There is no anti-cheat, journal, rollback prevention or crash-safe transaction persistence.
+
+The feature targets trusted friends. Native client and server require the same build. The C++ build, Prisma focus/input behavior, hotkey targeting, and actual inventory changes (especially multiple enchanted or improved copies of one item) require a two-client in-game test. Back up saves before testing. Shift+E currently uses a camera-center target approximation, not an engine crosshair pick; it does not suppress the underlying Skyrim E action.

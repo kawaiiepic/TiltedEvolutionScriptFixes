@@ -61,6 +61,7 @@ enum ClientOpcode : unsigned char
     kRequestTravelResult,
     kRequestMapDiscovery,
     kRequestPluginMessage,
+    kRequestTrade,
     kClientOpcodeMax
 };
 
@@ -128,5 +129,6 @@ enum ServerOpcode : unsigned char
     kNotifyMapDiscoveries,
     kNotifyPlayerMapMarkers,
     kNotifyPluginMessage,
+    kNotifyTrade,
     kServerOpcodeMax
 };

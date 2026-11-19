@@ -59,6 +59,7 @@
 #include <Messages/RequestTravelResult.h>
 #include <Messages/MapDiscovery.h>
 #include <Messages/PluginMessage.h>
+#include <Messages/Trade.h>
 #include <Messages/RequestPlayerHealthUpdate.h>
 #include <Messages/RequestWeatherChange.h>
 #include <Messages/RequestSetWaypoint.h>
@@ -77,7 +78,7 @@ struct ClientMessageFactory
             PartyChangeLeaderRequest, PartyKickRequest, RequestActorValueChanges, RequestActorMaxValueChanges, EnterExteriorCellRequest, RequestHealthChangeBroadcast, ActivateRequest, LockChangeRequest, AssignObjectsRequest, RequestDeathStateChange, ShiftGridCellRequest,
             RequestOwnershipTransfer, RequestOwnershipClaim, RequestObjectInventoryChanges, SpellCastRequest, ProjectileLaunchRequest, InterruptCastRequest, AddTargetRequest, ScriptAnimationRequest, DrawWeaponRequest, MountRequest, NewPackageRequest, RequestRespawn, SyncExperienceRequest,
             RequestEquipmentChanges, SendChatMessageRequest, TeleportCommandRequest, PlayerRespawnRequest, DialogueRequest, SubtitleRequest, PlayerDialogueRequest, PlayerLevelRequest, TeleportRequest, RequestPlayerHealthUpdate, RequestWeatherChange, RequestSetWaypoint,
-            RequestRemoveWaypoint, RemoveSpellRequest, SetTimeCommandRequest, RequestActionEvents, RequestSceneState, RequestQuestSyncAck, RequestCarriageTravel, RequestCharacterSave, RequestFastTravelCatchUp, RequestTravelResult, RequestMapDiscovery, RequestPluginMessage>;
+            RequestRemoveWaypoint, RemoveSpellRequest, SetTimeCommandRequest, RequestActionEvents, RequestSceneState, RequestQuestSyncAck, RequestCarriageTravel, RequestCharacterSave, RequestFastTravelCatchUp, RequestTravelResult, RequestMapDiscovery, RequestPluginMessage, RequestTrade>;
 
         return s_visitor(std::forward<T>(func));
     }

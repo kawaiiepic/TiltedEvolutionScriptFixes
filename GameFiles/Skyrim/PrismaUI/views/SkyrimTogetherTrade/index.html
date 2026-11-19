@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skyrim Together Trade</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:transparent;font:16px Arial,sans-serif;color:#e8e4dc}main{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(900px,90vw);background:#15191e;border:1px solid #68635b;border-radius:10px;padding:24px}header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #45494d;padding-bottom:14px}h1{font-size:26px;font-weight:500;margin:4px 0}small{color:#b6ad9a;letter-spacing:2px;font-size:11px}h2{font-size:16px;font-weight:500;color:#cfc4a6;margin:0 0 12px}p{color:#aeb5b9;line-height:1.5}button,input{font:inherit;color:inherit;background:#252b31;border:1px solid #555b61;border-radius:5px;padding:8px 12px}button{cursor:pointer}button:hover:not(:disabled){background:#3b4249}button:disabled{opacity:.45;cursor:default}button.primary{background:#3c5553;border-color:#708f86}input{min-width:0}input[type=number]{width:70px;padding:6px}section[hidden],div[hidden],button[hidden]{display:none!important}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}.panel{min-width:0;background:#1c2127;border:1px solid #3b4147;border-radius:6px;padding:16px}.list{height:260px;overflow-y:auto;padding-right:5px}.row{display:flex;gap:8px;align-items:center;padding:10px 0;border-bottom:1px solid #33383e}.label{flex:1;min-width:0;overflow-wrap:anywhere}.meta{font-size:12px;color:#a6abae;margin-top:4px}#search{width:100%;margin-bottom:10px}footer{display:flex;align-items:center;justify-content:space-between;margin-top:18px;gap:10px}.ready{color:#a4c9b7}.muted{color:#a6abae}.summary{padding:10px 0;color:#cfc4a6}.actions{display:flex;gap:8px}.empty{color:#949ba0;padding:20px 0}
+</style></head><body><main>
+<header><div><small>SKYRIM TOGETHER</small><h1>Player trade</h1></div><button id="close" aria-label="Cancel or close">×</button></header>
+<p id="status" role="status"></p>
+<section id="pending" hidden><div class="actions"><button id="accept" class="primary">Accept invitation</button><button id="decline">Cancel</button></div></section>
+<section id="open" hidden><div class="grid"><div class="panel"><h2>Your inventory</h2><input id="search" type="search" placeholder="Find an item or gold"><div id="mine" class="list"></div><div id="mySummary" class="summary"></div></div><div class="panel"><h2 id="otherTitle">Their offer</h2><div id="other" class="list"></div><div id="theirSummary" class="summary"></div></div></div><footer><span id="confirmation" class="muted"></span><div class="actions"><button id="cancel">Cancel</button><button id="confirm" class="primary">Confirm trade</button></div></footer></section>
+<section id="end" hidden><button id="done" class="primary">Close</button></section>
+</main><script>
+'use strict';
+const el=id=>document.getElementById(id);
+let state=null, waiting=false;
+function send(action,index=0,quantity=0){
+ if(!state||waiting||typeof window.tradeCommand!=='function')return;
+ waiting=true; window.tradeCommand([action,state.session,state.revision,index,quantity].join(':'));
+ setTimeout(()=>{waiting=false;if(state)render();},800);
+}
+function close(){if(!state)return;if(state.phase<=1){waiting=false;send(4);}else if(typeof window.tradeCommand==='function')window.tradeCommand('hide');}
+function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
+function rows(list,id,editable){
+ const container=el(id);const scroll=container.scrollTop;container.replaceChildren();
+ const query=el('search').value.trim().toLowerCase();
+ for(const item of list){
+  if(editable&&query&&!item.name.toLowerCase().includes(query))continue;
+  const row=node('div',undefined,'row'), label=node('div',undefined,'label');
+  label.append(node('div',item.name),node('div',[item.improved?'Improved':'',item.enchanted?'Enchanted':'',editable?'Owned: '+item.available:'Quantity: '+item.offered].filter(Boolean).join(' · '),'meta'));row.append(label);
+  if(editable){const input=node('input');input.type='number';input.min='0';input.max=String(item.available);input.step='1';input.value=String(item.offered);input.setAttribute('aria-label','Offer quantity for '+item.name);
+   const button=node('button',item.offered?'Update':'Offer');button.disabled=waiting;button.onclick=()=>{const qty=Number(input.value);if(Number.isInteger(qty)&&qty>=0&&qty<=item.available)send(2,item.index,qty);};
+   row.append(input,button);if(item.offered){const remove=node('button','×');remove.setAttribute('aria-label','Remove '+item.name);remove.disabled=waiting;remove.onclick=()=>send(2,item.index,0);row.append(remove);}
+  }
+  container.append(row);
+ }
+ if(!container.children.length)container.append(node('div',editable?'No matching items':'Nothing offered','empty'));container.scrollTop=scroll;
+}
+function render(){
+ const s=state;if(!s)return;
+ el('pending').hidden=s.phase!==0;el('open').hidden=s.phase!==1;el('end').hidden=s.phase<2;
+ el('status').textContent=[s.incoming?s.partner+' invited you to trade.':'Waiting for '+s.partner+' to accept…','Trading with '+s.partner+'. Both players must confirm.','Trade completed.','Trade cancelled or expired.','Trade unavailable or inventory changed.'][s.phase]||'Trade unavailable.';
+ el('accept').hidden=!s.incoming;el('accept').disabled=waiting;el('confirm').disabled=waiting||s.mineConfirmed||(!s.mine.some(x=>x.offered)&&!s.other.length);
+ if(s.phase===1){el('otherTitle').textContent=s.partner+' offers';rows(s.mine,'mine',true);rows(s.other,'other',false);
+ const offered=s.mine.filter(x=>x.offered);el('mySummary').textContent=offered.length?offered.map(x=>x.offered+' × '+x.name).join(', '):'You offer nothing (gift trade)';
+ el('theirSummary').textContent=s.other.length?s.other.length+' item type(s) offered':'No items offered';
+ el('confirmation').textContent=(s.mineConfirmed?'You: ready':'You: reviewing')+' · '+(s.otherConfirmed?s.partner+': ready':s.partner+': reviewing');
+ el('confirmation').className=s.otherConfirmed?'ready':'muted';el('confirm').textContent=s.mineConfirmed?'Confirmed':'Confirm trade';}
+}
+window.updateTrade=raw=>{try{const next=JSON.parse(raw);if(!state||next.session!==state.session)el('search').value='';state=next;waiting=false;render();}catch(e){console.error('Invalid trade state',e);}};
+el('accept').onclick=()=>send(1);el('decline').onclick=close;el('cancel').onclick=close;el('close').onclick=close;el('done').onclick=close;el('confirm').onclick=()=>send(3);el('search').oninput=()=>{if(state&&state.phase===1)rows(state.mine,'mine',true);};window.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();close();}});
+</script></body></html>

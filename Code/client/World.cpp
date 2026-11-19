@@ -22,6 +22,7 @@
 #include <Services/WeatherService.h>
 #include <Services/MapService.h>
 #include <Services/PluginMessagingService.h>
+#include <Services/TradeService.h>
 
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
@@ -62,6 +63,7 @@ World::World()
     ctx().emplace<WeatherService>(*this, m_transport, m_dispatcher);
     ctx().emplace<MapService>(*this, m_dispatcher, m_transport);
     ctx().emplace<PluginMessagingService>(m_dispatcher);
+    ctx().emplace<TradeService>(*this, m_dispatcher);
     ImmersiveInteractions::RegisterMessaging();
     ctx().emplace<RaceMenuSync>(*this, m_dispatcher);
 
