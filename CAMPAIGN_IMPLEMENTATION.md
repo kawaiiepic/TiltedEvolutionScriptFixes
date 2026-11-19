@@ -1,6 +1,6 @@
 # Campaign implementation checklist
 
-Baseline is master at `92a8552`. Preview run 44469160804 passed Windows builds for both runtimes and Linux builds. Source, automated builds, and gameplay verification are tracked separately. Skyrim 1.7.104 is the primary runtime, with 1.6.1170 retained.
+Baseline is master at `92a8552`. Preview run 44469160804 passed Windows builds for both runtimes and Linux builds. Source, automated builds, and gameplay verification are tracked separately. Latest Angular production build passed at `6e64196`, and local Linux `TPTests` passed 421 assertions in 34 cases before the added corrupt-upload assertion. Skyrim 1.7.104 is the primary runtime, with 1.6.1170 retained.
 
 | Status | Requirement and evidence |
 | --- | --- |
@@ -29,7 +29,7 @@ Baseline is master at `92a8552`. Preview run 44469160804 passed Windows builds f
 | PENDING | Native map player markers, character names, worldspace and interior entrances, custom waypoints and live zoom-safe updates. Native compass markers where supported. |
 | PENDING | Regression testing for serialization, persistence and migrations, quests/rewards/radiant generations, privacy/eligibility/suggestion lifecycle, travel, shared time, puzzles, discoveries, crime, reconnects and checkpoint failures. |
 | PENDING | Cross-runtime gameplay, performance and mod compatibility. Preserve global partyless campaign and individual characters, persistent NPCs/containers/locks, trading, proximity voice, revival, nameplates, waypoints, animation, HUD and Phantasm. |
-| IN PROGRESS | Incremental master pushes, Windows and Linux CI, Angular production builds and preview release workflow. Baseline preview run 44469160804 passed. Remote dialogue preview and transport tests are tracked in runs 44471046231 and 44470816805. |
+| IN PROGRESS | Incremental master pushes, Windows and Linux CI, Angular production builds and preview release workflow. Baseline preview run 44469160804 passed. Run 44470816805 found that the new dialogue clients needed to acknowledge unrelated quest replay on entry. The harness now does this alongside the existing non-quest modes. Preview run 44471446181 includes load-door isolation. |
 
 ## Native integration evidence
 

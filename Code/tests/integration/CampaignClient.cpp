@@ -421,7 +421,7 @@ public:
 
         if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" ||
             Mode.starts_with("weather") || Mode.starts_with("animation-") || Mode.starts_with("carriage-") ||
-            Mode.starts_with("death-"))
+            Mode.starts_with("death-") || Mode.starts_with("dialogue-"))
         {
             if (message->GetOpcode() == NotifyQuestUpdate::Opcode)
             {

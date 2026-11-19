@@ -145,12 +145,22 @@ TEST_CASE("Final checkpoint retry observes the committed revision before restart
     REQUIRE(reply->Digest == request->Digest);
     REQUIRE(reply->EssSize == length - 1);
     REQUIRE(reply->CoSaveSize == 1);
+    const auto committedDigest = reply->Digest;
+
+    bytes[length - 1] = 'C';
+    REQUIRE(begin(2) == P::Ok);
+    bytes[length - 1] = 'D';
+    REQUIRE(upload(2) == P::Ok);
+    REQUIRE(send(P::Commit, 2) == P::HashMismatch);
+    REQUIRE(send(P::Abort, 2) == P::Ok);
+    REQUIRE(reply->Revision == 2);
+    REQUIRE(reply->Digest == committedDigest);
 
     store.Release(1);
     inWorld = false;
     REQUIRE(send(P::Select, 0) == P::Ok);
     REQUIRE(reply->Revision == 2);
-    REQUIRE(reply->Digest == request->Digest);
+    REQUIRE(reply->Digest == committedDigest);
 }
 
 TEST_CASE("Checkpoint revisions reuse matching blocks and verify the reconstructed save", "[campaign.saves]")
