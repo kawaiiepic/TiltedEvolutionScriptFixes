@@ -695,15 +695,24 @@ public:
         }
         if (panel->Kind == NotifyPlayerDialogue::PanelClosed)
         {
-            assert(DialogueStage == 4);
-            Done = true;
+            if (DialogueStage == 4)
+            {
+                DialogueStage = 5;
+                EnterListenerWorldSpace(false);
+            }
+            else
+            {
+                assert(DialogueStage == 7);
+                Done = true;
+            }
             return true;
         }
         assert(panel->Kind == NotifyPlayerDialogue::Panel && panel->Remote && !panel->CanChoose && !panel->CanPass);
+        assert(panel->SpeakerReference == GameId(QuestMod, 0x950));
         if (!panel->Listening)
         {
             assert(panel->Options.empty() && panel->Text.empty() && panel->VoterChoices.empty() && !panel->CanVote);
-            assert(DialogueStage == 0 || DialogueStage == 2);
+            assert(DialogueStage == 0 || DialogueStage == 2 || DialogueStage == 5);
             request.Action = PlayerDialogueRequest::Listen;
             ++DialogueStage;
             Transmit(request);
@@ -717,13 +726,26 @@ public:
         }
         else if (DialogueStage == 3)
         {
-            assert(panel->CanVote && panel->Options.size() == 2);
             DialogueStage = 4;
+            EnterListenerWorldSpace(true);
+        }
+        else if (DialogueStage == 6)
+        {
+            assert(panel->CanVote && panel->Options.size() == 2);
+            DialogueStage = 7;
             request.Action = PlayerDialogueRequest::Vote;
             request.Index = 1;
             Transmit(request);
         }
         return true;
+    }
+
+    void EnterListenerWorldSpace(bool aForeign)
+    {
+        EnterExteriorCellRequest cell{};
+        cell.CellId = GameId(VanillaMod, aForeign ? 0x512 : 0x511);
+        cell.WorldSpaceId = GameId(VanillaMod, aForeign ? 0x800 : 0x3C);
+        Transmit(cell);
     }
 
     void AssignNpc(uint32_t aId = 0x899, bool aNonRespawning = true, bool aLeveled = false)

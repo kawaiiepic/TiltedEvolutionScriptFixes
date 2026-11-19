@@ -183,7 +183,6 @@ void OverlayService::RecordConversationSubtitle(uint32_t aActorId, const String&
 void OverlayService::InvalidateOptions(DialogueSession& aSession) noexcept
 {
     aSession.Options.clear();
-    aSession.Subtitle.clear();
     aSession.Votes.clear();
     if (++m_nextDialogueRevision == 0)
         ++m_nextDialogueRevision;
@@ -327,7 +326,8 @@ void OverlayService::SendDialogueState(uint32_t aActorId, const DialogueSession&
     notify.Name = pOwner->GetUsername();
     for (const auto& [playerId, token] : acSession.Participants)
     {
-        if (const auto* pPlayer = m_world.GetPlayerManager().GetById(playerId))
+        if (const auto* pPlayer = m_world.GetPlayerManager().GetById(playerId);
+            pPlayer && IsDialogueActorInRange(aActorId, *pPlayer))
         {
             notify.Token = token;
             notify.CanChoose = playerId == acSession.Owner;
@@ -382,6 +382,7 @@ void OverlayService::LeaveDialogue(uint32_t aPlayerId) noexcept
             return;
         }
         state.Owner = state.Participants.begin()->first;
+        state.Subtitle.clear();
         InvalidateOptions(state);
     }
 
@@ -582,6 +583,7 @@ void OverlayService::OnPlayerDialogue(const PacketEvent<PlayerDialogueRequest>& 
     }
     else
     {
+        state.Subtitle.clear();
         InvalidateOptions(state);
         if (request.Text.empty())
             return;
