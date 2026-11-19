@@ -4,6 +4,9 @@
 #include <Structs/GameId.h>
 #include <chrono>
 #include <unordered_map>
+#include <optional>
+#include <set>
+#include <string_view>
 
 struct World;
 struct ShiftGridCellRequest;
@@ -15,6 +18,7 @@ struct PlayerJoinEvent;
 struct PlayerLevelRequest;
 struct PlayerLeaveEvent;
 struct RequestCarriageTravel;
+struct UpdateEvent;
 
 /**
  * @brief Handles player specific actions that might change the information needed by other clients about that player.
@@ -25,6 +29,7 @@ struct PlayerService
     ~PlayerService() noexcept = default;
 
     TP_NOCOPYMOVE(PlayerService);
+    bool HandleTravelCommand(const Player& acPlayer, std::string_view aCommand) noexcept;
 
 protected:
     void HandleGridCellShift(const PacketEvent<ShiftGridCellRequest>& acMessage) const noexcept;
@@ -46,7 +51,25 @@ private:
         std::chrono::steady_clock::time_point ExpiresAt;
     };
 
+    struct TravelInvitation
+    {
+        uint32_t Id{};
+        uint32_t Leader{};
+        GameId Cell{};
+        GameId WorldSpace{};
+        glm::vec3 Position{};
+        std::chrono::steady_clock::time_point ExpiresAt{};
+        std::set<uint32_t> Invited;
+        std::set<uint32_t> Accepted;
+    };
+
+    void UpdateTravelInvitation(const UpdateEvent&) noexcept;
+    void EndTravelInvitation(std::string_view aMessage) noexcept;
+    bool CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept;
+
     World& m_world;
+    std::optional<TravelInvitation> m_travelInvitation;
+    uint32_t m_nextTravelId{};
     std::unordered_map<uint32_t, CarriageBoarding> m_carriageBoardings;
 
     void GrantRecovery(const Player& acPlayer, entt::entity aCharacter, uint32_t aDownId, bool aRevived) const noexcept;
@@ -57,6 +80,7 @@ private:
     entt::scoped_connection m_playerRespawnConnection;
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_carriageTravelConnection;
+    entt::scoped_connection m_travelUpdateConnection;
     entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_playerJoinConnection;
 };

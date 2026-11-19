@@ -92,6 +92,7 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
 {
     m_carriage.reset();
     m_carriageTeleport.reset();
+    m_lastGroupTravelId = 0;
     m_reportedCell = {};
     PlayerCharacter::Get()->SetDifficulty(m_previousDifficulty);
     m_serverDifficulty = m_previousDifficulty = 6;
@@ -338,6 +339,27 @@ BSTEventResult PlayerService::OnEvent(const TESFastTravelEndEvent*, const EventD
 
 void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
 {
+    if (acMessage.GroupTravelId)
+    {
+        if (acMessage.GroupTravelId == m_lastGroupTravelId)
+            return;
+        m_lastGroupTravelId = acMessage.GroupTravelId;
+        auto* pPlayer = PlayerCharacter::Get();
+        const auto* pUI = UI::Get();
+        if (!pPlayer || !pUI || m_carriage || pPlayer->IsDead() || pPlayer->IsInCombat() ||
+            !BSInputEnableManager::IsMovementControlsEnabled() || pUI->GetMenuOpen("Loading Menu") ||
+            pUI->GetMenuOpen("Main Menu") || pUI->GetMenuOpen("MapMenu") || pUI->GetMenuOpen("Journal Menu") ||
+            pUI->GetMenuOpen("Dialogue Menu") || pUI->GetMenuOpen("RaceSex Menu") ||
+            pUI->GetMenuOpen("ContainerMenu") || pUI->GetMenuOpen("Crafting Menu") ||
+            pUI->GetMenuOpen("BarterMenu") || pUI->GetMenuOpen("InventoryMenu") ||
+            pUI->GetMenuOpen("Sleep/Wait Menu"))
+        {
+            m_world.GetOverlayService().SendSystemMessage("Travel skipped because your character is busy.");
+            return;
+        }
+        ApplyTeleport(acMessage);
+        return;
+    }
     if (!acMessage.CarriageToken)
     {
         m_carriage.reset();

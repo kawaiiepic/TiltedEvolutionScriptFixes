@@ -889,6 +889,7 @@ TEST_CASE("Carriage travel retains the boarding token", "[encoding.travel]")
     teleport.WorldSpaceId = GameId(0, 0x3C);
     teleport.Position = arrival.Position;
     teleport.CarriageToken = 4;
+    teleport.GroupTravelId = 1234;
     Buffer::Writer teleportWriter(&buffer);
     teleport.Serialize(teleportWriter);
     Buffer::Reader teleportReader(&buffer);

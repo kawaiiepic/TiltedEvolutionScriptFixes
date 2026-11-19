@@ -104,5 +104,9 @@ export class ChatService {
     this.CommandHandler = new CommandHandler(this);
     this.CommandHandler.register(this.LocalChat);
     this.CommandHandler.register(this.PartyChat);
+    this.CommandHandler.register({
+      name: 'travel',
+      executor: async args => skyrimtogether.sendMessage(MessageTypes.GLOBAL_CHAT, ['/travel', ...args].join(' ')),
+    });
   }
 }

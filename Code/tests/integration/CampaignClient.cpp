@@ -233,11 +233,59 @@ public:
         if (Mode.starts_with("death-") && ConsumeDeathPacket(message))
             return;
 
+        if (message->GetOpcode() == NotifyChatMessageBroadcast::Opcode && Mode.starts_with("carriage-"))
+        {
+            const auto notice = CastUnique<NotifyChatMessageBroadcast>(std::move(message));
+            if (Mode == "carriage-cancel-leader" && notice->ChatMessage.find("/travel cancel 2") != String::npos)
+            {
+                SendChatMessageRequest command{};
+                command.MessageType = kGlobalChat;
+                command.ChatMessage = "/travel cancel 2";
+                Transmit(command);
+                OwnerReady = true;
+                ReadyAt = std::chrono::steady_clock::now() - 3s;
+            }
+            if (Mode == "carriage-cancel-observer" && notice->ChatMessage == "The carriage traveler canceled the invitation.")
+                Done = true;
+            if ((Mode == "carriage-catchup" || Mode == "carriage-ignore") &&
+                notice->ChatMessage.find("/travel join 1 ") != String::npos)
+            {
+                assert(!TravelOfferedAt);
+                TravelOfferedAt = std::chrono::steady_clock::now();
+                if (Mode == "carriage-catchup")
+                {
+                    SendChatMessageRequest command{};
+                    command.MessageType = kGlobalChat;
+                    command.ChatMessage = "/travel join 1";
+                    Transmit(command);
+                    command.ChatMessage = "/travel decline 1";
+                    Transmit(command);
+                    command.ChatMessage = "/travel join 1";
+                    Transmit(command);
+                    Transmit(command);
+                }
+                else
+                {
+                    OwnerReady = true;
+                    ReadyAt = *TravelOfferedAt + 7s;
+                }
+            }
+            return;
+        }
+
         if (message->GetOpcode() == NotifyTeleport::Opcode && Mode.starts_with("carriage-"))
         {
-            assert(Mode == "carriage-rider" && !SawCarriageTeleport);
+            assert(!SawCarriageTeleport);
             const auto teleport = CastUnique<NotifyTeleport>(std::move(message));
-            assert(teleport->CarriageToken == 2 && teleport->CellId == GameId(VanillaMod, 0xA22));
+            if (teleport->GroupTravelId)
+            {
+                assert(Mode == "carriage-catchup" && TravelOfferedAt);
+                assert(std::chrono::steady_clock::now() - *TravelOfferedAt >= 9500ms);
+                assert(teleport->CarriageToken == 0 && teleport->GroupTravelId == 1);
+            }
+            else
+                assert(Mode == "carriage-rider" && teleport->CarriageToken == 2);
+            assert(teleport->CellId == GameId(VanillaMod, 0xA22));
             assert(teleport->WorldSpaceId == GameId(VanillaMod, 0x3C));
             assert(static_cast<const glm::vec3&>(teleport->Position) == glm::vec3(32.f, 64.f, 128.f));
             SawCarriageTeleport = true;
@@ -355,26 +403,28 @@ public:
             }
             else if (Mode.starts_with("carriage-"))
             {
-                if (Mode != "carriage-bystander")
+                const bool cLeader = Mode == "carriage-leader" || Mode == "carriage-cancel-leader";
+                if (Mode == "carriage-rider" || Mode == "carriage-other" || cLeader)
                 {
                     RequestCarriageTravel boarding{};
                     boarding.Seat = GameId(QuestMod, Mode == "carriage-other" ? 0x916 : 0x915);
                     boarding.Cell = GameId(VanillaMod, 0xA21);
                     boarding.Position = glm::vec3(0.f);
-                    boarding.Token = Mode == "carriage-leader" ? 1 : 2;
+                    boarding.Token = cLeader ? 1 : 2;
                     Transmit(boarding);
                 }
-                if (Mode == "carriage-leader")
+                if (cLeader)
                     DepartureAt = std::chrono::steady_clock::now() + 400ms;
                 else
                 {
                     std::puts("CARRIAGE_READY");
                     std::fflush(stdout);
                 }
-                if (Mode != "carriage-rider")
+                if (Mode != "carriage-rider" && Mode != "carriage-catchup" && Mode != "carriage-ignore" &&
+                    Mode != "carriage-cancel-leader" && Mode != "carriage-cancel-observer")
                 {
                     OwnerReady = true;
-                    ReadyAt = std::chrono::steady_clock::now() + 2s;
+                    ReadyAt = std::chrono::steady_clock::now() + (Mode == "carriage-leader" ? 8s : 2s);
                 }
             }
             return;
@@ -806,6 +856,7 @@ public:
     bool DialogueStarted{};
     unsigned DialogueStage{};
     bool SawCarriageTeleport{};
+    std::optional<std::chrono::steady_clock::time_point> TravelOfferedAt;
     std::chrono::steady_clock::time_point ReadyAt{};
     std::optional<std::chrono::steady_clock::time_point> DepartureAt;
     std::optional<std::chrono::steady_clock::time_point> DeathRequestAt;
@@ -837,7 +888,9 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "%s\n", acMessage);
         });
     assert(client.ConnectByIp(argv[3]));
-    const auto deadline = std::chrono::steady_clock::now() + (client.Mode == "write" || client.Mode == "missing" || client.Mode == "resurrect" ? 3s : 12s);
+    const auto duration = client.Mode.starts_with("carriage-") ? 20s :
+        client.Mode == "write" || client.Mode == "missing" || client.Mode == "resurrect" ? 3s : 12s;
+    const auto deadline = std::chrono::steady_clock::now() + duration;
     while (!client.Done && std::chrono::steady_clock::now() < deadline)
     {
         client.Update();

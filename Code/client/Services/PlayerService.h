@@ -88,6 +88,7 @@ private:
     std::optional<CarriageBoarding> m_carriage;
     std::optional<NotifyTeleport> m_carriageTeleport;
     GameId m_reportedCell{};
+    uint32_t m_lastGroupTravelId{};
     uint32_t m_nextCarriageToken{};
 
     struct ReviveTarget

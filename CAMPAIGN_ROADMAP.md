@@ -154,6 +154,10 @@ The Linux server at `b384823a` built and passed 220 assertions in 24 cases. Loop
 
 Two-client Skyrim validation should cover one player buying a Whiterun-to-Riften trip, a second player activating the same carriage, and a third player staying near the driver without boarding. Check the second player's camera and controls after arrival. Also try cancellation, ordinary map fast travel and two players buying their own trips. The scripted loading fallback and the furniture-to-arrival timing require an in-game run.
 
+## Experimental carriage catch-up
+
+With `bCarriageCatchUp=true` under `[Gameplay]`, a validated native carriage arrival offers eligible players ten seconds to catch up. Use `/travel join ID` or `/travel decline ID` in multiplayer chat. The arriving player can cancel with `/travel cancel ID`. The original ride and regular boarding still use Skyrim's existing carriage and fare path. The server closes the invitation if the leader leaves the destination, and at expiry checks that they are still standing near the arrival point. Clients skip catch-up during combat, loading, and incompatible menus. In-game validation is still needed for shared arrival positions and modded carriages.
+
 ## Player revival and respawn
 
 With the multiplayer death system enabled, a downed player can be revived in place. A standing player in the same cell can press **F10** near them. This works without a party. The server accepts one recovery outcome per downed episode and checks that the helper is neither the downed player nor downed themselves. Revival carries no gold penalty.

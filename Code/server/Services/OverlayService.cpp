@@ -6,6 +6,7 @@
 #include <iterator>
 
 #include <Services/OverlayService.h>
+#include <Services/PlayerService.h>
 #include <Services/DialogueLocation.h>
 #include <Setting.h>
 
@@ -83,7 +84,13 @@ void sendPlayerMessage(const ChatMessageType acType, const String acContent, Pla
 
 void OverlayService::HandleChatMessage(const PacketEvent<SendChatMessageRequest>& acMessage) const noexcept
 {
-    auto [canceled, reason] = m_world.GetScriptService().HandleChatMessage(*acMessage.pPlayer->GetCharacter(), acMessage.Packet.ChatMessage);
+    const auto& text = acMessage.Packet.ChatMessage;
+    if (m_world.GetPlayerService().HandleTravelCommand(*acMessage.pPlayer, {text.data(), text.size()}))
+        return;
+    const auto character = acMessage.pPlayer->GetCharacter();
+    if (!character)
+        return;
+    auto [canceled, reason] = m_world.GetScriptService().HandleChatMessage(*character, text);
     if (canceled)
         return;
 
