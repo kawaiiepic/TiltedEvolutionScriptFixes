@@ -175,6 +175,26 @@ public:
                 character.WorldSpaceId = cell.WorldSpaceId;
                 Transmit(character);
             }
+            if (Mode.starts_with("dialogue-"))
+            {
+                EnterExteriorCellRequest cell{};
+                cell.CellId = GameId(VanillaMod, Mode == "dialogue-owner" ? 0x510 : 0x511);
+                cell.WorldSpaceId = GameId(VanillaMod, Mode == "dialogue-foreign" ? 0x800 : 0x3C);
+                Transmit(cell);
+
+                AssignCharacterRequest character{};
+                character.ReferenceId = GameId(0, 0x14);
+                character.CellId = cell.CellId;
+                character.WorldSpaceId = cell.WorldSpaceId;
+                character.Position = glm::vec3(Mode == "dialogue-owner" ? 0.f : 4096.f, 0.f, 0.f);
+                Transmit(character);
+                if (Mode == "dialogue-owner")
+                {
+                    character.ReferenceId = GameId(QuestMod, 0x950);
+                    character.Cookie = 0x950;
+                    Transmit(character);
+                }
+            }
             if (Mode.starts_with("stock-"))
             {
                 EnterInteriorCellRequest cell{};
@@ -204,6 +224,9 @@ public:
             }
             return;
         }
+
+        if (Mode.starts_with("dialogue-") && ConsumeDialoguePacket(message))
+            return;
 
         if (Mode.starts_with("death-") && ConsumeDeathPacket(message))
             return;
@@ -610,6 +633,99 @@ public:
         Transmit(request);
     }
 
+    bool ConsumeDialoguePacket(UniquePtr<ServerMessage>& aMessage)
+    {
+        if (aMessage->GetOpcode() == AssignCharacterResponse::Opcode)
+        {
+            const auto assignment = CastUnique<AssignCharacterResponse>(std::move(aMessage));
+            if (Mode == "dialogue-owner" && assignment->Cookie == 0x950)
+            {
+                PlayerDialogueRequest join{};
+                join.ActorId = assignment->ServerId;
+                join.Token = 42;
+                Transmit(join);
+            }
+            if (Mode == "dialogue-foreign")
+            {
+                OwnerReady = true;
+                ReadyAt = std::chrono::steady_clock::now() - 1s;
+                std::puts("DIALOGUE_FOREIGN_READY");
+                std::fflush(stdout);
+            }
+            return true;
+        }
+        if (aMessage->GetOpcode() != NotifyPlayerDialogue::Opcode)
+            return false;
+        const auto panel = CastUnique<NotifyPlayerDialogue>(std::move(aMessage));
+        assert(Mode != "dialogue-foreign");
+        PlayerDialogueRequest request{};
+        request.ActorId = panel->ActorId;
+        request.Revision = panel->Revision;
+        if (Mode == "dialogue-owner")
+        {
+            request.Token = 42;
+            if (panel->Kind == NotifyPlayerDialogue::State)
+            {
+                assert(panel->CanChoose);
+                request.Action = PlayerDialogueRequest::PublishOptions;
+                request.Options = {"Ask for directions", "Leave"};
+                Transmit(request);
+            }
+            if (panel->Kind == NotifyPlayerDialogue::Panel && !panel->Options.empty() && !DialogueStarted)
+            {
+                DialogueStarted = true;
+                SubtitleRequest subtitle{};
+                subtitle.ServerId = panel->ActorId;
+                subtitle.DialogueToken = 42;
+                subtitle.Text = "Which road?";
+                Transmit(subtitle);
+                std::puts("DIALOGUE_READY");
+                std::fflush(stdout);
+            }
+            if (panel->Kind == NotifyPlayerDialogue::Panel && panel->Votes.size() == 2 && panel->Votes[1] == 1 && !panel->Private)
+            {
+                assert(panel->VoterChoices.size() == 1);
+                request.Action = PlayerDialogueRequest::SetPrivacy;
+                request.Index = 1;
+                Transmit(request);
+                OwnerReady = true;
+                ReadyAt = std::chrono::steady_clock::now() - 3s;
+            }
+            return true;
+        }
+        if (panel->Kind == NotifyPlayerDialogue::PanelClosed)
+        {
+            assert(DialogueStage == 4);
+            Done = true;
+            return true;
+        }
+        assert(panel->Kind == NotifyPlayerDialogue::Panel && panel->Remote && !panel->CanChoose && !panel->CanPass);
+        if (!panel->Listening)
+        {
+            assert(panel->Options.empty() && panel->Text.empty() && panel->VoterChoices.empty() && !panel->CanVote);
+            assert(DialogueStage == 0 || DialogueStage == 2);
+            request.Action = PlayerDialogueRequest::Listen;
+            ++DialogueStage;
+            Transmit(request);
+        }
+        else if (DialogueStage == 1)
+        {
+            assert(panel->CanVote && panel->Options.size() == 2 && panel->Text == "Which road?");
+            DialogueStage = 2;
+            request.Action = PlayerDialogueRequest::StopListening;
+            Transmit(request);
+        }
+        else if (DialogueStage == 3)
+        {
+            assert(panel->CanVote && panel->Options.size() == 2);
+            DialogueStage = 4;
+            request.Action = PlayerDialogueRequest::Vote;
+            request.Index = 1;
+            Transmit(request);
+        }
+        return true;
+    }
+
     void AssignNpc(uint32_t aId = 0x899, bool aNonRespawning = true, bool aLeveled = false)
     {
         AssignCharacterRequest request{};
@@ -661,6 +777,8 @@ public:
     bool SawNpc{};
     bool SawOwner{};
     bool OwnerReady{};
+    bool DialogueStarted{};
+    unsigned DialogueStage{};
     bool SawCarriageTeleport{};
     std::chrono::steady_clock::time_point ReadyAt{};
     std::optional<std::chrono::steady_clock::time_point> DepartureAt;

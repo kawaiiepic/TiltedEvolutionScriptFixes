@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     config = directory / "config"
     config.mkdir()
     (config / "STServer.ini").write_text(
-        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\n"
+        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\nbRemoteDialogueSpectating=true\n"
     )
     (directory / "shared-quest-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x8AC\n'
@@ -170,6 +170,17 @@ end)
             assert owner.stdout.readline().strip() == "STOCK_OWNER_READY"
             test_client("stock-follower")
             assert owner.wait(timeout=8) == 0
+        with subprocess.Popen([harness, "dialogue-foreign", version, f"127.0.0.1:{port}"],
+                              stdout=subprocess.PIPE, text=True) as foreign:
+            assert select.select([foreign.stdout], [], [], 12)[0]
+            assert foreign.stdout.readline().strip() == "DIALOGUE_FOREIGN_READY"
+            with subprocess.Popen([harness, "dialogue-owner", version, f"127.0.0.1:{port}"],
+                                  stdout=subprocess.PIPE, text=True) as owner:
+                assert select.select([owner.stdout], [], [], 12)[0]
+                assert owner.stdout.readline().strip() == "DIALOGUE_READY"
+                test_client("dialogue-listener")
+                assert owner.wait(timeout=8) == 0
+            assert foreign.wait(timeout=8) == 0
         test_client("resurrect")
         assert (directory / "shared-npc-life.log").read_text().splitlines() == [
             '1 1 "Quest Pack.esl" 1 2201 1',
