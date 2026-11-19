@@ -393,7 +393,7 @@ interface SkyrimTogether {
   /**
    * Disconnect from server or cancel connection.
    */
-  disconnect(): void;
+  disconnect(action?: 'retry' | 'cancel' | 'discard'): void;
 
   /**
    * Reveal other players in the immediate area.

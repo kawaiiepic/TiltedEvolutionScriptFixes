@@ -322,9 +322,9 @@ export class ClientService implements OnDestroy {
     if (this.lobbyStateChange.getValue() && this.inGameStateChange.getValue()) skyrimtogether.enterWorld();
   }
 
-  public disconnect(): void {
-    skyrimtogether.disconnect();
-    this._remainingReconnectionAttempt = 0;
+  public disconnect(action?: 'retry' | 'cancel' | 'discard'): void {
+    if (action) skyrimtogether.disconnect(action);
+    else skyrimtogether.disconnect();
   }
 
   /**

@@ -3,6 +3,20 @@
     SKYRIM TOGETHER · F2 / RIGHT CTRL TO PLAY
   </aside>
   <ng-container *ngIf="checkpoint$ | async as checkpoint">
+    <aside class="first-save-status" role="status" *ngIf="
+      checkpoint.phase === 'disconnect-saving' || checkpoint.phase === 'disconnect-uploading' || checkpoint.phase === 'disconnect-returning'">
+      {{ checkpoint.detail }}
+    </aside>
+    <section *ngIf="(active$ | async) && (checkpoint.phase === 'disconnect-retryable' || checkpoint.phase === 'disconnect-failed')"
+      class="disconnect-failure" aria-label="Final checkpoint failed">
+      <p role="alert">{{ checkpoint.detail }}</p>
+      <p>Leaving now can lose progress since your last confirmed server checkpoint.</p>
+      <app-action-buttons>
+        <button *ngIf="checkpoint.phase === 'disconnect-retryable'" type="button" (click)="resolveDisconnect('retry')">Retry saving</button>
+        <button type="button" (click)="resolveDisconnect('cancel')">Stay connected</button>
+        <button type="button" (click)="resolveDisconnect('discard')">Leave without saving</button>
+      </app-action-buttons>
+    </section>
     <aside class="first-save-status" role="status" *ngIf="(lobby$ | async) &&
       (checkpoint.phase === 'saving-first-checkpoint' || (checkpoint.phase === 'uploading' && checkpoint.revision === '0') ||
        (checkpoint.phase === 'failed' && checkpoint.name && checkpoint.revision === '0') ||

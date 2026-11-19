@@ -246,7 +246,10 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
         m_dispatcher.trigger(error);
     }
     if (wasInWorld)
+    {
         m_dispatcher.trigger(DisconnectedEvent());
+        CharacterCheckpoints::ReturnToMainMenu();
+    }
     else
         m_dispatcher.trigger(ServerLobbyEvent{false});
 }

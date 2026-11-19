@@ -60,7 +60,7 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
         else if (eventName == "connect")
             ProcessConnectMessage(eventArgs);
         else if (eventName == "disconnect")
-            ProcessDisconnectMessage();
+            ProcessDisconnectMessage(eventArgs);
         else if (eventName == "requestCharacters")
         {
             const auto owner = eventArgs->GetString(0);
@@ -189,9 +189,19 @@ void OverlayClient::ProcessConnectMessage(CefRefPtr<CefListValue> aEventArgs)
     World::Get().GetRunner().Queue([endpoint, password] { World::Get().GetTransport().BeginConnection(endpoint, password); });
 }
 
-void OverlayClient::ProcessDisconnectMessage()
+void OverlayClient::ProcessDisconnectMessage(CefRefPtr<CefListValue> aEventArgs)
 {
-    World::Get().GetRunner().Queue([]() { World::Get().GetTransport().Close(); });
+    using Action = CharacterCheckpoints::DisconnectAction;
+    const auto command = aEventArgs->GetString(0).ToString();
+    Action action = Action::Request;
+    if (command == "retry") action = Action::Retry;
+    else if (command == "cancel") action = Action::Cancel;
+    else if (command == "discard") action = Action::Discard;
+    else if (!command.empty()) return;
+    World::Get().GetRunner().Queue([action]()
+    {
+        CharacterCheckpoints::Disconnect(World::Get().GetTransport(), action);
+    });
 }
 
 void OverlayClient::ProcessRevealPlayersMessage()

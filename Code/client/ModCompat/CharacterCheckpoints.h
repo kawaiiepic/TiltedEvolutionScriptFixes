@@ -40,6 +40,9 @@ void RequestRoster(TransportService& aTransport, const std::string& acOwner, con
 void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel, bool aCreate) noexcept;
 void Receive(const NotifyCharacterSave& acReply) noexcept;
 void Tick(TransportService& aTransport) noexcept;
+enum class DisconnectAction { Request, Retry, Cancel, Discard };
+void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept;
+void ReturnToMainMenu() noexcept;
 bool CanEnter() noexcept;
 void PublishState() noexcept;
 }

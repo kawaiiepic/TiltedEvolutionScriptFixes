@@ -78,6 +78,81 @@ TEST_CASE("Character checkpoints enforce leases, revisions and complete transfer
     }
 }
 
+TEST_CASE("Final checkpoint retry observes the committed revision before restarting an upload", "[campaign.saves]")
+{
+    using P = CharacterSavePayload;
+    const auto root = std::filesystem::temp_directory_path() /
+        ("st-final-checkpoint-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup
+    {
+        std::filesystem::path Path;
+        ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); }
+    } cleanup{root};
+
+    Campaign::CharacterSaveStore store(root);
+    auto request = std::make_unique<P>();
+    auto reply = std::make_unique<P>();
+    bool inWorld = false;
+    auto send = [&](P::Operation action, uint64_t revision)
+    {
+        *reply = {};
+        request->Action = action;
+        request->Revision = revision;
+        store.Handle(1, inWorld, *request, *reply);
+        return reply->Status;
+    };
+    char bytes[] = "TESV_SAVEGAME checkpoint A";
+    const size_t length = sizeof(bytes) - 1;
+    auto begin = [&](uint64_t revision)
+    {
+        request->Count = 0;
+        request->EssSize = length - 1;
+        request->CoSaveSize = 1;
+        CryptoPP::SHA256().CalculateDigest(request->Digest.data(), reinterpret_cast<const uint8_t*>(bytes), length);
+        return send(P::BeginUpload, revision);
+    };
+    auto upload = [&](uint64_t revision)
+    {
+        request->Count = static_cast<uint16_t>(length);
+        request->Offset = 0;
+        std::memcpy(request->Data.data(), bytes, length);
+        const auto status = send(P::UploadChunk, revision);
+        request->Count = 0;
+        return status;
+    };
+
+    request->Key[0] = 1;
+    REQUIRE(send(P::Select, 0) == P::Ok);
+    REQUIRE(begin(0) == P::Ok);
+    REQUIRE(upload(0) == P::Ok);
+    REQUIRE(send(P::Commit, 0) == P::Ok);
+    REQUIRE(reply->Revision == 1);
+    const auto originalDigest = reply->Digest;
+
+    inWorld = true;
+    bytes[length - 1] = 'B';
+    REQUIRE(begin(1) == P::Ok);
+    REQUIRE(send(P::Commit, 1) == P::Incomplete);
+    REQUIRE(send(P::Abort, 1) == P::Ok);
+    REQUIRE(reply->Revision == 1);
+    REQUIRE(reply->Digest == originalDigest);
+
+    REQUIRE(begin(1) == P::Ok);
+    REQUIRE(upload(1) == P::Ok);
+    REQUIRE(send(P::Commit, 1) == P::Ok); // Simulate a reply the client never processed.
+    REQUIRE(send(P::Abort, 1) == P::Stale);
+    REQUIRE(reply->Revision == 2);
+    REQUIRE(reply->Digest == request->Digest);
+    REQUIRE(reply->EssSize == length - 1);
+    REQUIRE(reply->CoSaveSize == 1);
+
+    store.Release(1);
+    inWorld = false;
+    REQUIRE(send(P::Select, 0) == P::Ok);
+    REQUIRE(reply->Revision == 2);
+    REQUIRE(reply->Digest == request->Digest);
+}
+
 TEST_CASE("Checkpoint revisions reuse matching blocks and verify the reconstructed save", "[campaign.saves]")
 {
     using P = CharacterSavePayload;

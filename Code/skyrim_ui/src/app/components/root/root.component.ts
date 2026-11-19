@@ -211,6 +211,10 @@ export class RootComponent implements OnInit {
     }
   }
 
+  public resolveDisconnect(action: 'retry' | 'cancel' | 'discard'): void {
+    this.client.disconnect(action);
+  }
+
   public cancelConnection(): void {
     this.client.disconnect();
   }

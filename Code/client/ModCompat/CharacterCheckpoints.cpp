@@ -11,6 +11,7 @@
 #include <Services/OverlayService.h>
 #include <Services/InputService.h>
 #include <Games/Skyrim/Interface/UI.h>
+#include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 #include <Games/TES.h>
 #include <Forms/TESObjectCELL.h>
 #include <PlayerCharacter.h>
@@ -37,6 +38,7 @@ using P = CharacterSavePayload;
 using Clock = std::chrono::steady_clock;
 enum class Phase { Disabled, LoadingLobby, WaitingForNewGame, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
 enum class NativeOperation { None, Load, Save, LobbyLoad };
+enum class DisconnectStep { None, Recovering, Waiting, Saving, Committed, Retryable, Failed };
 struct Stamp
 {
     uint64_t Size{}, Written{};
@@ -53,6 +55,9 @@ struct State
     Phase Step{Phase::Disabled};
     bool Required{}, Pending{}, NeedsBegin{}, HasRoster{};
     bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
+    DisconnectStep Disconnect{};
+    bool NeedsUploadRecovery{};
+    Clock::time_point DisconnectDeadline{};
     bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
     Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
@@ -90,6 +95,8 @@ State s;
 constexpr uint32_t kAbandonedPrison = 0x21594;
 NativeDriver s_driver{};
 uint64_t s_nextNativeToken{};
+Clock::time_point s_menuReturnDeadline{}, s_nextMenuReturnAttempt{};
+bool s_menuReturnQueued{}, s_menuReturnDispatched{};
 constexpr auto kAutosaveInterval = std::chrono::minutes(2);
 constexpr auto kEventSaveCooldown = std::chrono::seconds(20);
 constexpr auto kEventSaveSettle = std::chrono::seconds(2);
@@ -190,6 +197,16 @@ void CapturePortrait() noexcept
 
 const char* PhaseName() noexcept
 {
+    switch (s.Disconnect)
+    {
+    case DisconnectStep::Recovering:
+    case DisconnectStep::Waiting: return "disconnect-saving";
+    case DisconnectStep::Saving: return s.Step == Phase::Upload ? "disconnect-uploading" : "disconnect-saving";
+    case DisconnectStep::Committed: return "disconnect-returning";
+    case DisconnectStep::Retryable: return "disconnect-retryable";
+    case DisconnectStep::Failed: return "disconnect-failed";
+    default: break;
+    }
     switch (s.Step)
     {
     case Phase::Disabled: return "disabled";
@@ -227,6 +244,38 @@ bool RequestMainMenu() noexcept
     return vm->virtualMachine->DispatchStaticCall(script, function, &args, callback);
 }
 
+void PumpMenuReturn(TransportService& aTransport, Clock::time_point aNow)
+{
+    if (s_menuReturnDeadline == Clock::time_point{}) return;
+    const auto* ui = UI::Get();
+    if ((ui && ui->GetMenuOpen("Main Menu")) || aTransport.IsOnline() || aTransport.IsInLobby())
+    {
+        s_menuReturnDeadline = {};
+        return;
+    }
+    if (aNow >= s_menuReturnDeadline)
+    {
+        spdlog::warn("Skyrim did not return to the main menu after disconnect");
+        s_menuReturnDeadline = {};
+        return;
+    }
+    if (s_menuReturnQueued || s_menuReturnDispatched || aNow < s_nextMenuReturnAttempt) return;
+    s_menuReturnQueued = true;
+    s_nextMenuReturnAttempt = aNow + std::chrono::seconds(1);
+    World::Get().QueueCheckpointTask([]()
+    {
+        s_menuReturnQueued = false;
+        auto& world = World::Get();
+        const auto& transport = world.GetTransport();
+        if (s_menuReturnDeadline == Clock::time_point{} || transport.IsOnline() || transport.IsInLobby()) return;
+        const auto* ui = UI::Get();
+        if (!ui || ui->GetMenuOpen("Main Menu") || ui->GetMenuOpen("Loading Menu") ||
+            ui->GetMenuOpen("MessageBoxMenu")) return;
+        InputService::SetOverlayActive(world.GetOverlayService(), false);
+        s_menuReturnDispatched = RequestMainMenu();
+    });
+}
+
 void Change(Phase aPhase, const char* apDetail)
 {
     s.Step = aPhase;
@@ -245,13 +294,44 @@ void AbandonNative() noexcept
     s.CaptureReady = false;
     s.AutoEnter = false;
 }
+void FailDisconnect(bool aRetryable, const char* apDetail)
+{
+    s.Disconnect = aRetryable ? DisconnectStep::Retryable : DisconnectStep::Failed;
+    s.Detail = apDetail;
+    PublishState();
+    InputService::SetOverlayActive(World::Get().GetOverlayService(), true);
+}
+
+void CheckpointCommitted(const char* apDetail)
+{
+    if (s.Disconnect == DisconnectStep::Saving)
+    {
+        s.Disconnect = DisconnectStep::Committed;
+        Change(Phase::Ready, "Returning to main menu...");
+    }
+    else
+        Change(Phase::Ready, apDetail);
+}
+
 void Fail(const char* apDetail)
 {
+    const bool disconnecting = s.Disconnect == DisconnectStep::Recovering ||
+        s.Disconnect == DisconnectStep::Waiting || s.Disconnect == DisconnectStep::Saving;
+    s.NeedsUploadRecovery |= s.Step == Phase::Upload && s.Revision != 0;
+    const bool ready = s.Step == Phase::Ready && !s.Pending && s.Flights.empty();
     AbandonNative();
     s.Pending = false;
     s.Flights.clear();
     s.Bytes.clear();
-    Change(Phase::Failed, apDetail);
+    if (disconnecting)
+    {
+        // A failed upload can leave a pending revision or a commit whose reply was lost.
+        // Keep the lease until the player decides whether to leave.
+        s.Step = ready ? Phase::Ready : Phase::Failed;
+        FailDisconnect(ready || s.NeedsUploadRecovery, apDetail);
+    }
+    else
+        Change(Phase::Failed, apDetail);
     spdlog::warn("Character checkpoint: {}", apDetail);
 }
 
@@ -595,6 +675,72 @@ void PublishState() noexcept
     args->SetString(5, s.Step == Phase::Choose && s.HasRoster ? s.Roster : "");
     overlay->ExecuteAsync("characterCheckpoint", args);
 }
+void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept
+{
+    if (!aTransport.IsOnline())
+    {
+        if (aAction == DisconnectAction::Request) aTransport.Close();
+        return;
+    }
+
+    auto& overlay = World::Get().GetOverlayService();
+    const bool failed = s.Disconnect == DisconnectStep::Failed || s.Disconnect == DisconnectStep::Retryable;
+    if (aAction == DisconnectAction::Cancel && failed)
+    {
+        s.Disconnect = DisconnectStep::None;
+        s.Detail = s.Step == Phase::Failed ? "Reconnect to resume checkpoint saving." : "Disconnect canceled.";
+        PublishState();
+        return;
+    }
+    if (aAction == DisconnectAction::Discard && failed)
+    {
+        InputService::SetOverlayActive(overlay, false);
+        aTransport.Close();
+        return;
+    }
+    if ((aAction != DisconnectAction::Request || s.Disconnect != DisconnectStep::None) &&
+        (aAction != DisconnectAction::Retry || s.Disconnect != DisconnectStep::Retryable))
+        return;
+    if (!s.Required)
+    {
+        InputService::SetOverlayActive(overlay, false);
+        aTransport.Close();
+        return;
+    }
+    if (!s.NativeEnabled || !s.Revision ||
+        (!s.NeedsUploadRecovery && s.Step != Phase::Ready && s.Step != Phase::Upload))
+    {
+        FailDisconnect(false, "A final native checkpoint is unavailable. Changes since the last committed checkpoint may be lost.");
+        return;
+    }
+    InputService::SetOverlayActive(overlay, false);
+    if (s.NeedsUploadRecovery)
+    {
+        // Requests are reliable and ordered. Abort describes the committed
+        // revision after any earlier commit request, even if its reply was lost.
+        s.Disconnect = DisconnectStep::Recovering;
+        s.Detail = "Checking the last committed checkpoint...";
+        PublishState();
+        RequestCharacterSave request{};
+        request.Action = P::Abort;
+        request.Revision = s.Revision;
+        Send(aTransport, request);
+        return;
+    }
+    s.Disconnect = DisconnectStep::Waiting;
+    s.DisconnectDeadline = Clock::now() + kNativeTimeout;
+    s.Detail = "Waiting to save character. Close open menus and leave combat.";
+    PublishState();
+}
+
+void ReturnToMainMenu() noexcept
+{
+    s_menuReturnDeadline = Clock::now() + std::chrono::seconds(30);
+    s_nextMenuReturnAttempt = {};
+    s_menuReturnDispatched = false;
+    BSGraphics::WakeMainMenuPump();
+}
+
 bool RegisterNativeDriver(const NativeDriver& acDriver) noexcept
 {
     if (s.Required || s_driver.RequestLoad || !acDriver.RequestLoad ||
@@ -643,7 +789,8 @@ bool CanReplaceStagingWorld() noexcept
 
 bool NeedsStagingPump() noexcept
 {
-    return s.Step == Phase::LoadingLobby || s.Step == Phase::WaitingForNewGame || s.LobbySaveLoaded ||
+    return s_menuReturnDeadline != Clock::time_point{} || s.Step == Phase::LoadingLobby ||
+        s.Step == Phase::WaitingForNewGame || s.LobbySaveLoaded ||
         (s.NativeEnabled && (s.Step == Phase::NewCharacter || s.Step == Phase::Upload));
 }
 
@@ -791,6 +938,28 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
     else return;
     try
     {
+        if (s.Disconnect == DisconnectStep::Recovering && acReply.Action == P::Abort)
+        {
+            const bool unchanged = acReply.Status == P::Ok && acReply.Revision == s.Revision;
+            const bool priorCommit = acReply.Status == P::Stale && acReply.Revision == s.Revision + 1 &&
+                acReply.Digest == s.Digest && acReply.EssSize == s.Ess && acReply.CoSaveSize == s.Co;
+            if (!unchanged && !priorCommit)
+            {
+                FailDisconnect(false, "The server could not verify the last checkpoint. Reconnect to resume saving.");
+                return;
+            }
+            if (priorCommit) s.Baseline = s.Captured;
+            s.Revision = acReply.Revision;
+            s.Digest = acReply.Digest;
+            s.Ess = acReply.EssSize;
+            s.Co = acReply.CoSaveSize;
+            s.BaseBlocks.clear();
+            s.NeedsUploadRecovery = false;
+            s.Disconnect = DisconnectStep::Waiting;
+            s.DisconnectDeadline = Clock::now() + kNativeTimeout;
+            Change(Phase::Ready, "Waiting to save character. Close open menus and leave combat.");
+            return;
+        }
         if (acReply.Status != P::Ok)
         {
             if (acReply.Action == P::Roster) { Fail("Could not read the server character list. Reconnect to retry."); return; }
@@ -800,7 +969,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
                 Change(Phase::Choose, acReply.Status == P::Busy ? "Character is already in use." : "Server could not select the character.");
                 return;
             }
-            Fail("Server rejected checkpoint transfer; reconnect to resume.");
+            Fail("The server rejected the checkpoint transfer.");
             return;
         }
         switch (acReply.Action)
@@ -959,7 +1128,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.LastSaveFinished = Clock::now();
             s.NextAutoSave = s.LastSaveFinished + kAutosaveInterval;
             if (s.AutoEnter) s.EnterDeadline = Clock::now() + kNativeTimeout;
-            Change(Phase::Ready, "Checkpoint saved on the server.");
+            CheckpointCommitted("Checkpoint saved on the server.");
             return;
         default: Fail("Unexpected checkpoint response."); return;
         }
@@ -970,10 +1139,16 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
 void Tick(TransportService& aTransport) noexcept
 {
     if (s.Required && s.NativeEnabled) NativeCheckpointDriver::CheckForUnexpectedLoad();
+    PumpMenuReturn(aTransport, Clock::now());
     if (!s.Required || (!aTransport.IsInLobby() && !aTransport.IsOnline())) return;
     try
     {
         const auto now = Clock::now();
+        if (s.Disconnect == DisconnectStep::Committed)
+        {
+            aTransport.Close();
+            return;
+        }
         if (s.PortraitRequest && now >= s.PortraitDeadline) CancelPortrait();
         if (s.NativeEnabled && aTransport.IsOnline() && s.Revision &&
             (s.Step == Phase::Ready || s.Step == Phase::Upload))
@@ -1028,12 +1203,12 @@ void Tick(TransportService& aTransport) noexcept
         }
         if (s.Pending)
         {
-            if (now >= s.Deadline) Fail("Checkpoint transfer timed out; reconnect to resume.");
+            if (now >= s.Deadline) Fail("Checkpoint transfer timed out.");
             return;
         }
         if (!s.Flights.empty() && now >= s.Deadline)
         {
-            Fail("Checkpoint transfer timed out; reconnect to resume.");
+            Fail("Checkpoint transfer timed out.");
             return;
         }
         if (s.NativeEnabled && s.Operation != NativeOperation::None)
@@ -1041,7 +1216,7 @@ void Tick(TransportService& aTransport) noexcept
             const auto result = s_driver.Poll(s.NativeToken);
             if (result == NativeResult::Pending)
             {
-                if (now >= s.NativeDeadline) Fail("Native save/load timed out; reconnect to resume.");
+                if (now >= s.NativeDeadline) Fail("Native save/load timed out.");
                 return;
             }
             const auto completed = s.Operation;
@@ -1147,11 +1322,32 @@ void Tick(TransportService& aTransport) noexcept
                 Fail("World entry did not become ready.");
             return;
         }
+        if (s.Disconnect == DisconnectStep::Waiting && s.Step == Phase::Ready && !s.CaptureReady)
+        {
+            if (now >= s.DisconnectDeadline)
+                FailDisconnect(true, "Skyrim did not become ready to save. Close open menus and leave combat before retrying.");
+            else if (now >= s.EventRetryAfter)
+            {
+                const auto result = StartNative(NativeOperation::Save);
+                if (result == NativeStart::Accepted)
+                {
+                    s.Disconnect = DisconnectStep::Saving;
+                    s.Detail = "Saving character...";
+                    PublishState();
+                }
+                else if (result == NativeStart::Failed)
+                    FailDisconnect(true, "Skyrim rejected the final save request.");
+                else
+                    s.EventRetryAfter = now + std::chrono::seconds(1);
+            }
+            return;
+        }
+
         const bool eventDue = s.SaveReasons && now >= s.EventSaveAfter &&
             now >= s.LastSaveFinished + kEventSaveCooldown;
         const bool timerDue = now >= s.NextAutoSave;
         if (s.NativeEnabled && s.Step == Phase::Ready && aTransport.IsOnline() &&
-            !s.CaptureReady && (eventDue || timerDue) && now >= s.EventRetryAfter &&
+            s.Disconnect == DisconnectStep::None && !s.CaptureReady && (eventDue || timerDue) && now >= s.EventRetryAfter &&
             aTransport.CanEnterWorld() && !World::Get().GetOverlayService().GetActive())
         {
             const auto result = StartNative(NativeOperation::Save);
@@ -1304,7 +1500,7 @@ void Tick(TransportService& aTransport) noexcept
             s.CaptureReady = false;
             s.LastSaveFinished = now;
             s.NextAutoSave = now + kAutosaveInterval;
-            Change(Phase::Ready, "The server already has this checkpoint.");
+            CheckpointCommitted("The server already has this checkpoint.");
             return;
         }
         if (!s.NativeEnabled) CapturePortrait();
