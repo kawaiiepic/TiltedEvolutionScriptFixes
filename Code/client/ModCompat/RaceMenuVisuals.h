@@ -29,10 +29,19 @@ struct Transform
     bool operator==(const Transform&) const = default;
 };
 
+struct SkinTexture
+{
+    uint32_t Slot{};
+    uint8_t Index{};
+    std::string Texture;
+    bool operator==(const SkinTexture&) const = default;
+};
+
 struct Snapshot
 {
     std::vector<Overlay> Overlays;
     std::vector<Transform> Transforms;
+    std::vector<SkinTexture> SkinTextures;
     bool operator==(const Snapshot&) const = default;
 };
 

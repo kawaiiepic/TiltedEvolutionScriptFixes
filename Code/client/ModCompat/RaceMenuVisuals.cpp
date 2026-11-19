@@ -147,7 +147,17 @@ std::string OverlayNode(uint8_t aGroup, uint8_t aSlot)
     return length > 0 && static_cast<size_t>(length) < sizeof(name) ? name : "";
 }
 
+// Common exposed third-person skin slots. Texture key 9 indexes a texture set.
+constexpr uint32_t kSkinSlots[]{1, 2, 4, 8, 0x80, 0x400};
+constexpr uint8_t kSkinTextureCount = 8;
+constexpr uint8_t kMaxSkinTextures = 48;
 constexpr uint8_t kNoIndex = 255;
+
+bool ValidSkinTexture(const SkinTexture& acValue)
+{
+    return std::ranges::find(kSkinSlots, acValue.Slot) != std::end(kSkinSlots) &&
+        acValue.Index < kSkinTextureCount && ValidTexture(acValue.Texture);
+}
 
 bool GetNodeValue(TESObjectREFR* apActor, bool aFemale, const char* apNode, uint16_t aKey, uint8_t aIndex, GetValue& aValue)
 {
@@ -235,6 +245,20 @@ Snapshot RaceMenuVisuals::Capture(Actor& aActor)
                     snapshot.Overlays.push_back({group, slot, std::move(texture.Text), static_cast<uint32_t>(color.Integer), alpha.Number});
             }
 
+    if (s_override)
+        for (const uint32_t slot : kSkinSlots)
+            for (uint8_t index = 0; index < kSkinTextureCount; ++index)
+            {
+                GetValue texture;
+                if (Invoke<30, bool, TESObjectREFR*, bool, bool, uint32_t, uint16_t, uint8_t, GetValue&>(
+                        s_override, pActor, female, false, slot, uint16_t{9}, index, texture))
+                {
+                    SkinTexture row{slot, index, std::move(texture.Text)};
+                    if (ValidSkinTexture(row))
+                        snapshot.SkinTextures.push_back(std::move(row));
+                }
+            }
+
     if (s_transform)
     {
         NodeVisitor visitor;
@@ -296,6 +320,26 @@ void RaceMenuVisuals::Apply(Actor& aActor, const Snapshot& acPrevious, const Sna
             Invoke<20, void>(s_override, pActor, female, node.c_str(), uint16_t{8}, kNoIndex);
     }
 
+    if (s_override && (!acPrevious.SkinTextures.empty() || !acCurrent.SkinTextures.empty()))
+    {
+        for (const auto& entry : acPrevious.SkinTextures)
+        {
+            if (std::ranges::any_of(acCurrent.SkinTextures, [&](const auto& current)
+                { return entry.Slot == current.Slot && entry.Index == current.Index; }))
+                continue;
+            Invoke<31, void>(s_override, pActor, female, false, entry.Slot, uint16_t{9}, entry.Index);
+        }
+        for (const auto& entry : acCurrent.SkinTextures)
+        {
+            SetValue texture;
+            texture.Kind = SetValue::Text;
+            texture.Value.Text = entry.Texture.c_str();
+            Invoke<29, void, TESObjectREFR*, bool, bool, uint32_t, uint16_t, uint8_t, SetValue&>(
+                s_override, pActor, female, false, entry.Slot, uint16_t{9}, entry.Index, texture);
+        }
+        Invoke<32, void>(s_override, pActor, true);
+    }
+
     if (!s_transform || (acPrevious.Transforms.empty() && acCurrent.Transforms.empty()))
         return;
     for (const auto& entry : acPrevious.Transforms)
@@ -347,6 +391,17 @@ std::vector<uint8_t> RaceMenuVisuals::Encode(const Snapshot& acSnapshot)
         Put(bytes, row.Values);
         ++bytes[countOffset];
     }
+    const size_t skinOffset = bytes.size();
+    bytes.push_back(0);
+    for (const auto& row : acSnapshot.SkinTextures)
+    {
+        if (bytes.size() - skinOffset + row.Texture.size() + 6 > 4 * 1024)
+            break;
+        Put(bytes, row.Slot);
+        Put(bytes, row.Index);
+        PutText(bytes, row.Texture);
+        ++bytes[skinOffset];
+    }
     return bytes;
 }
 
@@ -375,6 +430,16 @@ bool RaceMenuVisuals::Decode(const uint8_t* apData, size_t aSize, Snapshot& aSna
         if (!reader.Text(row.Node) || !reader.Text(row.Key) || !reader.Read(row.Type) ||
             !reader.Read(row.Values) || !ValidTransform(row) ||
             !transforms.emplace(row.Node, row.Key, row.Type).second)
+            return false;
+    }
+    if (!reader.Read(count) || count > kMaxSkinTextures)
+        return false;
+    std::set<std::pair<uint32_t, uint8_t>> skinSlots;
+    for (unsigned int i = 0; i < count; ++i)
+    {
+        auto& row = aSnapshot.SkinTextures.emplace_back();
+        if (!reader.Read(row.Slot) || !reader.Read(row.Index) || !reader.Text(row.Texture) ||
+            !ValidSkinTexture(row) || !skinSlots.emplace(row.Slot, row.Index).second)
             return false;
     }
     return !reader.Size;

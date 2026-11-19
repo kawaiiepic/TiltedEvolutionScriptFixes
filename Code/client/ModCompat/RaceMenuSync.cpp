@@ -55,7 +55,7 @@ struct SkeeBodyMorph : SkeeInterface
     virtual void UpdateModelWeight(TESObjectREFR*, bool) = 0;
 };
 
-constexpr char kChannel[] = "skyrimtogether.racemenu.appearance.v1";
+constexpr char kChannel[] = "skyrimtogether.racemenu.appearance.v2";
 constexpr char kMorphKey[] = "SkyrimTogether";
 constexpr size_t kMaxName = 80;
 constexpr size_t kMaxSnapshot = 24 * 1024;
@@ -265,10 +265,11 @@ struct RaceMenuSync::State
             const auto query = module ? reinterpret_cast<Query>(GetProcAddress(module, "STQueryRaceMenuInterfaces")) : nullptr;
             auto* pInterfaces = query ? query() : nullptr;
             auto* pBody = pInterfaces ? pInterfaces->QueryInterface("BodyMorph") : nullptr;
-            if (!pBody || pBody->GetVersion() != 5)
+            if (!pBody || (pBody->GetVersion() != 4 && pBody->GetVersion() != 5))
                 return;
             pMorph = static_cast<SkeeBodyMorph*>(pBody);
             RaceMenuVisuals::Initialize(pInterfaces);
+            spdlog::info("RaceMenu appearance sync ready (BodyMorph v{})", pBody->GetVersion());
         }
 
         Broadcast(*pPlayer);
@@ -280,7 +281,7 @@ struct RaceMenuSync::State
             const uint32_t form = api.ResolvePlayerFormId(id);
             auto* pActor = form ? Cast<Actor>(TESForm::GetById(form)) : nullptr;
             const auto* pNode = pActor ? pActor->GetNiNode() : nullptr;
-            if (!pNode)
+            if (!pNode || !pActor->GetExtension()->IsRemotePlayer())
             {
                 peer.pNode = nullptr;
                 continue;
