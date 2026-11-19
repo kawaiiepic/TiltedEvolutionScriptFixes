@@ -39,7 +39,7 @@ This adapter covers the idle playback path. Paired or target-driven actions, scr
 [Immersive Interactions – Animated Actions](https://www.nexusmods.com/skyrimspecialedition/mods/47670)
 
 
-## RaceMenu body morphs
+## RaceMenu appearance
 
 Skyrim Together captures the local player's effective RaceMenu body slider values
 and sends them through its native messaging channel. Receivers apply each
@@ -49,9 +49,16 @@ Slider removals clear the corresponding synced values.
 
 Participating clients need RaceMenu, compatible meshes and the bundled
 `STCheckpointBridge.dll` in `Data/SKSE/Plugins`. The bridge discovers RaceMenu's
-public BodyMorph v5 interface. No MorphSyncTogether DLL or external relay is
+public SKEE interfaces. No MorphSyncTogether DLL or external relay is
 required. The existing Skyrim Together face and tint replication remains active.
-RaceMenu sculpt geometry, custom overlays and node transforms are outside this
-body slider implementation. In-game verification is pending.
+The same snapshot carries standard body, hand, foot and face overlays, including
+tattoo texture paths, tint and opacity. Clients must have the matching texture
+assets installed. Third-person node position, rotation, scale and scale mode are
+also synchronized. Synced transforms use their own keys on the remote proxy.
+
+Facial sculpt geometry remains pending. RaceMenu's full preset application also
+rewrites facial data and clears existing overrides and transforms. This
+implementation uses the narrower overlay and transform APIs. In-game
+verification is pending.
 
 [RaceMenu SKEE interface](https://github.com/expired6978/SKSE64Plugins/blob/master/skee64/IPluginInterface.h)

@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <ModCompat/RaceMenuSync.h>
+#include <ModCompat/RaceMenuVisuals.h>
 #include <Services/PluginMessagingService.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/UpdateEvent.h>
@@ -54,10 +55,10 @@ struct SkeeBodyMorph : SkeeInterface
     virtual void UpdateModelWeight(TESObjectREFR*, bool) = 0;
 };
 
-constexpr char kChannel[] = "skyrimtogether.racemenu.body.v1";
+constexpr char kChannel[] = "skyrimtogether.racemenu.appearance.v1";
 constexpr char kMorphKey[] = "SkyrimTogether";
 constexpr size_t kMaxName = 80;
-constexpr size_t kMaxSnapshot = 16 * 1024;
+constexpr size_t kMaxSnapshot = 24 * 1024;
 constexpr size_t kChunkSize = 4000;
 constexpr size_t kMaxPeers = 64;
 using Morphs = std::map<std::string, float>;
@@ -97,13 +98,20 @@ struct Header
 };
 static_assert(sizeof(Header) == 8);
 
-bool Decode(const std::vector<uint8_t>& acBytes, Morphs& aMorphs)
+bool Decode(const std::vector<uint8_t>& acBytes, Morphs& aMorphs, RaceMenuVisuals::Snapshot& aVisuals)
 {
-    size_t at = 0;
-    while (at < acBytes.size())
+    uint16_t morphSize{};
+    if (acBytes.size() < sizeof(morphSize))
+        return false;
+    std::memcpy(&morphSize, acBytes.data(), sizeof(morphSize));
+    size_t at = sizeof(morphSize);
+    const size_t end = at + morphSize;
+    if (end > acBytes.size())
+        return false;
+    while (at < end)
     {
         const size_t length = acBytes[at++];
-        if (length > acBytes.size() - at || acBytes.size() - at - length < sizeof(float))
+        if (length > end - at || end - at - length < sizeof(float))
             return false;
         std::string name(reinterpret_cast<const char*>(acBytes.data() + at), length);
         at += length;
@@ -113,7 +121,7 @@ bool Decode(const std::vector<uint8_t>& acBytes, Morphs& aMorphs)
         if (!ValidName(name) || !ValidValue(value) || !aMorphs.emplace(std::move(name), value).second)
             return false;
     }
-    return true;
+    return RaceMenuVisuals::Decode(acBytes.data() + end, acBytes.size() - end, aVisuals);
 }
 }
 
@@ -127,6 +135,7 @@ struct RaceMenuSync::State
         std::vector<uint8_t> Bytes;
         Morphs Desired;
         Morphs Applied;
+        RaceMenuVisuals::Snapshot DesiredVisuals, AppliedVisuals;
         uint32_t Form{};
         const NiNode* pNode{};
         bool Ready{};
@@ -180,9 +189,11 @@ struct RaceMenuSync::State
             return;
 
         Morphs snapshot;
-        if (Decode(peer.Bytes, snapshot))
+        RaceMenuVisuals::Snapshot visuals;
+        if (Decode(peer.Bytes, snapshot, visuals))
         {
             peer.Desired = std::move(snapshot);
+            peer.DesiredVisuals = std::move(visuals);
             peer.Ready = true;
         }
         peer.Bytes.clear();
@@ -229,8 +240,12 @@ struct RaceMenuSync::State
             return;
         for (const auto& [name, value] : acPeer.Applied)
             pMorph->ClearMorph(pActor, name.c_str(), kMorphKey);
-        if (!acPeer.Applied.empty() && pActor->GetNiNode())
-            pMorph->ApplyBodyMorphs(pActor, false);
+        if (pActor->GetNiNode())
+        {
+            if (!acPeer.Applied.empty())
+                pMorph->ApplyBodyMorphs(pActor, false);
+            RaceMenuVisuals::Apply(*pActor, acPeer.AppliedVisuals, {});
+        }
     }
 
     void Tick()
@@ -253,6 +268,7 @@ struct RaceMenuSync::State
             if (!pBody || pBody->GetVersion() != 5)
                 return;
             pMorph = static_cast<SkeeBodyMorph*>(pBody);
+            RaceMenuVisuals::Initialize(pInterfaces);
         }
 
         Broadcast(*pPlayer);
@@ -273,6 +289,7 @@ struct RaceMenuSync::State
             {
                 Clear(peer);
                 peer.Applied.clear();
+                peer.AppliedVisuals = {};
                 peer.Form = form;
             }
 
@@ -296,6 +313,11 @@ struct RaceMenuSync::State
             }
             if (peer.Applied != peer.Desired)
                 peer.Applied = peer.Desired;
+            if (peer.pNode != pNode || peer.AppliedVisuals != peer.DesiredVisuals)
+            {
+                RaceMenuVisuals::Apply(*pActor, peer.AppliedVisuals, peer.DesiredVisuals);
+                peer.AppliedVisuals = peer.DesiredVisuals;
+            }
             peer.pNode = pNode;
         }
     }
@@ -304,18 +326,23 @@ struct RaceMenuSync::State
     {
         Names names;
         pMorph->VisitMorphs(&aPlayer, names);
-        std::vector<uint8_t> bytes;
+        auto visuals = RaceMenuVisuals::Encode(RaceMenuVisuals::Capture(aPlayer));
+        std::vector<uint8_t> bytes(sizeof(uint16_t));
         for (const auto& name : names.Values)
         {
             const float value = pMorph->GetBodyMorphs(&aPlayer, name.c_str());
             if (!ValidValue(value) || value == 0.f)
                 continue;
-            if (bytes.size() + 1 + name.size() + sizeof(value) > kMaxSnapshot)
+            if (bytes.size() + 1 + name.size() + sizeof(value) + visuals.size() > kMaxSnapshot)
                 break;
             bytes.push_back(static_cast<uint8_t>(name.size()));
             Append(bytes, name.data(), name.size());
             Append(bytes, &value, sizeof(value));
         }
+
+        const auto morphSize = static_cast<uint16_t>(bytes.size() - sizeof(uint16_t));
+        std::memcpy(bytes.data(), &morphSize, sizeof(morphSize));
+        bytes.insert(bytes.end(), visuals.begin(), visuals.end());
 
         const auto now = std::chrono::steady_clock::now();
         if (bytes == LastSent && now < ResendAt)
