@@ -25,6 +25,9 @@ MapService::MapService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
 {
     m_discoveryConnection = aDispatcher.sink<PacketEvent<RequestMapDiscovery>>().connect<&MapService::OnMapDiscovery>(this);
     m_joinConnection = aDispatcher.sink<PlayerJoinEvent>().connect<&MapService::OnPlayerJoin>(this);
+    if (!m_discoveryPolicies.IsHealthy())
+        spdlog::error("Unable to read shared-discovery-policies.conf (error line {}); shared map discoveries are disabled.",
+            m_discoveryPolicies.ErrorLine());
     if (!m_discoveries.IsHealthy())
         spdlog::error("Unable to read shared-discoveries.log; shared map discoveries are disabled.");
       m_playerSetWaypointConnection = 
@@ -66,7 +69,8 @@ void MapService::OnMapDiscovery(const PacketEvent<RequestMapDiscovery>& acMessag
         return;
     const auto marker = acMessage.Packet.Marker;
     const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(marker, *acMessage.pPlayer);
-    if (!key || m_discoveries.Discover(*key) != Campaign::DiscoveryJournal::Result::Added)
+    if (!key || !m_discoveryPolicies.IsShared(*key, true) ||
+        m_discoveries.Discover(*key) != Campaign::DiscoveryJournal::Result::Added)
         return;
 
     NotifyMapDiscoveries notify{};
@@ -84,6 +88,8 @@ void MapService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
     NotifyMapDiscoveries notify{};
     for (const auto& key : m_discoveries.GetDiscoveries())
     {
+        if (!m_discoveryPolicies.IsShared(key, true))
+            continue;
         const auto marker = mods.FindFormId(key);
         if (!marker || !acEvent.pPlayer->HasModId(marker->ModId))
             continue;

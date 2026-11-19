@@ -100,6 +100,9 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     (directory / "shared-npc-life-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x89B\n'
     )
+    (directory / "shared-discovery-policies.conf").write_text(
+        'personal light "Quest Pack.esl" 0x919\n'
+    )
     resource = directory / "resources" / "smoke-check"
     resource.mkdir(parents=True)
     (resource / "smoke-check.manifest").write_text(
@@ -149,6 +152,9 @@ end)
         runner.command("/campaign-backup")
         runner.expect("Backed up 23 shared quest records")
         assert (directory / "shared-quests.log.backup").read_bytes() == (directory / "shared-quests.log").read_bytes()
+    # Simulate a discovery recorded before the operator made it personal.
+    with (directory / "shared-discoveries.log").open("a") as discoveries:
+        discoveries.write('1 2 "Quest Pack.esl" 1 2329\n')
     with Runner(directory) as restarted:
         restarted.expect("Loaded 23 shared quest records")
         restarted.expect("CAMPAIGN_SMOKE_RESTORED")

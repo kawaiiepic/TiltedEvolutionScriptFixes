@@ -508,6 +508,8 @@ public:
             if (Mode == "map-discover")
             {
                 RequestMapDiscovery request{};
+                request.Marker = GameId(QuestMod, 0x919); // Personal discovery must stay local.
+                Transmit(request);
                 request.Marker = GameId(QuestMod, 0x918);
                 Transmit(request);
                 Transmit(request);

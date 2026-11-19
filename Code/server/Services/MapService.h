@@ -2,6 +2,7 @@
 
 #include <Events/PacketEvent.h>
 #include <Campaign/DiscoveryJournal.h>
+#include <Campaign/FormSyncPolicies.h>
 
 struct World;
 struct RequestSetWaypoint;
@@ -29,6 +30,7 @@ struct MapService
     void OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept;
 
     World& m_world;
+    Campaign::FormSyncPolicies m_discoveryPolicies{"shared-discovery-policies.conf"};
     Campaign::DiscoveryJournal m_discoveries{"shared-discoveries.log"};
     entt::scoped_connection m_discoveryConnection;
     entt::scoped_connection m_joinConnection;
