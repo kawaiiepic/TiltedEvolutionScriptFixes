@@ -1,4 +1,5 @@
 
+#include "ModCompat/CharacterCheckpoints.h"
 #include "Services/InputService.h"
 #include "Systems/RenderSystemD3D11.h"
 
@@ -57,6 +58,14 @@ void WakeMainMenuPump() noexcept
     }
 }
 
+bool RequestWindowClose() noexcept
+{
+    const HWND window = s_menuPumpWindow.load(std::memory_order_acquire);
+    if (window && PostMessageW(window, WM_CLOSE, 0, 0)) return true;
+    spdlog::warn("Could not resume Skyrim's window close after disconnect");
+    return false;
+}
+
 RendererWindow* GetMainWindow()
 {
     return g_RenderWindow;
@@ -85,6 +94,8 @@ LRESULT CALLBACK Hook_WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             World::PumpMainMenu();
             return 0;
         }
+        if (uMsg == WM_CLOSE && CharacterCheckpoints::QueueWindowCloseCheckpoint())
+            return 0;
         if (uMsg == WM_NCDESTROY)
         {
             s_menuPumpWindow.store(nullptr, std::memory_order_release);

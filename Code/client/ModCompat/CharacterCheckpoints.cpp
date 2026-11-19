@@ -9,6 +9,7 @@
 #include <Messages/CharacterSave.h>
 #include <Services/TransportService.h>
 #include <Services/OverlayService.h>
+#include <Services/RunnerService.h>
 #include <Services/InputService.h>
 #include <Games/Skyrim/Interface/UI.h>
 #include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
@@ -25,6 +26,7 @@
 #include <shlobj.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <TiltedCore/Filesystem.hpp>
 #include <string_view>
@@ -56,7 +58,7 @@ struct State
     bool Required{}, Pending{}, NeedsBegin{}, HasRoster{};
     bool NativeEnabled{}, CaptureReady{}, AutoEnter{};
     DisconnectStep Disconnect{};
-    bool NeedsUploadRecovery{};
+    bool NeedsUploadRecovery{}, ExitAfterSave{};
     Clock::time_point DisconnectDeadline{};
     bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
     Clock::time_point NewGameDeadline{};
@@ -97,6 +99,8 @@ NativeDriver s_driver{};
 uint64_t s_nextNativeToken{};
 Clock::time_point s_menuReturnDeadline{}, s_nextMenuReturnAttempt{};
 bool s_menuReturnQueued{}, s_menuReturnDispatched{};
+std::atomic_bool s_saveBeforeWindowClose{}, s_windowExitQueued{};
+bool s_closingWindow{};
 constexpr auto kAutosaveInterval = std::chrono::minutes(2);
 constexpr auto kEventSaveCooldown = std::chrono::seconds(20);
 constexpr auto kEventSaveSettle = std::chrono::seconds(2);
@@ -307,7 +311,7 @@ void CheckpointCommitted(const char* apDetail)
     if (s.Disconnect == DisconnectStep::Saving)
     {
         s.Disconnect = DisconnectStep::Committed;
-        Change(Phase::Ready, "Returning to main menu...");
+        Change(Phase::Ready, s.ExitAfterSave ? "Exiting Skyrim..." : "Returning to main menu...");
     }
     else
         Change(Phase::Ready, apDetail);
@@ -675,6 +679,16 @@ void PublishState() noexcept
     args->SetString(5, s.Step == Phase::Choose && s.HasRoster ? s.Roster : "");
     overlay->ExecuteAsync("characterCheckpoint", args);
 }
+static void CompleteDisconnect(TransportService& aTransport) noexcept
+{
+    const bool exit = s.ExitAfterSave;
+    s_closingWindow = exit;
+    aTransport.Close();
+    s_closingWindow = false;
+    if (exit && !BSGraphics::RequestWindowClose())
+        ReturnToMainMenu();
+}
+
 void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept
 {
     if (!aTransport.IsOnline())
@@ -688,6 +702,7 @@ void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept
     if (aAction == DisconnectAction::Cancel && failed)
     {
         s.Disconnect = DisconnectStep::None;
+        s.ExitAfterSave = false;
         s.Detail = s.Step == Phase::Failed ? "Reconnect to resume checkpoint saving." : "Disconnect canceled.";
         PublishState();
         return;
@@ -695,7 +710,7 @@ void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept
     if (aAction == DisconnectAction::Discard && failed)
     {
         InputService::SetOverlayActive(overlay, false);
-        aTransport.Close();
+        CompleteDisconnect(aTransport);
         return;
     }
     if ((aAction != DisconnectAction::Request || s.Disconnect != DisconnectStep::None) &&
@@ -733,8 +748,37 @@ void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept
     PublishState();
 }
 
+void EnableWindowCloseCheckpoint() noexcept
+{
+    s_saveBeforeWindowClose.store(s.Required && s.NativeEnabled && s.Revision, std::memory_order_release);
+}
+
+bool QueueWindowCloseCheckpoint() noexcept
+{
+    if (!s_saveBeforeWindowClose.load(std::memory_order_acquire))
+        return false;
+    if (!s_windowExitQueued.exchange(true))
+    {
+        World::Get().GetRunner().Queue([]()
+        {
+            s_windowExitQueued.store(false);
+            auto& transport = World::Get().GetTransport();
+            if (!transport.IsOnline() || !s_saveBeforeWindowClose.load(std::memory_order_acquire))
+            {
+                BSGraphics::RequestWindowClose();
+                return;
+            }
+            s.ExitAfterSave = true;
+            Disconnect(transport, DisconnectAction::Request);
+        });
+        BSGraphics::WakeMainMenuPump();
+    }
+    return true;
+}
+
 void ReturnToMainMenu() noexcept
 {
+    if (s_closingWindow) return;
     s_menuReturnDeadline = Clock::now() + std::chrono::seconds(30);
     s_nextMenuReturnAttempt = {};
     s_menuReturnDispatched = false;
@@ -826,6 +870,7 @@ void Begin(bool aRequired) noexcept
 }
 void Reset() noexcept
 {
+    s_saveBeforeWindowClose.store(false, std::memory_order_release);
     if (!s.Revision && s.PreparingFirstSave)
         spdlog::warn("Disconnected before the first server checkpoint was confirmed");
     AbandonNative();
@@ -1146,7 +1191,7 @@ void Tick(TransportService& aTransport) noexcept
         const auto now = Clock::now();
         if (s.Disconnect == DisconnectStep::Committed)
         {
-            aTransport.Close();
+            CompleteDisconnect(aTransport);
             return;
         }
         if (s.PortraitRequest && now >= s.PortraitDeadline) CancelPortrait();

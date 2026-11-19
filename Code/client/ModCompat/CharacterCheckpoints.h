@@ -43,6 +43,8 @@ void Tick(TransportService& aTransport) noexcept;
 enum class DisconnectAction { Request, Retry, Cancel, Discard };
 void Disconnect(TransportService& aTransport, DisconnectAction aAction) noexcept;
 void ReturnToMainMenu() noexcept;
+void EnableWindowCloseCheckpoint() noexcept;
+bool QueueWindowCloseCheckpoint() noexcept;
 bool CanEnter() noexcept;
 void PublishState() noexcept;
 }

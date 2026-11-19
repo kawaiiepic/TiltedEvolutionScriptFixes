@@ -325,6 +325,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
         m_enterAfterLogin = false;
         m_connected = true;
         m_localPlayerId = acMessage.PlayerId;
+        CharacterCheckpoints::EnableWindowCloseCheckpoint();
 
         m_world.SetServerSettings(acMessage.Settings);
 
