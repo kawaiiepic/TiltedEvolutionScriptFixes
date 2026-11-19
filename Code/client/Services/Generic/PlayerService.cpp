@@ -99,6 +99,7 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     m_fastTravelOrigin = {};
     m_waitingFastTravelArrival = false;
     m_fastTravelSequence = 0;
+    m_fastTravelMapOpen = false;
     PlayerCharacter::Get()->SetDifficulty(m_previousDifficulty);
     m_serverDifficulty = m_previousDifficulty = 6;
 
@@ -359,14 +360,15 @@ void PlayerService::RunFastTravelCatchUp() noexcept
         m_fastTravelOrigin = {};
         m_waitingFastTravelArrival = false;
     }
-    if (!m_waitingFastTravelArrival && pUI->GetMenuOpen("MapMenu"))
-    {
+    const bool cMapOpen = pUI->GetMenuOpen("MapMenu");
+    const bool cLoading = pUI->GetMenuOpen("Loading Menu");
+    if (cMapOpen && !m_fastTravelMapOpen && !cLoading && !m_waitingFastTravelArrival)
         m_fastTravelOrigin = m_reportedCell;
+    m_fastTravelMapOpen = cMapOpen;
+    if (cMapOpen && !cLoading && m_fastTravelOrigin && m_fastTravelOrigin == m_reportedCell)
         m_fastTravelUntil = now + std::chrono::minutes(2);
-        return;
-    }
     if (!m_waitingFastTravelArrival || !m_reportedCell || m_reportedCell == m_fastTravelOrigin ||
-        pUI->GetMenuOpen("Loading Menu") || pUI->GetMenuOpen("MapMenu"))
+        cLoading || cMapOpen)
         return;
 
     const auto* pCell = pPlayer->GetParentCellEx();
@@ -386,13 +388,13 @@ void PlayerService::RunFastTravelCatchUp() noexcept
 
 void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
 {
+    m_fastTravelOrigin = {};
+    m_waitingFastTravelArrival = false;
     if (acMessage.GroupTravelId)
     {
         if (acMessage.GroupTravelId == m_lastGroupTravelId)
             return;
         m_lastGroupTravelId = acMessage.GroupTravelId;
-        m_fastTravelOrigin = {};
-        m_waitingFastTravelArrival = false;
         auto* pPlayer = PlayerCharacter::Get();
         const auto* pUI = UI::Get();
         if (!pPlayer || !pUI || m_carriage || pPlayer->IsDead() || pPlayer->IsInCombat() ||

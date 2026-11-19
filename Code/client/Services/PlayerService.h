@@ -92,6 +92,7 @@ private:
     GameId m_fastTravelOrigin{};
     std::chrono::steady_clock::time_point m_fastTravelUntil{};
     bool m_waitingFastTravelArrival{};
+    bool m_fastTravelMapOpen{};
     uint32_t m_fastTravelSequence{};
     uint32_t m_lastGroupTravelId{};
     uint32_t m_nextCarriageToken{};
