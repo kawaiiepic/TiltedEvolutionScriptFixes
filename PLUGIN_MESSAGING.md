@@ -62,3 +62,7 @@ implementation uses the narrower overlay and transform APIs. In-game
 verification is pending.
 
 [RaceMenu SKEE interface](https://github.com/expired6978/SKSE64Plugins/blob/master/skee64/IPluginInterface.h)
+
+## Immersive Equipment Displays
+
+Optional native-only IEDSyncTogether adaptation: [Code/ied_sync](Code/ied_sync/README.md). Uses the same binary relay, with 24 KiB snapshots fragmented into native 4 KiB messages. Build and install the add-on on clients only. No STRPM relay is required; build and game validation remain pending.

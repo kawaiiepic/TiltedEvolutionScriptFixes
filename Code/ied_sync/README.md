@@ -1,0 +1,9 @@
+# IEDSyncTogether for native Skyrim Together messaging
+
+Adapted from [Caelvanost/IEDSyncTogether](https://github.com/Caelvanost/IEDSyncTogether) at commit `ad4710a6b33b966af55d8a0326f1dae0e27460ed` (MIT; see LICENSE). This optional Windows SKSE add-on retains upstream IED slot/custom-item capture, stable plugin/form identity, scene graph rendering and transform watchdog. It replaces STRPM transport and proxy resolution with the fork's `ST_QueryPluginMessaging` interface. No STRPluginMessagingAPI DLL, chat relay, server Lua resource or separate port is needed.
+
+Build on Windows with the upstream CommonLibSSE-NG vcpkg registry and `build-vortex.ps1` from this directory. The archive contains the client DLL and its lightweight ownership ESP. Install both with IED and its dependencies on participating clients. Do not install this archive on a dedicated server; deploy matching native-messaging Skyrim Together client and server builds instead. Disable IED NPC Displays during initial two-client validation to isolate the synced display path.
+
+The existing native API retains its 4 KiB per-message cap. Full IED snapshots are bounded to 24 KiB and fragmented on `skyrimtogether.ied.state.v1`; incomplete snapshots never replace the previous state. Changes are paced, unchanged snapshots are refreshed every ten seconds, and stale remote snapshots expire after forty seconds. Proxy lookup uses authenticated Together player IDs, with reapplication after proxy removal/recreation. No STRPM compatibility shim is included.
+
+This is a separately built optional add-on, not part of the base Skyrim Together distribution yet. CommonLibSSE/SKSE runtime compatibility, Windows compilation and two-client gameplay (including reconnect, custom displays and coexistence with RaceMenu sync) require verification before release.
