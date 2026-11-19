@@ -100,7 +100,7 @@ constexpr unsigned kItemMenuClosed = 1, kInteriorTransition = 2;
 void ObserveSaveEvents(Clock::time_point now)
 {
     const auto* ui = UI::Get();
-    const auto* player = PlayerCharacter::Get();
+    auto* player = PlayerCharacter::Get();
     if (!ui || !player) return;
     if (ui->GetMenuOpen("Main Menu") || ui->GetMenuOpen("RaceSex Menu"))
     {
