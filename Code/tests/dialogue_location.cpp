@@ -1,6 +1,7 @@
 #include <TiltedCore/Stl.hpp>
 #include <TiltedCore/Buffer.hpp>
 #include "../server/Services/DialogueLocation.h"
+#include <glm/vec3.hpp>
 #include <Structs/GridCellCoords.h>
 #include <catch2/catch.hpp>
 
