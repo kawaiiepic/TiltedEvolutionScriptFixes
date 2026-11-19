@@ -205,6 +205,16 @@
   img { width: 1.8rem; height: 1.8rem; object-fit: cover; border-radius: 50%; border: 1px solid #8a8068; background: #292723; }
 }
 
+.first-save-status {
+  position: absolute;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  padding: 0.5rem 1rem;
+  pointer-events: none;
+}
+
 .multiplayer-menu-hint {
   position: absolute;
   left: 3vw;

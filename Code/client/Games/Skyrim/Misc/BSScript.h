@@ -2,6 +2,7 @@
 
 #include <BSCore/BSIntrusiveRefCounted.h>
 #include <Misc/BSFixedString.h>
+#include <BSCore/BSTSmartPointer.h>
 #include <tuple>
 
 struct BSScript
@@ -112,7 +113,7 @@ struct BSScript
 
         virtual ~IFunctionArguments() {}
 
-        virtual void Prepare(Statement* apUnk) noexcept = 0;
+        virtual bool Prepare(Statement* apOutput) const noexcept = 0;
     };
 
     struct Stack
@@ -158,6 +159,11 @@ struct BSScript
         template <class T> T* GetObjectForHandle(uint64_t aHandle) { return (T*)(BSScript::IObjectHandlePolicy::Get()->GetObjectForHandle((uint32_t)T::Type, aHandle)); }
     };
 
+    struct IStackCallbackFunctor : BSIntrusiveRefCounted
+    {
+        virtual ~IStackCallbackFunctor() = default;
+    };
+
     struct IVirtualMachine
     {
         virtual ~IVirtualMachine() = 0;
@@ -199,7 +205,8 @@ struct BSScript
         virtual void sub_23();
         virtual void SendEvent(uint64_t aId, const BSFixedString& acEventName, IFunctionArguments* apArgs) const noexcept;
         virtual void sub_25();
-        virtual void sub_26();
+        virtual bool DispatchStaticCall(const BSFixedString& acClass, const BSFixedString& acFunction, IFunctionArguments* apArgs,
+                                        BSTSmartPointer<IStackCallbackFunctor>& aCallback);
         virtual void sub_27();
         virtual void sub_28();
         virtual void sub_29();

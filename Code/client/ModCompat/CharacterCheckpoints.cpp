@@ -13,6 +13,7 @@
 #include <Forms/TESObjectCELL.h>
 #include <PlayerCharacter.h>
 #include <ScriptExtender.h>
+#include <Misc/GameVM.h>
 #include <World.h>
 #include <OverlayApp.hpp>
 #include <cryptopp/sha.h>
@@ -51,7 +52,7 @@ struct State
     bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
     Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
-    bool LobbySaveLoaded{};
+    bool LobbySaveLoaded{}, PreparingFirstSave{};
     Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
@@ -85,7 +86,9 @@ const char* PhaseName() noexcept
     case Phase::Choose: return "choose";
     case Phase::Selecting: return "selecting";
     case Phase::Download: return "downloading";
-    case Phase::NewCharacter: return s.NativeEnabled ? "new-native" : "new";
+    case Phase::NewCharacter:
+        if (s.PreparingFirstSave) return "saving-first-checkpoint";
+        return s.NativeEnabled ? "new-native" : "new";
     case Phase::Staged: return s.NativeEnabled ? "awaiting-native-load" : "staged";
     case Phase::LoadingNative: return "loading-native";
     case Phase::Ready: return "ready";
@@ -93,6 +96,25 @@ const char* PhaseName() noexcept
     default: return "failed";
     }
 }
+// Game.psc declares QuitToMainMenu as a global native with zero arguments.
+bool RequestMainMenu() noexcept
+{
+    auto* vm = GameVM::Get();
+    if (!vm || !vm->virtualMachine) return false;
+    struct EmptyArguments final : BSScript::IFunctionArguments
+    {
+        bool Prepare(Statement* apOutput) const noexcept override
+        {
+            apOutput->SetSize(0);
+            return true;
+        }
+    };
+    static EmptyArguments args;
+    static const BSFixedString script("Game"), function("QuitToMainMenu");
+    BSTSmartPointer<BSScript::IStackCallbackFunctor> callback;
+    return vm->virtualMachine->DispatchStaticCall(script, function, &args, callback);
+}
+
 void Change(Phase aPhase, const char* apDetail)
 {
     s.Step = aPhase;
@@ -423,7 +445,8 @@ bool CanReplaceStagingWorld() noexcept
 
 bool NeedsStagingPump() noexcept
 {
-    return s.Step == Phase::LoadingLobby || s.Step == Phase::WaitingForNewGame || s.LobbySaveLoaded;
+    return s.Step == Phase::LoadingLobby || s.Step == Phase::WaitingForNewGame || s.LobbySaveLoaded ||
+        (s.NativeEnabled && (s.Step == Phase::NewCharacter || s.Step == Phase::Upload));
 }
 
 void Begin(bool aRequired) noexcept
@@ -458,12 +481,17 @@ void Begin(bool aRequired) noexcept
 }
 void Reset() noexcept
 {
+    if (!s.Revision && s.PreparingFirstSave)
+        spdlog::warn("Disconnected before the first server checkpoint was confirmed");
     AbandonNative();
     s = {};
     PublishState();
 }
 bool CanEnter() noexcept
 {
+    if (s.PreparingFirstSave && s.Revision && s.NativeEnabled &&
+        NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration != 1)
+        return false;
     return !s.Required || ((s.Step == Phase::Ready || (!s.NativeEnabled && s.Step == Phase::Staged)) && !s.Pending && s.Revision);
 }
 
@@ -521,7 +549,23 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
                 {
                     if (CanReplaceStagingWorld())
                     {
-                        Change(Phase::WaitingForNewGame, "Close the overlay and return to Skyrim's main menu to start your new character.");
+                        Change(Phase::WaitingForNewGame, "Returning to Skyrim's main menu to start character creation...");
+                        s.NewGameDeadline = Clock::now() + kNativeTimeout;
+                        World::Get().QueueCheckpointTask([selection = s.Name]()
+                        {
+                            if (s.Step != Phase::WaitingForNewGame || s.Name != selection ||
+                                !World::Get().GetTransport().IsInLobby() || !CanReplaceStagingWorld()) return;
+                            if (RequestMainMenu())
+                            {
+                                spdlog::info("Requested return to the main menu for character creation");
+                                InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                            }
+                            else
+                            {
+                                s.NewGameDeadline = {};
+                                Change(Phase::WaitingForNewGame, "Could not return automatically. Return to Skyrim's main menu to start character creation.");
+                            }
+                        });
                         return;
                     }
                     auto* ui = UI::Get();
@@ -592,6 +636,12 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
         case P::Commit:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision + 1 || acReply.Digest != s.Digest ||
                 acReply.EssSize != s.Ess || acReply.CoSaveSize != s.Co) { Fail("Invalid commit response."); return; }
+            if (!s.Revision)
+            {
+                spdlog::info("First character checkpoint committed by the server (revision {})", acReply.Revision);
+                if (const auto* ui = UI::Get(); ui && ui->GetMenuOpen("Main Menu"))
+                    s.AutoEnter = false;
+            }
             s.Revision = acReply.Revision;
             s.Baseline = s.Captured;
             s.Bytes.clear();
@@ -616,7 +666,16 @@ void Tick(TransportService& aTransport) noexcept
         if (s.Step == Phase::WaitingForNewGame)
         {
             const auto* ui = UI::Get();
-            if (!ui || !ui->GetMenuOpen("Main Menu") || !MainMenuBridge::IsReady()) return;
+            if (!ui || !ui->GetMenuOpen("Main Menu") || !MainMenuBridge::IsReady())
+            {
+                if (s.NewGameDeadline != Clock::time_point{} && now >= s.NewGameDeadline)
+                {
+                    s.NewGameDeadline = {};
+                    Change(Phase::WaitingForNewGame, "Still waiting for Skyrim. Return to the main menu to start character creation.");
+                    InputService::SetOverlayActive(World::Get().GetOverlayService(), true);
+                }
+                return;
+            }
             s.LobbySaveLoaded = false;
             s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
             s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
@@ -725,6 +784,11 @@ void Tick(TransportService& aTransport) noexcept
                 s.CharacterReadySince = {};
                 return;
             }
+            if (newGames == 1 && s.SawRaceMenu && ui && !s.PreparingFirstSave)
+            {
+                s.PreparingFirstSave = true;
+                Change(Phase::NewCharacter, "Preparing your first server save. Stay in game until it finishes.");
+            }
             if (newGames != 1 || !s.SawRaceMenu || !aTransport.CanEnterWorld())
             {
                 s.CharacterReadySince = {};
@@ -798,7 +862,10 @@ void Tick(TransportService& aTransport) noexcept
         if (s.Step == Phase::Staged && aTransport.IsOnline())
             Change(Phase::Ready, "Connected using the selected character slot.");
         if ((s.Step != Phase::NewCharacter && !(s.Step == Phase::Ready && aTransport.IsOnline())) ||
-            now < s.NextPoll || !aTransport.CanEnterWorld()) return;
+            now < s.NextPoll) return;
+        // Once the named native save completes, only file I/O and the lobby connection
+        // are needed to verify and upload it, even if Skyrim has returned to title.
+        if (!s.CaptureReady && !aTransport.CanEnterWorld()) return;
         if (s.NativeEnabled && !s.CaptureReady) return;
         if (s.NativeEnabled && now >= s.NativeDeadline) { Fail("Completed native save files never became readable. Check the active profile save directory."); return; }
         s.NextPoll = now + std::chrono::seconds(1);
@@ -833,6 +900,7 @@ void Tick(TransportService& aTransport) noexcept
         s.Offset = 0;
         s.NeedsBegin = true;
         CryptoPP::SHA256().CalculateDigest(s.Digest.data(), s.Bytes.data(), s.Bytes.size());
+        if (!s.Revision) spdlog::info("Uploading the first character checkpoint ({} bytes)", s.Bytes.size());
         Change(Phase::Upload, "Uploading the completed native save...");
     }
     catch (...) { Fail("Checkpoint file access failed; reconnect to resume."); }

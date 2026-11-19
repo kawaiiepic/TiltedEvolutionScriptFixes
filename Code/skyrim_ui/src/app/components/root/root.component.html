@@ -2,6 +2,14 @@
   <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
     SKYRIM TOGETHER · F2 / RIGHT CTRL TO PLAY
   </aside>
+  <ng-container *ngIf="checkpoint$ | async as checkpoint">
+    <aside class="first-save-status" role="status" *ngIf="(lobby$ | async) &&
+      (checkpoint.phase === 'saving-first-checkpoint' || (checkpoint.phase === 'uploading' && checkpoint.revision === '0') ||
+       (checkpoint.phase === 'failed' && checkpoint.name && checkpoint.revision === '0') ||
+       (checkpoint.phase === 'ready' && checkpoint.revision === '1'))">
+      {{ checkpoint.detail }}
+    </aside>
+  </ng-container>
   <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
 
