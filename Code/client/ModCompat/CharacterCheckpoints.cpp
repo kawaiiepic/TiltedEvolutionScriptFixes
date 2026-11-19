@@ -347,7 +347,7 @@ bool FinishCharacter(TransportService& aTransport) noexcept
 bool IsAlternateStartPickerEnabled() noexcept
 {
     wchar_t value[2]{};
-    return GetEnvironmentVariableW(L"ST_ALTERNATE_START_PICKER", value, 2) == 1 && value[0] == L'1';
+    return GetEnvironmentVariableW(L"ST_ALTERNATE_START_PICKER", value, 2) != 1 || value[0] != L'0';
 }
 
 bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept
@@ -584,7 +584,7 @@ void Tick(TransportService& aTransport) noexcept
         {
             if (MainMenuBridge::NewGameRequestFailed() || now >= s.NewGameDeadline)
             {
-                Fail("The Alternate Start lobby did not open. Return to the main menu and disable ST_ALTERNATE_START_PICKER to use the title-screen picker.");
+                Fail("The Alternate Start lobby did not open. Restart with ST_ALTERNATE_START_PICKER=0 to use the title-screen picker.");
                 return;
             }
 

@@ -15,7 +15,7 @@ The packaged SWF initializes Credits and Downloadable Content with their native 
 
 ## Alternate Start character picker
 
-Set `ST_ALTERNATE_START_PICKER=1` in the environment of the Skyrim Together launcher to try the Abandoned Prison picker. It requires the loaded `Alternate Start - Live Another Life.esp`, a server that requires checkpoints, the SKSE checkpoint bridge, and a working native Play menu. Leaving the variable unset uses the title-screen picker.
+The Abandoned Prison picker opens automatically with `Alternate Start - Live Another Life.esp` loaded, a server that requires checkpoints, the SKSE checkpoint bridge, and a working native Play menu. Other setups use the title-screen picker. To use the title-screen picker on an eligible setup, set `ST_ALTERNATE_START_PICKER=0` in the Skyrim Together launcher’s environment before starting the game.
 
 The prototype starts a local New Game and holds the Alternate Start quest at its RaceMenu step. It opens the picker only after the expected New Game reaches the Abandoned Prison. Selecting an existing slot loads its checkpoint. Creating a slot resumes the quest, opens RaceMenu, and runs the initial campaign save after character creation. A disconnect or staging error requires returning to the title screen before trying again.
 
