@@ -15,8 +15,6 @@ The packaged SWF initializes Credits and Downloadable Content with their native 
 
 ## Alternate Start character picker
 
-The preview uses the title-screen picker by default when the local lobby test files are unavailable. Connecting never starts New Game as a staging fallback.
-
-To test an in-game picker, keep `STLobbyTest.ess` and `STLobbyTest.skse` in the active Skyrim save directory. The preview checks the standard and GOG Documents save folders. For a redirected profile, point `ST_SAVE_DIRECTORY` at its actual save directory. Use a save made with the same mod profile in the Abandoned Prison after RaceMenu closes and before using the statue. The local files are excluded from checkpoint upload and are not distributed.
+The Windows preview bundles `STLobbyTest.ess` and `STLobbyTest.skse` beside the launcher in `LobbySave`. With Alternate Start loaded, the client copies the pair into the Steam Skyrim save directory on first use, or into the active profile directory specified by `ST_SAVE_DIRECTORY`. An existing local pair takes precedence. A partial or unreadable local pair is left in place and the picker stays at the title screen. The supplied lobby was made with one mod profile, so Skyrim may reject it with a different mod list.
 
 Selecting an existing slot replaces the lobby save. Creating a new slot waits for you to return to the title screen, then starts a fresh Alternate Start game automatically. Set `ST_ALTERNATE_START_PICKER=0` before launch to use the title-screen picker even when the test save is present.

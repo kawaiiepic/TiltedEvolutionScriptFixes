@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <TiltedCore/Filesystem.hpp>
 #include <string_view>
 #include <vector>
 
@@ -133,7 +134,7 @@ std::filesystem::path SaveDirectory()
         return {};
     return std::filesystem::path(documents) / L"My Games" / L"Skyrim Special Edition" / L"Saves";
 }
-bool HasLocalLobbySave() noexcept
+bool PrepareLocalLobbySave() noexcept
 {
     try
     {
@@ -151,9 +152,28 @@ bool HasLocalLobbySave() noexcept
             return validHeader(".ess", "TESV_SAVEGAME") && validHeader(".skse", "SKSE");
         };
         if (hasPair(directory)) return true;
-        if (GetEnvironmentVariableW(L"ST_SAVE_DIRECTORY", nullptr, 0) != 0) return false;
-        // SKSE uses a separate Documents folder for the GOG edition.
-        return hasPair(directory.parent_path().parent_path() / L"Skyrim Special Edition GOG" / L"Saves");
+        if (GetEnvironmentVariableW(L"ST_SAVE_DIRECTORY", nullptr, 0) == 0 &&
+            hasPair(directory.parent_path().parent_path() / L"Skyrim Special Edition GOG" / L"Saves"))
+            return true;
+
+        const auto source = TiltedPhoques::GetPath() / "LobbySave";
+        if (!hasPair(source)) return false;
+        const std::string stem(STCheckpointBridge::LobbySaveName);
+        const auto ess = directory / (stem + ".ess");
+        const auto coSave = directory / (stem + ".skse");
+        std::error_code ec;
+        if (std::filesystem::exists(ess, ec) || ec || std::filesystem::exists(coSave, ec) || ec)
+            return false;
+        std::filesystem::create_directories(directory, ec);
+        if (ec || !std::filesystem::copy_file(source / coSave.filename(), coSave, ec))
+            return false;
+        if (!std::filesystem::copy_file(source / ess.filename(), ess, ec))
+        {
+            std::filesystem::remove(coSave, ec);
+            return false;
+        }
+        spdlog::info("Installed the bundled Abandoned Prison lobby save pair");
+        return true;
     }
     catch (...) { return false; }
 }
@@ -403,7 +423,7 @@ void Begin(bool aRequired) noexcept
         const auto* mod = mods ? mods->GetByName("Alternate Start - Live Another Life.esp") : nullptr;
         if (mod && mod->IsLoaded() && !mod->IsLite())
         {
-            if (HasLocalLobbySave())
+            if (PrepareLocalLobbySave())
             {
                 s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
                 s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();

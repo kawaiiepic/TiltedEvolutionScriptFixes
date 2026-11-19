@@ -74,6 +74,8 @@ jobs:
             grep -Fxq 'SkyrimTogetherReborn/SkyrimTogetherServer.exe' client-entries.txt
             grep -Fxq 'SKSE/Plugins/STCheckpointBridge.dll' client-entries.txt
             grep -Fxq 'Interface/startmenu.swf' client-entries.txt
+            grep -Fxq 'SkyrimTogetherReborn/LobbySave/STLobbyTest.ess' client-entries.txt
+            grep -Fxq 'SkyrimTogetherReborn/LobbySave/STLobbyTest.skse' client-entries.txt
             unzip -tq "${symbols[0]}"
             cp "${client[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix.zip"
             cp "${symbols[0]}" "publish/SkyrimTogether-$version-windows-x64$suffix-debug-symbols.zip"
