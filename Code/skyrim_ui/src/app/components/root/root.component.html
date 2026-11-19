@@ -110,14 +110,6 @@
       >
         {{ 'COMPONENT.ROOT.SETTINGS' | transloco }}
       </button>
-      <button
-        *ngIf="connectionInProgress$ | async"
-        data-style-ornament="inverted"
-        [attr.data-style-active]="(view$ | async) === RootView.DISCONNECT"
-        (click)="setView(RootView.DISCONNECT)"
-      >
-        {{ 'COMPONENT.ROOT.CONNECTION_IN_PROGRESS' | transloco }}
-      </button>
     </app-window>
     <app-window *ngIf="lobby$ | async" class="server-lobby-info">
       <h3>Connected to character lobby</h3>
@@ -168,27 +160,36 @@
   <div [@fadeInOutActive]="active$ | async" class="app-root-popups">
     <app-loading></app-loading>
 
+    <app-popup *ngIf="connectionInProgress$ | async">
+      <p role="status">{{ 'COMPONENT.ROOT.CONNECTION_IN_PROGRESS' | transloco }}</p>
+      <app-action-buttons>
+        <button type="button" data-style-ornament="simple" (click)="cancelConnection()">
+          {{ 'COMPONENT.CONNECT.CANCEL' | transloco }}
+        </button>
+      </app-action-buttons>
+    </app-popup>
+
     <ng-container [ngSwitch]="view$ | async">
-      <app-popup *ngSwitchCase="RootView.CONNECT">
+      <app-popup *ngSwitchCase="RootView.CONNECT" [hidden]="connectionInProgress$ | async">
         <app-connect (done)="closeView()" (cancelled)="closeTitleView()"></app-connect>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.CONNECT_PASSWORD">
+      <app-popup *ngSwitchCase="RootView.CONNECT_PASSWORD" [hidden]="connectionInProgress$ | async">
         <app-connect-password (done)="closeView()"></app-connect-password>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.DISCONNECT">
+      <app-popup *ngSwitchCase="RootView.DISCONNECT" [hidden]="connectionInProgress$ | async">
         <app-disconnect (done)="closeView()"></app-disconnect>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.SERVER_LIST" data-popup="server">
+      <app-popup *ngSwitchCase="RootView.SERVER_LIST" [hidden]="connectionInProgress$ | async" data-popup="server">
         <app-server-list (done)="closeView()"></app-server-list>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.SETTINGS" data-popup="settings">
+      <app-popup *ngSwitchCase="RootView.SETTINGS" [hidden]="connectionInProgress$ | async" data-popup="settings">
         <app-settings
           (done)="closeTitleView()"
           (settingsUpdated)="updateGroupPosition()"
         ></app-settings>
       </app-popup>
       <app-popup
-        *ngSwitchCase="RootView.PLAYER_MANAGER"
+        *ngSwitchCase="RootView.PLAYER_MANAGER" [hidden]="connectionInProgress$ | async"
         data-popup="playerManager"
       >
         <app-player-manager (done)="closeView()"></app-player-manager>

@@ -170,6 +170,10 @@ export class RootComponent implements OnInit {
     }
   }
 
+  public cancelConnection(): void {
+    this.client.disconnect();
+  }
+
   public closeTitleView(): void {
     if (this.client.mainMenuChange.getValue()) {
       this.returnToNativeMenu();

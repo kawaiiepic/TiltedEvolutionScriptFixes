@@ -75,6 +75,8 @@
 
 ::ng-deep {
   .app-root-popups {
+    > app-popup[hidden] { display: none; }
+
     > app-popup > app-window {
       max-width: 32vw;
       min-width: 20vw;

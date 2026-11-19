@@ -44,21 +44,13 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
     private readonly uiRepository: UiRepository,
   ) {
     this.connectionSubscription = this.client.connectionStateChange.subscribe(
-      async state => {
+      state => {
         if (this.connecting) {
           this.connecting = false;
 
           if (state) {
             this.sound.play(Sound.Success);
             this.done.next();
-          } else if (this.errorService.getError() === '') {
-            // show connection error when there is no more specific error
-            const message = await firstValueFrom(
-              this.translocoService.selectTranslate<string>(
-                'COMPONENT.CONNECT.ERROR.CONNECTION',
-              ),
-            );
-            await this.errorService.setError(message);
           }
         }
       },

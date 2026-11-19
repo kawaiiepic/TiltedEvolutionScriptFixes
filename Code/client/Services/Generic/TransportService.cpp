@@ -142,6 +142,7 @@ void TransportService::BeginConnection(const std::string& acEndpoint, const std:
         return;
     m_enterAfterLogin = CanEnterWorld();
     m_connectionPending = true;
+    m_connectionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     SetServerPassword(acPassword);
     if (!Client::Connect(acEndpoint))
         OnDisconnected(kLocalProblem);
@@ -220,8 +221,10 @@ bool TransportService::EnterWorld() noexcept
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
     const bool wasInWorld = m_connected;
+    const bool wasConnecting = m_connectionPending;
     m_connected = false;
     m_connectionPending = false;
+    m_connectionDeadline = {};
     m_lobbyAuthenticated = false;
     m_enterPending = false;
     m_enterAfterLogin = false;
@@ -229,6 +232,12 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     m_localPlayerId = 0;
     CharacterCheckpoints::Reset();
     spdlog::warn("Disconnected from server {}", aReason);
+    if (wasConnecting && aReason != kAborted)
+    {
+        ConnectionErrorEvent error;
+        error.ErrorDetail = R"({"error":"connection_failed"})";
+        m_dispatcher.trigger(error);
+    }
     if (wasInWorld)
         m_dispatcher.trigger(DisconnectedEvent());
     else
@@ -256,6 +265,18 @@ void TransportService::Poll() noexcept
     m_lastPollTime = static_cast<double>(SteamNetworkingUtils()->GetLocalTimestamp()) / 1000.0;
 
     Update();
+    // DNS is handled by the transport's resolver callback. Once a socket
+    // exists, bound the wait for both the handshake and lobby response.
+    if (m_connectionPending && m_connectionDeadline != std::chrono::steady_clock::time_point{} &&
+        std::chrono::steady_clock::now() >= m_connectionDeadline &&
+        GetConnectionStatus().m_eState != k_ESteamNetworkingConnectionState_None)
+    {
+        spdlog::warn("Timed out waiting for the server lobby");
+        ConnectionErrorEvent error;
+        error.ErrorDetail = R"({"error":"connection_timeout"})";
+        m_dispatcher.trigger(error);
+        Close();
+    }
 }
 
 void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
@@ -274,6 +295,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     if (acMessage.Type == AR::kLobbyAccepted && m_connectionPending && !m_lobbyAuthenticated)
     {
         m_connectionPending = false;
+        m_connectionDeadline = {};
         m_lobbyAuthenticated = true;
         CharacterCheckpoints::Begin(acMessage.RequiresCharacterSave);
         if (!acMessage.RequiresCharacterSave && m_enterAfterLogin && EnterWorld())
@@ -364,6 +386,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     }
 
     m_dispatcher.trigger(errorEvent);
+    Close();
 }
 
 void TransportService::HandleNotifySettingsChange(const NotifySettingsChange& acMessage) noexcept
