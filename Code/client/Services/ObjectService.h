@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/GameId.h>
+#include <Games/Events.h>
 #include <chrono>
 #include <deque>
 
@@ -21,12 +22,15 @@ struct NotifyScriptAnimation;
 /**
  * @brief Handles objects in the environment.
  */
-class ObjectService final
+class ObjectService final : public BSTEventSink<TESResetEvent>
 {
 public:
     ObjectService(World&, entt::dispatcher&, TransportService&);
+    ~ObjectService() override;
 
 private:
+    BSTEventResult OnEvent(const TESResetEvent*, const EventDispatcher<TESResetEvent>*) override;
+    void SendLockChange(const LockChangeEvent&, bool aNativeReset) noexcept;
     void OnDisconnected(const DisconnectedEvent&) noexcept;
     void OnUpdate(const UpdateEvent&) noexcept;
     void OnCellChange(const CellChangeEvent&) noexcept;

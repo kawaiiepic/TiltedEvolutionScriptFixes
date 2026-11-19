@@ -140,7 +140,9 @@ struct PlayerCharacter : Actor
     uint8_t pad1[0x590 - sizeof(Actor)];
 #endif
     GameArray<ObjectiveInstance> objectives;
-    uint8_t pad588[0x9B0 - 0x598];
+    uint8_t padAfterObjectives[0x720 - 0x5A0];
+    TESFaction* currentPrisonFaction;
+    uint8_t padAfterPrisonFaction[0x9B8 - 0x728];
     Skills** pSkills;
     uint8_t pad9B8[0xAC8 - 0x9B8];
     TESForm* locationForm;
@@ -154,6 +156,7 @@ struct PlayerCharacter : Actor
 };
 
 #ifdef TP_SKYRIM_1_6_1170
+static_assert(offsetof(PlayerCharacter, currentPrisonFaction) == 0x720);
 static_assert(offsetof(PlayerCharacter, objectives) == 0x588);
 static_assert(offsetof(PlayerCharacter, pSkills) == 0x9B8);
 static_assert(offsetof(PlayerCharacter, locationForm) == 0xAD0);
@@ -161,6 +164,7 @@ static_assert(offsetof(PlayerCharacter, baseTints) == 0xB18);
 static_assert(offsetof(PlayerCharacter, overlayTints) == 0xB30);
 static_assert(sizeof(PlayerCharacter) == 0xBE8);
 #else
+static_assert(offsetof(PlayerCharacter, currentPrisonFaction) == 0x728);
 static_assert(offsetof(PlayerCharacter, objectives) == 0x590);
 static_assert(offsetof(PlayerCharacter, pSkills) == 0x9C0);
 static_assert(offsetof(PlayerCharacter, locationForm) == 0xAD8);

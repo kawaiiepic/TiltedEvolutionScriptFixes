@@ -35,6 +35,8 @@ struct PlayerService : BSTEventSink<TESFastTravelEndEvent>
     TP_NOCOPYMOVE(PlayerService);
 
 protected:
+    void ReportCustodyStatus() noexcept;
+    bool m_reportedInCustody{};
     void OnUpdate(const UpdateEvent& acEvent) noexcept;
     void OnConnected(const ConnectedEvent& acEvent) noexcept;
     void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;

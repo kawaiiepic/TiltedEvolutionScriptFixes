@@ -37,6 +37,9 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher)
     if (!m_lockJournal.IsHealthy())
         spdlog::error("Unable to load persistent locks {} (error line {}).", kLockJournalPath, m_lockJournal.ErrorLine());
 
+    if (!m_puzzleGates.IsHealthy())
+        spdlog::error("Unable to load shared-puzzle-gates.conf (error line {}).", m_puzzleGates.ErrorLine());
+
     if (!m_stockCells.IsHealthy() || !m_stockJournal.IsHealthy())
         spdlog::error("Could not load shared-stock-cell-policies.conf or shared-stock.log");
 
@@ -94,7 +97,8 @@ void ObjectService::OnAssignObjectsRequest(const PacketEvent<AssignObjectsReques
             continue;
 
         const bool cNoResetInterior = object.NoResetZone && !object.WorldSpaceId;
-        const bool cPersist = m_lockPolicies.IsShared(*key, m_cellLockPolicies.IsShared(*cellKey, cNoResetInterior));
+        const bool cPuzzleGate = !object.WorldSpaceId && !object.IsContainer && m_puzzleGates.IsShared(*key, false);
+        const bool cPersist = m_lockPolicies.IsShared(*key, cPuzzleGate || m_cellLockPolicies.IsShared(*cellKey, cNoResetInterior));
         const auto iter = std::find_if(
             std::begin(view), std::end(view),
             [view, id = object.Id](auto entity)
@@ -276,8 +280,10 @@ void ObjectService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) co
 void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) noexcept
 {
     const auto& packet = acMessage.Packet;
-    if (!packet.CellId || !acMessage.pPlayer->GetCharacter() ||
-        !m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer))
+    const auto key = m_world.ctx().at<ModsComponent>().FindFormKey(packet.Id, *acMessage.pPlayer);
+    if (!packet.CellId || !acMessage.pPlayer->GetCharacter() || !key ||
+        (packet.NativeReset && (packet.CellId != acMessage.pPlayer->GetCellComponent().Cell ||
+                               !m_puzzleGates.IsShared(*key, false))))
         return;
 
     NotifyLockChange notifyLockChange;
@@ -299,6 +305,9 @@ void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage
         if (cell.Cell != packet.CellId || !cell.IsInRange(acMessage.pPlayer->GetCellComponent(), false))
             return;
 
+        if (packet.NativeReset && (cell.WorldSpaceId || !objectComponent.CampaignLock))
+            return;
+
         if (objectComponent.CampaignLock)
         {
             if (!m_lockJournal.IsHealthy())
@@ -312,12 +321,12 @@ void ObjectService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage
         objectComponent.CurrentLockData.IsLocked = notifyLockChange.IsLocked;
         objectComponent.CurrentLockData.LockLevel = notifyLockChange.LockLevel;
     }
-    else if (acMessage.pPlayer->GetCellComponent().Cell != packet.CellId)
+    else if (packet.NativeReset || acMessage.pPlayer->GetCellComponent().Cell != packet.CellId)
         return;
 
     for (Player* pPlayer : m_world.GetPlayerManager())
     {
-        if (pPlayer == acMessage.pPlayer)
+        if (pPlayer == acMessage.pPlayer && !packet.NativeReset)
             continue;
 
         if (pPlayer->GetCellComponent().Cell == packet.CellId && pPlayer->HasModId(packet.Id.ModId))
