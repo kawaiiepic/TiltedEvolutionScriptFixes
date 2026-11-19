@@ -11,6 +11,7 @@ void NotifyTravelInvitation::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter
     CellId.Serialize(aWriter);
     WorldSpaceId.Serialize(aWriter);
     Serialization::WriteString(aWriter, LeaderName);
+    Serialization::WriteString(aWriter, NativeRoute);
 }
 
 void NotifyTravelInvitation::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -27,4 +28,5 @@ void NotifyTravelInvitation::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRead
     CellId.Deserialize(aReader);
     WorldSpaceId.Deserialize(aReader);
     LeaderName = Serialization::ReadString(aReader);
+    NativeRoute = Serialization::ReadString(aReader);
 }

@@ -538,6 +538,7 @@ void OverlayService::OnTravelInvitation(const NotifyTravelInvitation& acMessage)
     }
     else
         args->SetString(6, "");
+    args->SetString(7, acMessage.NativeRoute.c_str());
     m_pOverlay->ExecuteAsync("travelInvitation", args);
 }
 

@@ -39,6 +39,7 @@
 namespace
 {
 constexpr auto kTravelInviteDuration = std::chrono::seconds(10);
+constexpr float kNativeTravelGatherDistance = 1024.f;
 constexpr auto kTravelRetryDuration = std::chrono::seconds(30);
 constexpr float kDefaultGoldLossFactor = 0.10f;
 using RecoveryState = CharacterComponent::RecoveryState;
@@ -212,6 +213,58 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
     PublishTravelInvitation(inserted.first->second);
 }
 
+void PlayerService::OfferNativeTravel(const Player& acLeader, std::string_view aRoute) noexcept
+{
+    const auto kind = aRoute.substr(0, aRoute.find(' '));
+    if ((kind != "boat" && kind != "door" && kind != "script") || aRoute.size() > 96 ||
+        aRoute.find_first_of("\r\n\t") != aRoute.npos)
+    {
+        SendTravelMessage(acLeader, "Use /travel invite boat, /travel invite door, or /travel invite script. You can add a short route description.");
+        return;
+    }
+
+    const auto& cell = acLeader.GetCellComponent();
+    const auto character = acLeader.GetCharacter();
+    const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
+    const uint32_t leaderId = acLeader.GetId();
+    if (!cell.Cell || !acLeader.GetParty().JoinedPartyId || !pMovement ||
+        !IsTravelLeaderReady(acLeader, pMovement->Position) || m_travelDispatches.contains(leaderId) ||
+        std::ranges::any_of(m_travelInvitations, [leaderId](const auto& entry)
+        {
+            return entry.second.Leader == leaderId || entry.second.Accepted.contains(leaderId);
+        }))
+    {
+        SendTravelMessage(acLeader, "Travel invitations require a ready character in a party with no active travel.");
+        return;
+    }
+
+    TravelInvitation invitation{};
+    invitation.Leader = leaderId;
+    invitation.Cell = cell.Cell;
+    invitation.WorldSpace = cell.WorldSpaceId;
+    invitation.Position = pMovement->Position;
+    invitation.NativeRoute.assign(aRoute.begin(), aRoute.end());
+    invitation.ExpiresAt = std::chrono::steady_clock::now() + kTravelInviteDuration;
+    for (const Player* pPlayer : m_world.GetPlayerManager())
+        if (CanJoinTravel(*pPlayer, invitation))
+            invitation.Invited.insert(pPlayer->GetId());
+    if (invitation.Invited.empty())
+    {
+        SendTravelMessage(acLeader, "No eligible party members are near this departure point.");
+        return;
+    }
+
+    invitation.Id = NextTravelInvitationId();
+    const auto message = fmt::format("{} invited you to use {}. Type /travel join {} within 10 seconds.",
+                                     acLeader.GetUsername().c_str(), invitation.NativeRoute.c_str(), invitation.Id);
+    for (const uint32_t id : invitation.Invited)
+        if (const auto* pPlayer = m_world.GetPlayerManager().GetById(id))
+            SendTravelMessage(*pPlayer, message);
+    SendTravelMessage(acLeader, fmt::format("Travel invitation sent. Wait at the departure point for the countdown. Type /travel cancel {} to cancel.", invitation.Id));
+    const auto inserted = m_travelInvitations.emplace(invitation.Id, std::move(invitation));
+    PublishTravelInvitation(inserted.first->second);
+}
+
 uint32_t PlayerService::NextTravelInvitationId() noexcept
 {
     do
@@ -224,13 +277,27 @@ uint32_t PlayerService::NextTravelInvitationId() noexcept
 
 bool PlayerService::CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept
 {
-    if (m_travelDispatches.contains(acPlayer.GetId()) || acPlayer.GetId() == acInvitation.Leader || acPlayer.GetCellComponent().Cell == acInvitation.Cell ||
-        !acPlayer.HasModId(acInvitation.Cell.ModId) ||
-        (acInvitation.WorldSpace && !acPlayer.HasModId(acInvitation.WorldSpace.ModId)))
+    if (m_travelDispatches.contains(acPlayer.GetId()) || acPlayer.GetId() == acInvitation.Leader)
         return false;
+
+    const auto& cell = acPlayer.GetCellComponent();
     const auto character = acPlayer.GetCharacter();
     const auto* pState = character ? m_world.try_get<CharacterComponent>(*character) : nullptr;
-    return pState && !pState->IsDead() && pState->Recovery == RecoveryState::Standing;
+    if (!pState || pState->IsDead() || pState->Recovery != RecoveryState::Standing)
+        return false;
+
+    if (!acInvitation.NativeRoute.empty())
+    {
+        const auto* pLeader = m_world.GetPlayerManager().GetById(acInvitation.Leader);
+        const auto& party = acPlayer.GetParty().JoinedPartyId;
+        const auto* pMovement = m_world.try_get<MovementComponent>(*character);
+        return pLeader && party && party == pLeader->GetParty().JoinedPartyId && pMovement &&
+               cell.Cell == acInvitation.Cell && cell.WorldSpaceId == acInvitation.WorldSpace &&
+               glm::distance(pMovement->Position, acInvitation.Position) <= kNativeTravelGatherDistance;
+    }
+
+    return cell.Cell != acInvitation.Cell && acPlayer.HasModId(acInvitation.Cell.ModId) &&
+           (!acInvitation.WorldSpace || acPlayer.HasModId(acInvitation.WorldSpace.ModId));
 }
 
 bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view aCommand) noexcept
@@ -244,9 +311,14 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
     const auto separator = aCommand.find(' ');
     const auto action = aCommand.substr(0, separator);
     const auto idText = separator == aCommand.npos ? std::string_view{} : aCommand.substr(separator + 1);
+    if (action == "invite")
+    {
+        OfferNativeTravel(acPlayer, idText);
+        return true;
+    }
     if (idText.empty() || (action != "join" && action != "decline" && action != "cancel" && action != "retry"))
     {
-        SendTravelMessage(acPlayer, "Use /travel join ID, /travel decline ID, /travel cancel ID, or /travel retry ID.");
+        SendTravelMessage(acPlayer, "Use /travel invite boat|door|script, /travel join ID, /travel decline ID, /travel cancel ID, or /travel retry ID.");
         return true;
     }
 
@@ -414,15 +486,37 @@ bool PlayerService::UpdateTravelOffer(const TravelInvitation& acInvitation, std:
 {
     const auto& invitation = acInvitation;
     const auto* pLeader = m_world.GetPlayerManager().GetById(invitation.Leader);
-    if ((invitation.FastTravel ? !bFastTravelCatchUp : !bCarriageCatchUp) || !pLeader ||
+    const bool isNative = !invitation.NativeRoute.empty();
+    if ((!isNative && (invitation.FastTravel ? !bFastTravelCatchUp : !bCarriageCatchUp)) || !pLeader ||
         pLeader->GetCellComponent().Cell != invitation.Cell ||
         pLeader->GetCellComponent().WorldSpaceId != invitation.WorldSpace)
     {
         EndTravelInvitation(invitation, "Travel canceled because the destination is no longer active.");
         return true;
     }
+    if (isNative && (!pLeader->GetParty().JoinedPartyId || !IsTravelLeaderReady(*pLeader, invitation.Position)))
+    {
+        EndTravelInvitation(invitation, "Travel canceled because the organizer is no longer ready at the departure point.");
+        return true;
+    }
     if (aNow < invitation.ExpiresAt)
         return false;
+
+    if (isNative)
+    {
+        const auto message = fmt::format("Depart now. Use the in-game interaction for {}.", invitation.NativeRoute.c_str());
+        SendTravelMessage(*pLeader, message);
+        for (const uint32_t id : invitation.Accepted)
+            if (const auto* pRider = m_world.GetPlayerManager().GetById(id))
+            {
+                if (CanJoinTravel(*pRider, invitation))
+                    SendTravelMessage(*pRider, message);
+                else
+                    SendTravelMessage(*pRider, "You are no longer eligible to depart with this group.");
+            }
+        PublishTravelInvitation(invitation, true);
+        return true;
+    }
 
     if (!IsTravelLeaderReady(*pLeader, invitation.Position))
     {
@@ -464,6 +558,7 @@ void PlayerService::PublishTravelInvitation(const TravelInvitation& invitation, 
             invitation.ExpiresAt - std::chrono::steady_clock::now()).count();
         notify.RemainingMs = static_cast<uint32_t>(std::clamp<int64_t>(remaining, 1, 10000));
         notify.ParticipantCount = static_cast<uint32_t>(invitation.Accepted.size()) + 1;
+        notify.NativeRoute = invitation.NativeRoute;
         notify.CellId = invitation.Cell;
         notify.WorldSpaceId = invitation.WorldSpace;
         if (pLeader)

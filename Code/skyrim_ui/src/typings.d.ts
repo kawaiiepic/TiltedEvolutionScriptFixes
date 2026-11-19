@@ -121,7 +121,7 @@ interface SkyrimTogether {
   off(event: 'characterPortrait', callback?: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   on(event: 'dialogueFocus', callback: (open: boolean, actorId: number) => void): void;
   off(event: 'dialogueFocus', callback?: (open: boolean, actorId: number) => void): void;
-  on(event: 'travelInvitation', callback: (id: number, remainingMs: number, count: number, canCancel: boolean, accepted: boolean, leader: string, destination: string) => void): void;
+  on(event: 'travelInvitation', callback: (id: number, remainingMs: number, count: number, canCancel: boolean, accepted: boolean, leader: string, destination: string, nativeRoute: string) => void): void;
   off(event: 'travelInvitation'): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;
   off(event: 'sharedDialogue', callback?: SkyrimTogetherTypes.SharedDialogueCallback): void;
