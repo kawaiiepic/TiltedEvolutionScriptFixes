@@ -131,6 +131,7 @@
             </ng-container>
           </section>
           <p role="status">{{ checkpoint.detail }}</p>
+          <button type="button" *ngIf="checkpoint.phase === 'waiting-for-new-game'" (click)="returnToNativeMenu()">Return to Skyrim</button>
           <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'staged')">
             <p *ngIf="checkpoint.revision === '0'">Use New Game, finish character creation, then open the Skyrim console and enter:</p>
             <p *ngIf="checkpoint.revision !== '0'">Use Skyrim's Load menu or console to load this exact staged save before entering:</p>

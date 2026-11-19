@@ -2,6 +2,7 @@
 #include "CharacterCheckpoints.h"
 #include "NativeCheckpointDriver.h"
 #include "MainMenuBridge.h"
+#include "../../checkpoint_bridge/CheckpointBridgeAPI.h"
 
 #include <Messages/CharacterSave.h>
 #include <Services/TransportService.h>
@@ -31,8 +32,8 @@ namespace
 {
 using P = CharacterSavePayload;
 using Clock = std::chrono::steady_clock;
-enum class Phase { Disabled, StartingStaging, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
-enum class NativeOperation { None, Load, Save };
+enum class Phase { Disabled, StartingStaging, LoadingLobby, WaitingForNewGame, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
+enum class NativeOperation { None, Load, Save, LobbyLoad };
 struct Stamp
 {
     uint64_t Size{}, Written{};
@@ -52,7 +53,7 @@ struct State
     Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
     uint32_t StagingQuest{};
-    bool StagingWorld{}, StagingRaceMenu{};
+    bool StagingWorld{}, StagingRaceMenu{}, LobbySaveLoaded{};
     Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
@@ -85,6 +86,8 @@ const char* PhaseName() noexcept
     switch (s.Step)
     {
     case Phase::Disabled: return "disabled";
+    case Phase::LoadingLobby: return "starting-staging";
+    case Phase::WaitingForNewGame: return "waiting-for-new-game";
     case Phase::StartingStaging: return "starting-staging";
     case Phase::Choose: return "choose";
     case Phase::Selecting: return "selecting";
@@ -107,6 +110,7 @@ void AbandonNative() noexcept
 {
     s_stageGate.store(0);
     s.StagingWorld = false;
+    s.LobbySaveLoaded = false;
     MainMenuBridge::CancelNewGame();
     if (s.NativeToken && s_driver.Abandon)
         s_driver.Abandon(s.NativeToken);
@@ -139,6 +143,24 @@ std::filesystem::path SaveDirectory()
         return {};
     return std::filesystem::path(documents) / L"My Games" / L"Skyrim Special Edition" / L"Saves";
 }
+bool HasLocalLobbySave() noexcept
+{
+    try
+    {
+        const auto directory = SaveDirectory();
+        if (directory.empty() || !directory.is_absolute()) return false;
+        const auto validHeader = [&](const char* extension, std::string_view expected)
+        {
+            std::ifstream file(directory / (std::string(STCheckpointBridge::LobbySaveName) + extension), std::ios::binary);
+            std::array<char, 13> header{};
+            return file.read(header.data(), expected.size()) &&
+                std::string_view(header.data(), expected.size()) == expected;
+        };
+        return validHeader(".ess", "TESV_SAVEGAME") && validHeader(".skse", "SKSE");
+    }
+    catch (...) { return false; }
+}
+
 std::filesystem::path Path(const char* apExtension)
 {
     return s.Directory / (s.Name + apExtension);
@@ -266,18 +288,22 @@ bool StageDownload()
 
 NativeStart StartNative(NativeOperation aOperation)
 {
-    if (!s.NativeEnabled || s.Operation != NativeOperation::None || s.Name.empty())
+    const bool lobby = aOperation == NativeOperation::LobbyLoad;
+    if (!s.NativeEnabled || s.Operation != NativeOperation::None || (!lobby && s.Name.empty()))
         return NativeStart::Busy;
     if (++s_nextNativeToken == 0) ++s_nextNativeToken;
     const uint64_t token = s_nextNativeToken;
-    const auto result = aOperation == NativeOperation::Load ?
-        s_driver.RequestLoad(token, s.Name.c_str()) : s_driver.RequestSave(token, s.Name.c_str());
+    const auto result = aOperation == NativeOperation::Save
+        ? s_driver.RequestSave(token, s.Name.c_str())
+        : s_driver.RequestLoad(token, lobby ? STCheckpointBridge::LobbySaveName : s.Name.c_str());
     if (result == NativeStart::Accepted)
     {
         s.Operation = aOperation;
         s.NativeToken = token;
         s.NativeDeadline = Clock::now() + kNativeTimeout;
-        if (aOperation == NativeOperation::Load)
+        if (lobby)
+            Change(Phase::LoadingLobby, "Loading the local Abandoned Prison lobby...");
+        else if (aOperation == NativeOperation::Load)
             Change(Phase::LoadingNative, "Loading the canonical server checkpoint...");
         else
         {
@@ -365,7 +391,7 @@ bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept
 static bool IsOwnedStagingWorld() noexcept
 {
     if (!s.StagingWorld ||
-        NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame != 1 ||
+        NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame != (s.LobbySaveLoaded ? 0u : 1u) ||
         NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration != 1)
         return false;
     const auto* player = PlayerCharacter::Get();
@@ -377,14 +403,15 @@ static bool IsOwnedStagingWorld() noexcept
 bool CanReplaceStagingWorld() noexcept
 {
     const auto* ui = UI::Get();
-    return !s.StagingRaceMenu && (s_stageGate.load() & kStageHeld) && IsOwnedStagingWorld() &&
+    return !s.StagingRaceMenu && (s.LobbySaveLoaded || (s_stageGate.load() & kStageHeld)) && IsOwnedStagingWorld() &&
         ui && !ui->GetMenuOpen("RaceSex Menu");
 }
 
 bool NeedsStagingPump() noexcept
 {
-    return s.StagingQuest && (s.Step == Phase::StartingStaging || s.StagingWorld ||
-        (s.Step == Phase::NewCharacter && !s.SawRaceMenu));
+    return s.Step == Phase::LoadingLobby || s.Step == Phase::WaitingForNewGame ||
+        (s.StagingQuest && (s.Step == Phase::StartingStaging || s.StagingWorld ||
+        (s.Step == Phase::NewCharacter && !s.SawRaceMenu)));
 }
 
 void Begin(bool aRequired) noexcept
@@ -403,6 +430,14 @@ void Begin(bool aRequired) noexcept
             const uint32_t quest = mod->GetFormId(kAlternateStartQuest);
             s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
             s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
+            if (HasLocalLobbySave())
+            {
+                if (StartNative(NativeOperation::LobbyLoad) == NativeStart::Accepted)
+                    return;
+                spdlog::warn("Could not queue the local lobby save; using the title-screen picker");
+                Change(Phase::Choose, "Choose a character slot.");
+                return;
+            }
             s_stageGate.store(quest);
             if (MainMenuBridge::RequestNewGame())
             {
@@ -480,6 +515,11 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             {
                 if (s.NativeEnabled)
                 {
+                    if (s.LobbySaveLoaded && IsOwnedStagingWorld())
+                    {
+                        Change(Phase::WaitingForNewGame, "Close the overlay and return to Skyrim's main menu to start your new character.");
+                        return;
+                    }
                     if (s.StagingRaceMenu && IsOwnedStagingWorld())
                     {
                         const auto* ui = UI::Get();
@@ -610,6 +650,39 @@ void Tick(TransportService& aTransport) noexcept
     try
     {
         const auto now = Clock::now();
+        if (s.Step == Phase::WaitingForNewGame)
+        {
+            const auto* ui = UI::Get();
+            if (!ui || !ui->GetMenuOpen("Main Menu") || !MainMenuBridge::IsReady()) return;
+            s.StagingWorld = false;
+            s.LobbySaveLoaded = false;
+            s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
+            s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
+            if (!MainMenuBridge::RequestNewGame())
+            {
+                Fail("Could not start a fresh game for the selected character.");
+                return;
+            }
+            s.AwaitCharacterCreation = true;
+            s.RequestedNewGame = true;
+            s.NewGameDeadline = now + kNativeTimeout;
+            InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+            Change(Phase::NewCharacter, "Starting a fresh game for your new character...");
+            return;
+        }
+        if (s.Step == Phase::LoadingLobby && s.LobbySaveLoaded)
+        {
+            auto& overlay = World::Get().GetOverlayService();
+            if (CanReplaceStagingWorld() && aTransport.CanEnterWorld() && overlay.GetInGame() &&
+                InputService::SetOverlayActive(overlay, true))
+            {
+                Change(Phase::Choose, "Choose a character to enter the campaign.");
+                spdlog::info("Opened the character picker from the local lobby save");
+            }
+            else if (now >= s.NativeDeadline)
+                Fail("The local lobby loaded but did not reach the Abandoned Prison.");
+            return;
+        }
         if (s.Step == Phase::StartingStaging)
         {
             if (MainMenuBridge::NewGameRequestFailed() || now >= s.NewGameDeadline)
@@ -659,10 +732,18 @@ void Tick(TransportService& aTransport) noexcept
                 Fail("Skyrim could not complete the named save/load.");
                 return;
             }
+            if (completed == NativeOperation::LobbyLoad)
+            {
+                s.LobbySaveLoaded = true;
+                s.StagingWorld = true;
+                s.NativeDeadline = now + kNativeTimeout;
+                return;
+            }
             if (completed == NativeOperation::Load)
             {
                 s_stageGate.store(0);
                 s.StagingWorld = false;
+                s.LobbySaveLoaded = false;
                 s.AutoEnter = true;
                 s.EnterDeadline = now + kNativeTimeout;
                 s.NextAutoSave = now + kAutosaveInterval;

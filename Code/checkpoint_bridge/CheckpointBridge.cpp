@@ -127,7 +127,7 @@ bool Arm(uint64_t aToken, uint32_t aKind, const char* apName) noexcept
 {
     if (!aToken || !apName || (aKind != Load && aKind != Save)) return false;
     const std::string_view name(apName);
-    if (!ValidName(name)) return false;
+    if (!ValidName(name) && !(aKind == Load && name == LobbySaveName)) return false;
     std::lock_guard lock(s_mutex);
     if (!s_registered || s_op.Token) return false;
     s_op.Token = aToken;
