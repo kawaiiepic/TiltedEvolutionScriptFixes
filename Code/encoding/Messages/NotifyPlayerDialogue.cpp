@@ -5,6 +5,7 @@ void NotifyPlayerDialogue::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) 
 {
     aWriter.WriteBits(Kind, 8);
     aWriter.WriteBits(ActorId, 32);
+    SpeakerReference.Serialize(aWriter);
     aWriter.WriteBits(Token, 32);
     aWriter.WriteBits(CanChoose ? 1 : 0, 1);
     aWriter.WriteBits(CanVote, 1);
@@ -41,6 +42,7 @@ void NotifyPlayerDialogue::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader
     Kind = static_cast<uint8_t>(value);
     aReader.ReadBits(value, 32);
     ActorId = static_cast<uint32_t>(value);
+    SpeakerReference.Deserialize(aReader);
     aReader.ReadBits(value, 32);
     Token = static_cast<uint32_t>(value);
     aReader.ReadBits(value, 1);

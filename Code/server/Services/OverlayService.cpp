@@ -265,6 +265,9 @@ void OverlayService::RefreshDialoguePanels() noexcept
             NotifyPlayerDialogue panel{};
             panel.Kind = NotifyPlayerDialogue::Panel;
             panel.ActorId = actorId;
+            const auto* pForm = m_world.try_get<FormIdComponent>(static_cast<entt::entity>(actorId));
+            if (pForm && pPlayer->HasModId(pForm->Id.ModId))
+                panel.SpeakerReference = pForm->Id;
             panel.Revision = session.Revision;
             panel.CanChoose = cOwner;
             panel.CanVote = (cNearby || cListening) && !cOwner;

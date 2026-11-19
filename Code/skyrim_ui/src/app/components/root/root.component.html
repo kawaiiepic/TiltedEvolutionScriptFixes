@@ -51,7 +51,7 @@
   </ng-container>
   <ng-container *ngIf="!(active$ | async) && (inGame$ | async) && !(menuOpen$ | async)">
     <aside class="remote-dialogue-notice" *ngIf="remoteDialogueNotice$ | async as offer" role="status">
-      {{ offer.owner }} started a public conversation. Open the multiplayer overlay to listen.
+      {{ offer.owner }} is speaking with {{ offer.npc === 'NPC' ? 'someone' : offer.npc }}. Open the multiplayer overlay to listen.
     </aside>
   </ng-container>
   <div class="shared-dialogues interactive" *ngIf="active$ | async">

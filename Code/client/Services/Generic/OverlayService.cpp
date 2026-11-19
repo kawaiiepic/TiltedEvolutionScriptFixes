@@ -776,8 +776,15 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         pArguments->SetString(2, acMessage.Name.c_str());
         pArguments->SetBool(3, acMessage.CanChoose);
         pArguments->SetDouble(4, acMessage.Revision);
-        const auto* pActor = Utils::GetByServerId<Actor>(acMessage.ActorId);
-        pArguments->SetString(5, pActor && pActor->baseForm ? pActor->baseForm->GetName() : "NPC");
+        const TESObjectREFR* pSpeaker = Utils::GetByServerId<Actor>(acMessage.ActorId);
+        if (!pSpeaker && acMessage.SpeakerReference)
+        {
+            const uint32_t cLocalId = m_world.GetModSystem().GetGameId(acMessage.SpeakerReference);
+            if (cLocalId)
+                pSpeaker = Cast<TESObjectREFR>(TESForm::GetById(cLocalId));
+        }
+        const char* pName = pSpeaker && pSpeaker->baseForm ? pSpeaker->baseForm->GetName() : nullptr;
+        pArguments->SetString(5, pName && *pName ? pName : "NPC");
         auto options = CefListValue::Create();
         auto votes = CefListValue::Create();
         for (size_t i = 0; i < acMessage.Options.size(); ++i)

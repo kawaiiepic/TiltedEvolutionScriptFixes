@@ -670,6 +670,7 @@ TEST_CASE("Shared dialogue protocol", "[encoding.dialogue]")
         panel.Text = "The road is closed.";
         panel.Private = false;
         panel.ActorId = 0xDEADBEEF;
+        panel.SpeakerReference = GameId(3, 0x1500);
         panel.Revision = 7;
         panel.Selected = 2;
         panel.Name = "Owner";
