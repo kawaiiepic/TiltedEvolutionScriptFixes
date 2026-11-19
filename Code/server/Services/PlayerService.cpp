@@ -27,6 +27,7 @@
 #include <ChatMessageTypes.h>
 #include <Messages/RequestCarriageTravel.h>
 #include <Messages/RequestFastTravelCatchUp.h>
+#include <Messages/RequestTravelResult.h>
 #include <Structs/CarriageTravel.h>
 #include <Structs/PlayerRevive.h>
 
@@ -74,6 +75,7 @@ PlayerService::PlayerService(World& aWorld, entt::dispatcher& aDispatcher) noexc
     , m_carriageTravelConnection(aDispatcher.sink<PacketEvent<RequestCarriageTravel>>().connect<&PlayerService::OnCarriageTravel>(this))
     , m_travelUpdateConnection(aDispatcher.sink<UpdateEvent>().connect<&PlayerService::UpdateTravelInvitation>(this))
     , m_fastTravelCatchUpConnection(aDispatcher.sink<PacketEvent<RequestFastTravelCatchUp>>().connect<&PlayerService::OnFastTravelCatchUp>(this))
+    , m_travelResultConnection(aDispatcher.sink<PacketEvent<RequestTravelResult>>().connect<&PlayerService::OnTravelResult>(this))
     , m_playerLeaveConnection(aDispatcher.sink<PlayerLeaveEvent>().connect<&PlayerService::OnPlayerLeave>(this))
     , m_playerJoinConnection(aDispatcher.sink<PlayerJoinEvent>().connect<&PlayerService::OnPlayerJoin>(this))
 {
@@ -207,7 +209,7 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
 
 bool PlayerService::CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept
 {
-    if (acPlayer.GetId() == acInvitation.Leader || acPlayer.GetCellComponent().Cell == acInvitation.Cell ||
+    if (m_travelDispatches.contains(acPlayer.GetId()) || acPlayer.GetId() == acInvitation.Leader || acPlayer.GetCellComponent().Cell == acInvitation.Cell ||
         !acPlayer.HasModId(acInvitation.Cell.ModId) ||
         (acInvitation.WorldSpace && !acPlayer.HasModId(acInvitation.WorldSpace.ModId)))
         return false;
@@ -266,8 +268,43 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
     return true;
 }
 
+void PlayerService::OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept
+{
+    const auto& result = acMessage.Packet;
+    const auto& player = *acMessage.pPlayer;
+    const auto dispatch = m_travelDispatches.find(player.GetId());
+    if (dispatch == m_travelDispatches.end() || result.Id != dispatch->second.Id ||
+        result.Outcome > RequestTravelResult::Interrupted ||
+        std::chrono::steady_clock::now() >= dispatch->second.Deadline)
+        return;
+
+    const auto& cell = player.GetCellComponent();
+    if (result.Outcome == RequestTravelResult::Arrived &&
+        (cell.Cell != dispatch->second.Cell || cell.WorldSpaceId != dispatch->second.WorldSpace))
+        return;
+
+    m_travelDispatches.erase(dispatch);
+    switch (result.Outcome)
+    {
+    case RequestTravelResult::Arrived: SendTravelMessage(player, "Travel arrival confirmed."); break;
+    case RequestTravelResult::Busy: SendTravelMessage(player, "Travel skipped while your character was busy."); break;
+    case RequestTravelResult::Interrupted: SendTravelMessage(player, "Travel was interrupted by another transition."); break;
+    default: SendTravelMessage(player, "Travel could not be completed."); break;
+    }
+}
+
 void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
 {
+    const auto now = std::chrono::steady_clock::now();
+    std::erase_if(m_travelDispatches, [&](const auto& entry)
+    {
+        if (now < entry.second.Deadline)
+            return false;
+        if (const auto* pPlayer = m_world.GetPlayerManager().GetById(entry.first))
+            SendTravelMessage(*pPlayer, "Travel arrival could not be confirmed.");
+        return true;
+    });
+
     if (!m_travelInvitation)
         return;
 
@@ -280,7 +317,7 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
         EndTravelInvitation("Travel canceled because the destination is no longer active.");
         return;
     }
-    if (std::chrono::steady_clock::now() < invitation.ExpiresAt)
+    if (now < invitation.ExpiresAt)
         return;
 
     const auto character = pLeader->GetCharacter();
@@ -302,7 +339,11 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
         if (const auto* pRider = m_world.GetPlayerManager().GetById(id))
         {
             if (CanJoinTravel(*pRider, invitation))
+            {
+                m_travelDispatches.emplace(id, TravelDispatch{invitation.Id, invitation.Cell, invitation.WorldSpace,
+                    now + std::chrono::seconds(20)});
                 pRider->Send(notify);
+            }
             else
                 SendTravelMessage(*pRider, "Travel skipped because you are no longer eligible.");
         }
@@ -356,6 +397,7 @@ void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
     const uint32_t playerId = acEvent.pPlayer->GetId();
     m_carriageBoardings.erase(playerId);
     m_fastTravelSequences.erase(playerId);
+    m_travelDispatches.erase(playerId);
     m_cellDepartures.erase(playerId);
     if (m_travelInvitation)
     {

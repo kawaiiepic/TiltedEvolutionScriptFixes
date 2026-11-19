@@ -66,7 +66,9 @@ private:
     void RunBeastFormDetection() const noexcept;
     void RunCarriageTravelUpdates() noexcept;
     void RunFastTravelCatchUp() noexcept;
-    void ApplyTeleport(const NotifyTeleport& acMessage) noexcept;
+    void UpdateGroupTravelArrival() noexcept;
+    void ReportGroupTravelResult(uint8_t aOutcome) noexcept;
+    bool ApplyTeleport(const NotifyTeleport& acMessage) noexcept;
 
     void ToggleDeathSystem(bool aSet) noexcept;
 
@@ -94,6 +96,15 @@ private:
     bool m_waitingFastTravelArrival{};
     bool m_fastTravelMapOpen{};
     uint32_t m_fastTravelSequence{};
+    struct GroupTravelArrival
+    {
+        uint32_t Id{};
+        GameId Cell{};
+        GameId WorldSpace{};
+        glm::vec3 Position{};
+        std::chrono::steady_clock::time_point Deadline{};
+    };
+    std::optional<GroupTravelArrival> m_groupTravelArrival;
     uint32_t m_lastGroupTravelId{};
     uint32_t m_nextCarriageToken{};
 

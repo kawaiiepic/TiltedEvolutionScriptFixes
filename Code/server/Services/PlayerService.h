@@ -19,6 +19,7 @@ struct PlayerLevelRequest;
 struct PlayerLeaveEvent;
 struct RequestCarriageTravel;
 struct RequestFastTravelCatchUp;
+struct RequestTravelResult;
 struct UpdateEvent;
 
 /**
@@ -68,6 +69,7 @@ private:
     void OnFastTravelCatchUp(const PacketEvent<RequestFastTravelCatchUp>& acMessage) noexcept;
     void OfferCatchUp(const Player& acLeader, const glm::vec3& acPosition, const std::set<uint32_t>& acAlreadyTraveling,
                       bool aFastTravel) noexcept;
+    void OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept;
     void UpdateTravelInvitation(const UpdateEvent&) noexcept;
     void PublishTravelInvitation(bool aClosed = false) const noexcept;
     void EndTravelInvitation(std::string_view aMessage) noexcept;
@@ -81,6 +83,14 @@ private:
         GameId Cell;
         std::chrono::steady_clock::time_point Time;
     };
+    struct TravelDispatch
+    {
+        uint32_t Id{};
+        GameId Cell{};
+        GameId WorldSpace{};
+        std::chrono::steady_clock::time_point Deadline;
+    };
+    std::unordered_map<uint32_t, TravelDispatch> m_travelDispatches;
     std::unordered_map<uint32_t, uint32_t> m_fastTravelSequences;
     std::unordered_map<uint32_t, CellDeparture> m_cellDepartures;
     std::unordered_map<uint32_t, CarriageBoarding> m_carriageBoardings;
@@ -95,6 +105,7 @@ private:
     entt::scoped_connection m_carriageTravelConnection;
     entt::scoped_connection m_travelUpdateConnection;
     entt::scoped_connection m_fastTravelCatchUpConnection;
+    entt::scoped_connection m_travelResultConnection;
     entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_playerJoinConnection;
 };

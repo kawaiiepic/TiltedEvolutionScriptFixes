@@ -1024,3 +1024,20 @@ TEST_CASE("Fast-travel catch-up reports preserve the departure and destination",
     CHECK(parsed->Destination == sent.Destination);
     CHECK(parsed->Position == sent.Position);
 }
+
+TEST_CASE("Travel result messages preserve the dispatch and outcome", "[encoding.travel]")
+{
+    RequestTravelResult sent{};
+    sent.Id = 701;
+    sent.Outcome = RequestTravelResult::Interrupted;
+    Buffer buffer(64);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == RequestTravelResult::Opcode);
+    auto parsed = CastUnique<RequestTravelResult>(std::move(message));
+    CHECK(parsed->Id == sent.Id);
+    CHECK(parsed->Outcome == sent.Outcome);
+}

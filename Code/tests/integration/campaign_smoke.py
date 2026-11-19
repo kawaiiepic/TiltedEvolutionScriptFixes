@@ -154,7 +154,7 @@ end)
             assert receiver.wait(timeout=8) == 0
         with ExitStack() as passengers:
             clients = []
-            for role in ("carriage-bystander", "carriage-other", "carriage-rider", "carriage-catchup", "carriage-ignore"):
+            for role in ("carriage-bystander", "carriage-other", "carriage-rider", "carriage-catchup", "carriage-busy", "carriage-ignore"):
                 client = passengers.enter_context(subprocess.Popen(
                     [harness, role, version, f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True
                 ))

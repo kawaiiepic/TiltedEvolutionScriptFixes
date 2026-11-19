@@ -265,12 +265,15 @@ public:
             if ((Mode == "carriage-cancel-observer" || Mode == "carriage-fast-observer") &&
                 notice->ChatMessage == "The traveler canceled the invitation.")
                 Done = true;
-            if ((Mode == "carriage-catchup" || Mode == "carriage-ignore") &&
+            if ((Mode == "carriage-catchup" && notice->ChatMessage == "Travel arrival confirmed.") ||
+                (Mode == "carriage-busy" && notice->ChatMessage == "Travel skipped while your character was busy."))
+                assert(++TravelResults == 1);
+            if ((Mode == "carriage-catchup" || Mode == "carriage-busy" || Mode == "carriage-ignore") &&
                 notice->ChatMessage.find("/travel join 1 ") != String::npos)
             {
                 assert(!TravelOfferedAt);
                 TravelOfferedAt = std::chrono::steady_clock::now();
-                if (Mode == "carriage-catchup")
+                if (Mode == "carriage-catchup" || Mode == "carriage-busy")
                 {
                     SendChatMessageRequest command{};
                     command.MessageType = kGlobalChat;
@@ -301,7 +304,7 @@ public:
                 assert(invitation->CellId == GameId(VanillaMod, 0xA22));
                 if (invitation->Accepted)
                 {
-                    assert(invitation->ParticipantCount == 2);
+                    assert(invitation->ParticipantCount == 2 || invitation->ParticipantCount == 3);
                     SawTravelConsent = true;
                 }
             }
@@ -317,9 +320,26 @@ public:
             const auto teleport = CastUnique<NotifyTeleport>(std::move(message));
             if (teleport->GroupTravelId)
             {
-                assert(Mode == "carriage-catchup" && TravelOfferedAt);
+                assert((Mode == "carriage-catchup" || Mode == "carriage-busy") && TravelOfferedAt);
                 assert(std::chrono::steady_clock::now() - *TravelOfferedAt >= 9500ms);
                 assert(teleport->CarriageToken == 0 && teleport->GroupTravelId == 1);
+                RequestTravelResult result{};
+                result.Id = teleport->GroupTravelId;
+                if (Mode == "carriage-catchup")
+                {
+                    result.Outcome = RequestTravelResult::Arrived;
+                    Transmit(result); // Premature confirmation must not consume the dispatch.
+                    EnterExteriorCellRequest cell{};
+                    cell.CellId = teleport->CellId;
+                    cell.WorldSpaceId = teleport->WorldSpaceId;
+                    cell.CurrentCoords = {0, 0};
+                    Transmit(cell);
+                }
+                else
+                    result.Outcome = RequestTravelResult::Busy;
+                Transmit(result);
+                Transmit(result); // Confirmation must be idempotent.
+
             }
             else
                 assert(Mode == "carriage-rider" && teleport->CarriageToken == 2);
@@ -458,7 +478,7 @@ public:
                     std::puts("CARRIAGE_READY");
                     std::fflush(stdout);
                 }
-                if (Mode != "carriage-rider" && Mode != "carriage-catchup" && Mode != "carriage-ignore" &&
+                if (Mode != "carriage-rider" && Mode != "carriage-catchup" && Mode != "carriage-busy" && Mode != "carriage-ignore" &&
                     Mode != "carriage-cancel-leader" && Mode != "carriage-cancel-observer" &&
                     Mode != "carriage-fast-leader" && Mode != "carriage-fast-observer")
                 {
@@ -895,6 +915,7 @@ public:
     bool DialogueStarted{};
     unsigned DialogueStage{};
     bool SawCarriageTeleport{};
+    unsigned TravelResults{};
     bool SawTravelConsent{};
     bool SawTravelClose{};
     std::optional<std::chrono::steady_clock::time_point> TravelOfferedAt;
@@ -942,7 +963,9 @@ int main(int argc, char** argv)
     else
         assert(client.Done);
     if (client.Mode == "carriage-catchup")
-        assert(client.SawTravelConsent && client.SawTravelClose && client.SawCarriageTeleport);
+        assert(client.SawTravelConsent && client.SawTravelClose && client.SawCarriageTeleport && client.TravelResults == 1);
+    if (client.Mode == "carriage-busy")
+        assert(client.SawCarriageTeleport && client.TravelResults == 1);
     if (client.Mode == "carriage-ignore" || client.Mode == "carriage-cancel-observer" || client.Mode == "carriage-fast-observer")
         assert(client.SawTravelClose && !client.SawCarriageTeleport);
     if (client.Mode.starts_with("death-"))

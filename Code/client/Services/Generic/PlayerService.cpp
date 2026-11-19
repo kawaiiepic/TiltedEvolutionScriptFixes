@@ -24,6 +24,7 @@
 #include <Messages/PlayerLevelRequest.h>
 #include <Messages/RequestCarriageTravel.h>
 #include <Messages/RequestFastTravelCatchUp.h>
+#include <Messages/RequestTravelResult.h>
 
 #include <Structs/CarriageTravel.h>
 #include <Structs/PlayerRevive.h>
@@ -78,6 +79,7 @@ void PlayerService::OnUpdate(const UpdateEvent&) noexcept
     RunBeastFormDetection();
     RunCarriageTravelUpdates();
     RunFastTravelCatchUp();
+    UpdateGroupTravelArrival();
 }
 
 void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -95,6 +97,7 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     m_carriage.reset();
     m_carriageTeleport.reset();
     m_lastGroupTravelId = 0;
+    m_groupTravelArrival.reset();
     m_reportedCell = {};
     m_fastTravelOrigin = {};
     m_waitingFastTravelArrival = false;
@@ -395,6 +398,9 @@ void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
         if (acMessage.GroupTravelId == m_lastGroupTravelId)
             return;
         m_lastGroupTravelId = acMessage.GroupTravelId;
+        ReportGroupTravelResult(RequestTravelResult::Interrupted);
+        m_groupTravelArrival = GroupTravelArrival{acMessage.GroupTravelId, acMessage.CellId, acMessage.WorldSpaceId, acMessage.Position,
+            std::chrono::steady_clock::now() + std::chrono::seconds(15)};
         auto* pPlayer = PlayerCharacter::Get();
         const auto* pUI = UI::Get();
         if (!pPlayer || !pUI || m_carriage || pPlayer->IsDead() || pPlayer->IsInCombat() ||
@@ -405,14 +411,16 @@ void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
             pUI->GetMenuOpen("BarterMenu") || pUI->GetMenuOpen("InventoryMenu") ||
             pUI->GetMenuOpen("Sleep/Wait Menu"))
         {
-            m_world.GetOverlayService().SendSystemMessage("Travel skipped because your character is busy.");
+            ReportGroupTravelResult(RequestTravelResult::Busy);
             return;
         }
-        ApplyTeleport(acMessage);
+        if (!ApplyTeleport(acMessage))
+            ReportGroupTravelResult(RequestTravelResult::Failed);
         return;
     }
     if (!acMessage.CarriageToken)
     {
+        ReportGroupTravelResult(RequestTravelResult::Interrupted);
         m_carriage.reset();
         m_carriageTeleport.reset();
         ApplyTeleport(acMessage);
@@ -460,6 +468,7 @@ void PlayerService::RunCarriageTravelUpdates() noexcept
             const auto teleport = *m_carriageTeleport;
             m_carriage.reset();
             m_carriageTeleport.reset();
+            ReportGroupTravelResult(RequestTravelResult::Interrupted);
             ApplyTeleport(teleport);
         }
         return;
@@ -494,8 +503,44 @@ void PlayerService::RunCarriageTravelUpdates() noexcept
     }
 }
 
-void PlayerService::ApplyTeleport(const NotifyTeleport& acMessage) noexcept
+void PlayerService::ReportGroupTravelResult(uint8_t aOutcome) noexcept
 {
+    if (!m_groupTravelArrival)
+        return;
+    RequestTravelResult result{};
+    result.Id = m_groupTravelArrival->Id;
+    result.Outcome = aOutcome;
+    m_groupTravelArrival.reset();
+    m_transport.Send(result);
+}
+
+void PlayerService::UpdateGroupTravelArrival() noexcept
+{
+    if (!m_groupTravelArrival)
+        return;
+    const auto* pUI = UI::Get();
+    auto* pPlayer = PlayerCharacter::Get();
+    const auto* pCell = pPlayer ? pPlayer->GetParentCellEx() : nullptr;
+    const auto* pWorldSpace = pPlayer ? pPlayer->GetWorldSpace() : nullptr;
+    GameId cell{};
+    GameId worldSpace{};
+    auto& mods = m_world.GetModSystem();
+    if (pUI && !pUI->GetMenuOpen("Loading Menu") && pCell &&
+        mods.GetServerModId(pCell->formID, cell) &&
+        (!pWorldSpace || mods.GetServerModId(pWorldSpace->formID, worldSpace)) &&
+        cell == m_groupTravelArrival->Cell && cell == m_reportedCell &&
+        worldSpace == m_groupTravelArrival->WorldSpace &&
+        glm::distance(glm::vec3(pPlayer->position), m_groupTravelArrival->Position) <= CarriageTravel::kBoardingDistance)
+        ReportGroupTravelResult(RequestTravelResult::Arrived);
+    else if (std::chrono::steady_clock::now() >= m_groupTravelArrival->Deadline)
+        ReportGroupTravelResult(RequestTravelResult::Failed);
+}
+
+bool PlayerService::ApplyTeleport(const NotifyTeleport& acMessage) noexcept
+{
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!pPlayer || !acMessage.CellId)
+        return false;
     auto& modSystem = m_world.GetModSystem();
 
     const uint32_t cellId = modSystem.GetGameId(acMessage.CellId);
@@ -513,12 +558,14 @@ void PlayerService::ApplyTeleport(const NotifyTeleport& acMessage) noexcept
         if (!pCell)
         {
             spdlog::error("Failed to fetch cell to teleport to.");
-            m_world.GetOverlayService().SendSystemMessage("Teleporting to player failed.");
-            return;
+            if (!acMessage.GroupTravelId)
+                m_world.GetOverlayService().SendSystemMessage("Teleporting to player failed.");
+            return false;
         }
     }
 
-    PlayerCharacter::Get()->MoveTo(pCell, acMessage.Position);
+    pPlayer->MoveTo(pCell, acMessage.Position);
+    return true;
 }
 
 void PlayerService::OnPlayerLevelEvent(const PlayerLevelEvent& acEvent) const noexcept
