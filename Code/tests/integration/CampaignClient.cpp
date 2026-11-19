@@ -49,16 +49,23 @@ public:
                 SendDeathRequest(PlayerRespawnRequest::Respawn, kRespawnDownId);
             }
         }
+        if (CancelTravelAt && now >= *CancelTravelAt)
+        {
+            CancelTravelAt.reset();
+            SendTravelCommand(Mode == "carriage-pair-first" ? "/travel cancel 4" : "/travel cancel 5");
+            OwnerReady = true;
+            ReadyAt = now - 3s;
+        }
         if (DepartureAt && now >= *DepartureAt)
         {
             DepartureAt.reset();
             EnterExteriorCellRequest cell{};
-            cell.CellId = GameId(VanillaMod, 0xA22);
+            cell.CellId = GameId(VanillaMod, Mode == "carriage-pair-second" ? 0xA23 : 0xA22);
             cell.WorldSpaceId = GameId(VanillaMod, 0x3C);
             cell.CurrentCoords = {0, 0};
             Transmit(cell);
 
-            if (Mode == "carriage-fast-leader")
+            if (Mode == "carriage-fast-leader" || Mode == "carriage-pair-first" || Mode == "carriage-pair-second")
             {
                 RequestFastTravelCatchUp fastTravel{};
                 fastTravel.Sequence = 1;
@@ -251,6 +258,14 @@ public:
         if (message->GetOpcode() == NotifyChatMessageBroadcast::Opcode && Mode.starts_with("carriage-"))
         {
             const auto notice = CastUnique<NotifyChatMessageBroadcast>(std::move(message));
+            if (Mode == "carriage-pair-observer" &&
+                notice->ChatMessage == "Leave your other travel invitation before joining this one.")
+            {
+                assert(!SawTravelConflict);
+                SawTravelConflict = true;
+                SendTravelCommand("/travel decline 4");
+                SendTravelCommand("/travel join 5");
+            }
             const bool cCarriageCancel = Mode == "carriage-cancel-leader" && notice->ChatMessage.find("/travel cancel 2") != String::npos;
             const bool cFastTravelCancel = Mode == "carriage-fast-leader" && notice->ChatMessage.find("/travel cancel 3") != String::npos;
             if (cCarriageCancel || cFastTravelCancel)
@@ -297,6 +312,36 @@ public:
         if (message->GetOpcode() == NotifyTravelInvitation::Opcode && Mode.starts_with("carriage-"))
         {
             const auto invitation = CastUnique<NotifyTravelInvitation>(std::move(message));
+            if ((Mode == "carriage-pair-first" || Mode == "carriage-pair-second") &&
+                invitation->CanCancel && invitation->RemainingMs && !CancelTravelAt && !OwnerReady)
+            {
+                assert(invitation->Id == (Mode == "carriage-pair-first" ? 4u : 5u));
+                CancelTravelAt = std::chrono::steady_clock::now() + 3s;
+                std::puts("TRAVEL_PAIR_READY");
+                std::fflush(stdout);
+            }
+            if (Mode == "carriage-pair-observer")
+            {
+                if (invitation->RemainingMs && invitation->Id == 4 && !SawFirstTravelOffer)
+                {
+                    SawFirstTravelOffer = true;
+                    SendTravelCommand("/travel join 4");
+                }
+                if (invitation->RemainingMs && invitation->Id == 5 && !SawSecondTravelOffer)
+                {
+                    assert(SawFirstTravelOffer);
+                    SawSecondTravelOffer = true;
+                    SendTravelCommand("/travel join 5");
+                }
+                if (invitation->Id == 5 && invitation->Accepted)
+                {
+                    assert(SawTravelConflict);
+                    SawTravelConsent = true;
+                }
+                if (!invitation->RemainingMs && ++ClosedTravelOffers == 2)
+                    Done = true;
+            }
+
             if (Mode == "carriage-catchup" && invitation->RemainingMs)
             {
                 assert(invitation->Id == 1 && invitation->RemainingMs <= 10000);
@@ -471,7 +516,8 @@ public:
                     boarding.Token = cLeader ? 1 : 2;
                     Transmit(boarding);
                 }
-                if (cLeader || Mode == "carriage-fast-leader")
+                if (cLeader || Mode == "carriage-fast-leader" ||
+                    Mode == "carriage-pair-first" || Mode == "carriage-pair-second")
                     DepartureAt = std::chrono::steady_clock::now() + 400ms;
                 else
                 {
@@ -480,7 +526,8 @@ public:
                 }
                 if (Mode != "carriage-rider" && Mode != "carriage-catchup" && Mode != "carriage-busy" && Mode != "carriage-ignore" &&
                     Mode != "carriage-cancel-leader" && Mode != "carriage-cancel-observer" &&
-                    Mode != "carriage-fast-leader" && Mode != "carriage-fast-observer")
+                    Mode != "carriage-fast-leader" && Mode != "carriage-fast-observer" &&
+                    !Mode.starts_with("carriage-pair-"))
                 {
                     OwnerReady = true;
                     ReadyAt = std::chrono::steady_clock::now() + (Mode == "carriage-leader" ? 8s : 2s);
@@ -852,6 +899,14 @@ public:
         return true;
     }
 
+    void SendTravelCommand(const char* apCommand)
+    {
+        SendChatMessageRequest command{};
+        command.MessageType = kGlobalChat;
+        command.ChatMessage = apCommand;
+        Transmit(command);
+    }
+
     void EnterListenerWorldSpace(bool aForeign)
     {
         EnterExteriorCellRequest cell{};
@@ -916,6 +971,11 @@ public:
     unsigned DialogueStage{};
     bool SawCarriageTeleport{};
     unsigned TravelResults{};
+    unsigned ClosedTravelOffers{};
+    bool SawFirstTravelOffer{};
+    bool SawSecondTravelOffer{};
+    bool SawTravelConflict{};
+    std::optional<std::chrono::steady_clock::time_point> CancelTravelAt;
     bool SawTravelConsent{};
     bool SawTravelClose{};
     std::optional<std::chrono::steady_clock::time_point> TravelOfferedAt;
@@ -964,6 +1024,9 @@ int main(int argc, char** argv)
         assert(client.Done);
     if (client.Mode == "carriage-catchup")
         assert(client.SawTravelConsent && client.SawTravelClose && client.SawCarriageTeleport && client.TravelResults == 1);
+    if (client.Mode == "carriage-pair-observer")
+        assert(client.SawFirstTravelOffer && client.SawSecondTravelOffer && client.SawTravelConflict &&
+               client.SawTravelConsent && client.ClosedTravelOffers == 2 && !client.SawCarriageTeleport);
     if (client.Mode == "carriage-busy")
         assert(client.SawCarriageTeleport && client.TravelResults == 1);
     if (client.Mode == "carriage-ignore" || client.Mode == "carriage-cancel-observer" || client.Mode == "carriage-fast-observer")

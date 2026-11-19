@@ -176,6 +176,23 @@ end)
             assert observer.stdout.readline().strip() == "CARRIAGE_READY"
             test_client("carriage-fast-leader")
             assert observer.wait(timeout=8) == 0
+        with ExitStack() as travel_clients:
+            observer = travel_clients.enter_context(subprocess.Popen(
+                [harness, "carriage-pair-observer", version, f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True
+            ))
+            assert select.select([observer.stdout], [], [], 12)[0]
+            assert observer.stdout.readline().strip() == "CARRIAGE_READY"
+            leaders = []
+            for role in ("carriage-pair-first", "carriage-pair-second"):
+                leader = travel_clients.enter_context(subprocess.Popen(
+                    [harness, role, version, f"127.0.0.1:{port}"], stdout=subprocess.PIPE, text=True
+                ))
+                assert select.select([leader.stdout], [], [], 12)[0]
+                assert leader.stdout.readline().strip() == "TRAVEL_PAIR_READY"
+                leaders.append(leader)
+            assert observer.wait(timeout=8) == 0
+            for leader in leaders:
+                assert leader.wait(timeout=8) == 0
         with subprocess.Popen([harness, "stock-owner", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as owner:
             assert select.select([owner.stdout], [], [], 12)[0]

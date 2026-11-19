@@ -352,16 +352,26 @@ hr {
   background: #292723;
 }
 
-.travel-invitation {
+.travel-invitations {
   position: absolute;
   top: 12vh;
   right: 3vw;
-  max-width: 22rem;
+  max-width: min(22rem, 94vw);
+  max-height: 70vh;
+  overflow: hidden;
+  display: grid;
+  gap: .4rem;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.travel-invitations-active { overflow-y: auto; }
+.travel-invitations-active:not(:empty) { pointer-events: auto; }
+
+.travel-invitation {
   padding: .6rem .8rem;
   background: rgba(16, 17, 18, .85);
   color: #eee9db;
-  pointer-events: none;
-  z-index: 4;
 
   p { margin: .35rem 0 0; }
 }

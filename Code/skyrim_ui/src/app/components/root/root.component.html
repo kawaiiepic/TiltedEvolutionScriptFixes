@@ -30,21 +30,23 @@
     <app-group></app-group>
   </ng-container>
 
-  <aside *ngIf="(inGame$ | async) && (travelInvitation$ | async) as travel" class="travel-invitation">
-    <strong>{{ travel.canCancel ? 'Travel invitation' : travel.leader + ' invited you to travel' }}</strong>
-    <p *ngIf="travel.destination && travel.destination !== 'UNKNOWN'">{{ travel.destination }}</p>
-    <p>{{ travel.seconds }} seconds · {{ travel.count }} joining</p>
-    <div *ngIf="active$ | async; else travelHint" class="travel-actions">
-      <button *ngIf="travel.canCancel" type="button" (click)="respondToTravel(travel.id, 'cancel')">Cancel invitation</button>
-      <ng-container *ngIf="!travel.canCancel">
-        <button type="button" [disabled]="travel.accepted" (click)="respondToTravel(travel.id, 'join')">
-          {{ travel.accepted ? 'Joined' : 'Join travel' }}
-        </button>
-        <button type="button" (click)="respondToTravel(travel.id, 'decline')">Stay here</button>
-      </ng-container>
-    </div>
-    <ng-template #travelHint><p>Open the multiplayer overlay to respond.</p></ng-template>
-  </aside>
+  <div *ngIf="inGame$ | async" class="travel-invitations" [class.travel-invitations-active]="active$ | async">
+    <aside *ngFor="let travel of travelInvitations$ | async; trackBy: trackTravel" class="travel-invitation">
+      <strong>{{ travel.canCancel ? 'Travel invitation' : travel.leader + ' invited you to travel' }}</strong>
+      <p *ngIf="travel.destination && travel.destination !== 'UNKNOWN'">{{ travel.destination }}</p>
+      <p>{{ travel.seconds }} seconds · {{ travel.count }} joining</p>
+      <div *ngIf="active$ | async; else travelHint" class="travel-actions">
+        <button *ngIf="travel.canCancel" type="button" (click)="respondToTravel(travel.id, 'cancel')">Cancel invitation</button>
+        <ng-container *ngIf="!travel.canCancel">
+          <button type="button" [disabled]="travel.accepted" (click)="respondToTravel(travel.id, 'join')">
+            {{ travel.accepted ? 'Joined' : 'Join travel' }}
+          </button>
+          <button type="button" (click)="respondToTravel(travel.id, 'decline')">Stay here</button>
+        </ng-container>
+      </div>
+      <ng-template #travelHint><p>Open the multiplayer overlay to respond.</p></ng-template>
+    </aside>
+  </div>
 
   <!-- Native dialogue retains keyboard/mouse input. Only display suggestions, not a second choice menu. -->
   <ng-container *ngIf="focusedDialogue$ | async as panel">

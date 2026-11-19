@@ -171,7 +171,10 @@ void PlayerService::OnFastTravelCatchUp(const PacketEvent<RequestFastTravelCatch
 void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosition,
                                  const std::set<uint32_t>& acAlreadyTraveling, bool aFastTravel) noexcept
 {
-    if (m_travelInvitation || !std::isfinite(acPosition.x) || !std::isfinite(acPosition.y) || !std::isfinite(acPosition.z))
+    const uint32_t leaderId = acLeader.GetId();
+    if (m_travelDispatches.contains(leaderId) ||
+        std::ranges::any_of(m_travelInvitations, [leaderId](const auto& entry) { return entry.second.Leader == leaderId; }) ||
+        !std::isfinite(acPosition.x) || !std::isfinite(acPosition.y) || !std::isfinite(acPosition.z))
         return;
 
     const auto& cell = acLeader.GetCellComponent();
@@ -180,11 +183,8 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
     if (!destination || (cell.WorldSpaceId && !mods.FindFormKey(cell.WorldSpaceId, acLeader)))
         return;
 
-    if (++m_nextTravelId == 0)
-        ++m_nextTravelId;
     TravelInvitation invitation{};
-    invitation.Id = m_nextTravelId;
-    invitation.Leader = acLeader.GetId();
+    invitation.Leader = leaderId;
     invitation.FastTravel = aFastTravel;
     invitation.Cell = cell.Cell;
     invitation.WorldSpace = cell.WorldSpaceId;
@@ -195,6 +195,15 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
             invitation.Invited.insert(pPlayer->GetId());
     if (invitation.Invited.empty())
         return;
+    do
+    {
+        ++m_nextTravelId;
+    }
+    while (!m_nextTravelId || m_travelInvitations.contains(m_nextTravelId));
+    invitation.Id = m_nextTravelId;
+    for (auto& [id, other] : m_travelInvitations)
+        if (other.Accepted.erase(leaderId))
+            PublishTravelInvitation(other);
 
     const auto message = fmt::format("{} {} at {}:{:X}. Type /travel join {} within 10 seconds to catch up.",
                                      acLeader.GetUsername().c_str(), aFastTravel ? "finished fast travel" : "arrived by carriage",
@@ -203,8 +212,8 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
         if (const auto* pPlayer = m_world.GetPlayerManager().GetById(id))
             SendTravelMessage(*pPlayer, message);
     SendTravelMessage(acLeader, fmt::format("Catch-up invitation sent. Type /travel cancel {} to cancel.", invitation.Id));
-    m_travelInvitation = std::move(invitation);
-    PublishTravelInvitation();
+    const auto inserted = m_travelInvitations.emplace(invitation.Id, std::move(invitation));
+    PublishTravelInvitation(inserted.first->second);
 }
 
 bool PlayerService::CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept
@@ -237,30 +246,38 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
 
     uint32_t id{};
     const auto result = std::from_chars(idText.data(), idText.data() + idText.size(), id);
+    const auto offer = m_travelInvitations.find(id);
     if (result.ec != std::errc{} || result.ptr != idText.data() + idText.size() ||
-        !m_travelInvitation || m_travelInvitation->Id != id ||
-        std::chrono::steady_clock::now() >= m_travelInvitation->ExpiresAt)
+        offer == m_travelInvitations.end() || std::chrono::steady_clock::now() >= offer->second.ExpiresAt)
     {
         SendTravelMessage(acPlayer, "That travel invitation is no longer open.");
         return true;
     }
 
-    auto& invitation = *m_travelInvitation;
+    auto& invitation = offer->second;
     const uint32_t playerId = acPlayer.GetId();
     if (action == "cancel" && playerId == invitation.Leader)
-        EndTravelInvitation("The traveler canceled the invitation.");
+    {
+        EndTravelInvitation(invitation, "The traveler canceled the invitation.");
+        m_travelInvitations.erase(offer);
+    }
     else if (action == "cancel" || !invitation.Invited.contains(playerId))
         SendTravelMessage(acPlayer, "You cannot change that travel invitation.");
     else if (action == "decline")
     {
         if (invitation.Accepted.erase(playerId))
-            PublishTravelInvitation();
+            PublishTravelInvitation(invitation);
         SendTravelMessage(acPlayer, "You will stay here.");
     }
+    else if (std::ranges::any_of(m_travelInvitations, [&](const auto& entry)
+    {
+        return entry.first != id && (entry.second.Leader == playerId || entry.second.Accepted.contains(playerId));
+    }))
+        SendTravelMessage(acPlayer, "Leave your other travel invitation before joining this one.");
     else if (CanJoinTravel(acPlayer, invitation))
     {
         if (invitation.Accepted.insert(playerId).second)
-            PublishTravelInvitation();
+            PublishTravelInvitation(invitation);
         SendTravelMessage(acPlayer, fmt::format("Accepted. {} travelers have joined.", invitation.Accepted.size()));
     }
     else
@@ -305,20 +322,25 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
         return true;
     });
 
-    if (!m_travelInvitation)
-        return;
+    std::erase_if(m_travelInvitations, [&](const auto& entry)
+    {
+        return UpdateTravelOffer(entry.second, now);
+    });
+}
 
-    const auto& invitation = *m_travelInvitation;
+bool PlayerService::UpdateTravelOffer(const TravelInvitation& acInvitation, std::chrono::steady_clock::time_point aNow) noexcept
+{
+    const auto& invitation = acInvitation;
     const auto* pLeader = m_world.GetPlayerManager().GetById(invitation.Leader);
     if ((invitation.FastTravel ? !bFastTravelCatchUp : !bCarriageCatchUp) || !pLeader ||
         pLeader->GetCellComponent().Cell != invitation.Cell ||
         pLeader->GetCellComponent().WorldSpaceId != invitation.WorldSpace)
     {
-        EndTravelInvitation("Travel canceled because the destination is no longer active.");
-        return;
+        EndTravelInvitation(invitation, "Travel canceled because the destination is no longer active.");
+        return true;
     }
-    if (now < invitation.ExpiresAt)
-        return;
+    if (aNow < invitation.ExpiresAt)
+        return false;
 
     const auto character = pLeader->GetCharacter();
     const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
@@ -326,8 +348,8 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
     if (!pMovement || !pState || pState->IsDead() || pState->Recovery != RecoveryState::Standing ||
         !(glm::distance(pMovement->Position, invitation.Position) <= CarriageTravel::kBoardingDistance))
     {
-        EndTravelInvitation("Travel canceled because the traveler is no longer at the arrival point.");
-        return;
+        EndTravelInvitation(invitation, "Travel canceled because the traveler is no longer at the arrival point.");
+        return true;
     }
 
     NotifyTeleport notify{};
@@ -341,19 +363,18 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
             if (CanJoinTravel(*pRider, invitation))
             {
                 m_travelDispatches.emplace(id, TravelDispatch{invitation.Id, invitation.Cell, invitation.WorldSpace,
-                    now + std::chrono::seconds(20)});
+                    aNow + std::chrono::seconds(20)});
                 pRider->Send(notify);
             }
             else
                 SendTravelMessage(*pRider, "Travel skipped because you are no longer eligible.");
         }
-    PublishTravelInvitation(true);
-    m_travelInvitation.reset();
+    PublishTravelInvitation(invitation, true);
+    return true;
 }
 
-void PlayerService::PublishTravelInvitation(bool aClosed) const noexcept
+void PlayerService::PublishTravelInvitation(const TravelInvitation& invitation, bool aClosed) const noexcept
 {
-    const auto& invitation = *m_travelInvitation;
     const auto& players = m_world.GetPlayerManager();
     const auto* pLeader = players.GetById(invitation.Leader);
     NotifyTravelInvitation notify{};
@@ -383,13 +404,12 @@ void PlayerService::PublishTravelInvitation(bool aClosed) const noexcept
     }
 }
 
-void PlayerService::EndTravelInvitation(std::string_view aMessage) noexcept
+void PlayerService::EndTravelInvitation(const TravelInvitation& acInvitation, std::string_view aMessage) const noexcept
 {
-    PublishTravelInvitation(true);
-    for (const uint32_t id : m_travelInvitation->Invited)
+    PublishTravelInvitation(acInvitation, true);
+    for (const uint32_t id : acInvitation.Invited)
         if (const auto* pPlayer = m_world.GetPlayerManager().GetById(id))
             SendTravelMessage(*pPlayer, aMessage);
-    m_travelInvitation.reset();
 }
 
 void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
@@ -399,16 +419,19 @@ void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
     m_fastTravelSequences.erase(playerId);
     m_travelDispatches.erase(playerId);
     m_cellDepartures.erase(playerId);
-    if (m_travelInvitation)
+    for (auto it = m_travelInvitations.begin(); it != m_travelInvitations.end();)
     {
-        if (m_travelInvitation->Leader == playerId)
-            EndTravelInvitation("Travel canceled because the traveler disconnected.");
-        else
+        auto& invitation = it->second;
+        if (invitation.Leader == playerId)
         {
-            m_travelInvitation->Invited.erase(playerId);
-            if (m_travelInvitation->Accepted.erase(playerId))
-                PublishTravelInvitation();
+            EndTravelInvitation(invitation, "Travel canceled because the traveler disconnected.");
+            it = m_travelInvitations.erase(it);
+            continue;
         }
+        invitation.Invited.erase(playerId);
+        if (invitation.Accepted.erase(playerId))
+            PublishTravelInvitation(invitation);
+        ++it;
     }
     if (const auto character = acEvent.pPlayer->GetCharacter())
     {

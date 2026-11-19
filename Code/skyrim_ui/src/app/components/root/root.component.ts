@@ -5,7 +5,7 @@ import { combineLatest, of, switchMap, takeUntil, takeWhile, timer } from 'rxjs'
 import { environment } from '../../../environments/environment';
 import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.animation';
 import { View } from '../../models/view.enum';
-import { ClientService, SharedDialoguePanel } from '../../services/client.service';
+import { ClientService, SharedDialoguePanel, TravelInvitation } from '../../services/client.service';
 import { DestroyService } from '../../services/destroy.service';
 import { PlayerListService } from '../../services/player-list.service';
 import {
@@ -40,13 +40,21 @@ export class RootComponent implements OnInit {
 
   view$ = this.uiRepository.view$;
 
-  travelInvitation$ = this.client.travelInvitation.pipe(
-    switchMap(invitation => invitation ? timer(0, 250).pipe(
-      map(() => Math.ceil((invitation.expiresAt - performance.now()) / 1000)),
-      takeWhile(seconds => seconds > 0, true),
-      map(seconds => seconds > 0 ? { ...invitation, seconds } : undefined),
-    ) : of(undefined)),
+  travelInvitations$ = this.client.travelInvitations.pipe(
+    switchMap(invitations => invitations.length ? timer(0, 250).pipe(
+      map(() => {
+        const now = performance.now();
+        return invitations
+          .map(invitation => ({ ...invitation, seconds: Math.ceil((invitation.expiresAt - now) / 1000) }))
+          .filter(invitation => invitation.seconds > 0);
+      }),
+      takeWhile(invitations => invitations.length > 0, true),
+    ) : of([])),
   );
+
+  trackTravel(_index: number, invitation: TravelInvitation): number {
+    return invitation.id;
+  }
 
   respondToTravel(id: number, action: 'join' | 'decline' | 'cancel'): void {
     this.client.respondToTravelInvitation(id, action);

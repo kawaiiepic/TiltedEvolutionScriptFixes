@@ -4,7 +4,7 @@
 #include <Structs/GameId.h>
 #include <chrono>
 #include <unordered_map>
-#include <optional>
+#include <map>
 #include <set>
 #include <string_view>
 
@@ -71,12 +71,13 @@ private:
                       bool aFastTravel) noexcept;
     void OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept;
     void UpdateTravelInvitation(const UpdateEvent&) noexcept;
-    void PublishTravelInvitation(bool aClosed = false) const noexcept;
-    void EndTravelInvitation(std::string_view aMessage) noexcept;
+    void PublishTravelInvitation(const TravelInvitation& acInvitation, bool aClosed = false) const noexcept;
+    void EndTravelInvitation(const TravelInvitation& acInvitation, std::string_view aMessage) const noexcept;
+    bool UpdateTravelOffer(const TravelInvitation& acInvitation, std::chrono::steady_clock::time_point aNow) noexcept;
     bool CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept;
 
     World& m_world;
-    std::optional<TravelInvitation> m_travelInvitation;
+    std::map<uint32_t, TravelInvitation> m_travelInvitations;
     uint32_t m_nextTravelId{};
     struct CellDeparture
     {
