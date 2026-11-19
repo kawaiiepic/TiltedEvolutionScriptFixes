@@ -9,14 +9,21 @@
 #include <array>
 #include <cstdint>
 
-// Fixed-size bounded wire format. Preflight the exact packet size before
+// Bounded header and variable-length data. Preflight the exact packet size before
 // extraction; no client-controlled allocations or filesystem names.
 struct CharacterSavePayload
 {
-    static constexpr size_t ChunkSize = 16384;
+    static constexpr size_t ChunkSize = 60 * 1024;
     static constexpr uint64_t MaxSize = 128ull * 1024 * 1024;
-    static constexpr size_t WireSize = 1 + 2 + 4 * 8 + 2 + 32 + 32 + ChunkSize;
-    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort };
+    static constexpr size_t HeaderSize = 1 + 2 + 4 * 8 + 32 + 32 + 2;
+    static bool ValidPacket(const void* apData, size_t aSize) noexcept
+    {
+        if (aSize < HeaderSize || aSize > HeaderSize + ChunkSize) return false;
+        const auto* bytes = static_cast<const uint8_t*>(apData);
+        const size_t count = bytes[HeaderSize - 2] | (size_t(bytes[HeaderSize - 1]) << 8);
+        return aSize == HeaderSize + count;
+    }
+    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort, UploadCopy, DownloadIfChanged };
     enum Result : uint8_t { Ok, Disabled, Invalid, Busy, Stale, Missing, IoError, Incomplete, HashMismatch, Quota };
     uint8_t Action{};
     uint8_t Status{};
@@ -37,10 +44,10 @@ struct CharacterSavePayload
         aWriter.WriteBits(Offset, 64);
         aWriter.WriteBits(EssSize, 64);
         aWriter.WriteBits(CoSaveSize, 64);
+        aWriter.WriteBytes(Key.data(), Key.size());
+        aWriter.WriteBytes(Digest.data(), Digest.size());
         aWriter.WriteBits(Count, 16);
-        for (auto byte : Key) aWriter.WriteBits(byte, 8);
-        for (auto byte : Digest) aWriter.WriteBits(byte, 8);
-        for (auto byte : Data) aWriter.WriteBits(byte, 8);
+        if (Count <= ChunkSize) aWriter.WriteBytes(Data.data(), Count);
     }
     void Read(TiltedPhoques::Buffer::Reader& aReader) noexcept
     {
@@ -51,10 +58,10 @@ struct CharacterSavePayload
         aReader.ReadBits(Offset, 64);
         aReader.ReadBits(EssSize, 64);
         aReader.ReadBits(CoSaveSize, 64);
+        aReader.ReadBytes(Key.data(), Key.size());
+        aReader.ReadBytes(Digest.data(), Digest.size());
         aReader.ReadBits(value, 16); Count = static_cast<uint16_t>(value);
-        for (auto& byte : Key) { aReader.ReadBits(value, 8); byte = static_cast<uint8_t>(value); }
-        for (auto& byte : Digest) { aReader.ReadBits(value, 8); byte = static_cast<uint8_t>(value); }
-        for (auto& byte : Data) { aReader.ReadBits(value, 8); byte = static_cast<uint8_t>(value); }
+        if (Count <= ChunkSize) aReader.ReadBytes(Data.data(), Count);
     }
 };
 

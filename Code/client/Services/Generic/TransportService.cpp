@@ -106,7 +106,7 @@ bool TransportService::Send(const ClientMessage& acMessage, const TiltedPhoques:
 
 void TransportService::OnConsume(const void* apData, uint32_t aSize)
 {
-    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == NotifyCharacterSave::Opcode && aSize != CharacterSavePayload::WireSize))
+    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == NotifyCharacterSave::Opcode && !CharacterSavePayload::ValidPacket(apData, aSize)))
         return;
     ServerMessageFactory factory;
     TiltedPhoques::ViewBuffer buf((uint8_t*)apData, aSize);

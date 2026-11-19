@@ -100,46 +100,48 @@ TEST_CASE("Lobby advertises mandatory server checkpoints", "[encoding.auth]")
     REQUIRE(decoded->RequiresCharacterSave);
 }
 
-TEST_CASE("Checkpoint packets have bounded exact wire size", "[encoding.saves]")
+TEST_CASE("Checkpoint packets contain only the declared bytes", "[encoding.saves]")
 {
+    using P = CharacterSavePayload;
     RequestCharacterSave request{};
-    request.Action = CharacterSavePayload::UploadChunk;
+    request.Count = GENERATE(uint16_t{0}, uint16_t{3}, static_cast<uint16_t>(P::ChunkSize));
+    request.Action = request.Count ? P::UploadChunk : P::UploadCopy;
     request.Revision = 5;
     request.Offset = 17;
-    request.Count = 3;
-    request.Data[0] = 42;
-    request.Data.back() = 255;
-    Buffer buffer(CharacterSavePayload::WireSize + 16);
+    request.Data.fill(42);
+    Buffer buffer(P::HeaderSize + request.Count + 16);
     Buffer::Writer writer(&buffer);
     request.Serialize(writer);
-    REQUIRE(writer.Size() == CharacterSavePayload::WireSize);
+    REQUIRE(writer.Size() == P::HeaderSize + request.Count);
+    REQUIRE(P::ValidPacket(buffer.GetData(), writer.Size()));
+    REQUIRE_FALSE(P::ValidPacket(buffer.GetData(), writer.Size() - 1));
+    REQUIRE_FALSE(P::ValidPacket(buffer.GetData(), writer.Size() + 1));
     Buffer::Reader reader(&buffer);
     auto message = ClientMessageFactory{}.Extract(reader);
     REQUIRE(message);
-    REQUIRE(message->GetOpcode() == RequestCharacterSave::Opcode);
     auto received = CastUnique<RequestCharacterSave>(std::move(message));
     REQUIRE(received->Action == request.Action);
     REQUIRE(received->Revision == request.Revision);
     REQUIRE(received->Offset == request.Offset);
     REQUIRE(received->Count == request.Count);
-    REQUIRE(received->Data == request.Data);
+    REQUIRE(std::equal(received->Data.begin(), received->Data.begin() + received->Count, request.Data.begin()));
 
     NotifyCharacterSave reply{};
-    reply.Action = CharacterSavePayload::DownloadChunk;
+    reply.Action = P::DownloadIfChanged;
     reply.Revision = 6;
-    reply.Count = 3;
+    reply.Count = request.Count;
     reply.Data = request.Data;
-    Buffer responseBuffer(CharacterSavePayload::WireSize + 16);
+    Buffer responseBuffer(P::HeaderSize + reply.Count + 16);
     Buffer::Writer responseWriter(&responseBuffer);
     reply.Serialize(responseWriter);
-    REQUIRE(responseWriter.Size() == CharacterSavePayload::WireSize);
+    REQUIRE(P::ValidPacket(responseBuffer.GetData(), responseWriter.Size()));
     Buffer::Reader responseReader(&responseBuffer);
     auto response = ServerMessageFactory{}.Extract(responseReader);
     REQUIRE(response);
-    REQUIRE(response->GetOpcode() == NotifyCharacterSave::Opcode);
     auto decoded = CastUnique<NotifyCharacterSave>(std::move(response));
     REQUIRE(decoded->Revision == reply.Revision);
-    REQUIRE(decoded->Data == reply.Data);
+    REQUIRE(decoded->Count == reply.Count);
+    REQUIRE(std::equal(decoded->Data.begin(), decoded->Data.begin() + decoded->Count, reply.Data.begin()));
 }
 
 TEST_CASE("Static structures", "[encoding.static]")

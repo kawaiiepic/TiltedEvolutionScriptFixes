@@ -60,6 +60,9 @@ struct State
     uint8_t Expected{};
     uint64_t Revision{}, Ess{}, Co{}, Offset{};
     uint16_t LastCount{};
+    size_t CachedSize{}, ReusedBytes{};
+    std::filesystem::path CacheFile;
+    std::vector<std::array<uint8_t, 32>> BaseBlocks;
     std::array<uint8_t, 32> Digest{};
     std::vector<uint8_t> Bytes;
     std::filesystem::path Directory;
@@ -308,6 +311,42 @@ bool WriteNew(const std::filesystem::path& acPath, const uint8_t* apData, uint64
     if (!ok) DeleteFileW(acPath.c_str());
     return ok;
 }
+std::array<uint8_t, 32> BlockDigest(size_t aOffset, size_t aCount)
+{
+    std::array<uint8_t, 32> digest{};
+    CryptoPP::SHA256().CalculateDigest(digest.data(), s.Bytes.data() + aOffset, aCount);
+    return digest;
+}
+
+void ReadCachedCheckpoint()
+{
+    ReadHandle file;
+    Stamp stamp{};
+    if (!file.Open(s.CacheFile) || !file.Stat(stamp) || stamp.Size > P::MaxSize) return;
+    const size_t count = std::min(s.Bytes.size(), static_cast<size_t>(stamp.Size));
+    if (file.Read(s.Bytes.data(), count)) s.CachedSize = count;
+}
+
+void RememberCheckpoint()
+{
+    // BaseBlocks describes only the verified server revision for this selection.
+    s.BaseBlocks.clear();
+    for (size_t offset = 0; offset < s.Bytes.size(); offset += P::ChunkSize)
+        s.BaseBlocks.push_back(BlockDigest(offset, std::min(P::ChunkSize, s.Bytes.size() - offset)));
+
+    // This cache is optional. A unique temporary file keeps concurrent clients and
+    // interrupted writes from replacing a usable cache with a partial checkpoint.
+    std::error_code ec;
+    std::filesystem::create_directories(s.CacheFile.parent_path(), ec);
+    const auto temp = s.CacheFile.parent_path() / (s.Name + ".tmp");
+    if (ec || !WriteNew(temp, s.Bytes.data(), s.Bytes.size()) ||
+        !MoveFileExW(temp.c_str(), s.CacheFile.c_str(), MOVEFILE_REPLACE_EXISTING))
+    {
+        DeleteFileW(temp.c_str());
+        spdlog::warn("Could not refresh the local character checkpoint cache");
+    }
+}
+
 bool StageDownload()
 {
     std::array<uint8_t, 32> digest{};
@@ -337,6 +376,7 @@ bool StageDownload()
     PairStamp baseline{};
     if (!Snapshot(baseline, false)) return false;
     s.Baseline = baseline;
+    RememberCheckpoint();
     s.Bytes.clear();
     return true;
 }
@@ -515,6 +555,15 @@ void Select(TransportService& aTransport, const std::string& acKey, const std::s
             request.Key[i] = static_cast<uint8_t>((hi << 4) | lo);
         }
         if (!ChoosePath()) { Change(Phase::Choose, "Save directory unavailable; configure ST_SAVE_DIRECTORY."); return; }
+        std::array<uint8_t, 32> slotHash{};
+        CryptoPP::SHA256().CalculateDigest(slotHash.data(), request.Key.data(), request.Key.size());
+        std::string cacheName;
+        for (const auto byte : slotHash)
+        {
+            cacheName += kHex[byte >> 4];
+            cacheName += kHex[byte & 15];
+        }
+        s.CacheFile = s.Directory / L"SkyrimTogetherCache" / (cacheName + ".checkpoint");
         s.CharacterLabel = acLabel;
         s.NextNameAttempt = {};
         Change(Phase::Selecting, "Checking server character...");
@@ -608,26 +657,38 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Digest = acReply.Digest;
             s.Offset = 0;
             s.Bytes.resize(static_cast<size_t>(s.Ess + s.Co));
+            ReadCachedCheckpoint();
             Change(Phase::Download, "Downloading the server's latest checkpoint...");
             return;
+        case P::DownloadIfChanged:
         case P::DownloadChunk:
+        {
+            const size_t count = std::min<uint64_t>(P::ChunkSize, s.Bytes.size() - s.Offset);
+            const bool reuse = acReply.Action == P::DownloadIfChanged && !acReply.Count;
             if (s.Step != Phase::Download || acReply.Revision != s.Revision ||
                 acReply.EssSize != s.Ess || acReply.CoSaveSize != s.Co || acReply.Digest != s.Digest ||
-                acReply.Offset != s.Offset || !acReply.Count || acReply.Count > P::ChunkSize ||
-                acReply.Count > s.Bytes.size() - s.Offset) { Fail("Invalid download response."); return; }
-            std::copy_n(acReply.Data.begin(), acReply.Count, s.Bytes.begin() + static_cast<size_t>(s.Offset));
-            s.Offset += acReply.Count;
+                acReply.Offset != s.Offset || !count ||
+                (reuse ? s.Offset + count > s.CachedSize : acReply.Count != count))
+            { Fail("Invalid download response."); return; }
+            if (reuse)
+                s.ReusedBytes += count;
+            else
+                std::copy_n(acReply.Data.begin(), count, s.Bytes.begin() + static_cast<size_t>(s.Offset));
+            s.Offset += count;
             if (s.Offset == s.Bytes.size())
             {
                 if (!StageDownload()) { Fail("Checkpoint failed integrity verification or could not be staged."); return; }
+                spdlog::info("Checkpoint download reused {} of {} bytes", s.ReusedBytes, s.Offset);
                 Change(Phase::Staged, s.NativeEnabled ? "Download verified. Waiting for Skyrim to load the selected checkpoint..." : "Downloaded. Load the named save in Skyrim, then select Enter world.");
                 s.EnterDeadline = Clock::now() + kNativeTimeout;
             }
             return;
+        }
         case P::BeginUpload:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision) { Fail("Invalid upload response."); return; }
             s.NeedsBegin = false;
             return;
+        case P::UploadCopy:
         case P::UploadChunk:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision ||
                 acReply.Offset != s.Offset + s.LastCount) { Fail("Invalid upload offset."); return; }
@@ -644,6 +705,8 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             }
             s.Revision = acReply.Revision;
             s.Baseline = s.Captured;
+            spdlog::info("Checkpoint upload reused {} of {} bytes", s.ReusedBytes, s.Bytes.size());
+            RememberCheckpoint();
             s.Bytes.clear();
             s.CaptureReady = false;
             s.NextAutoSave = Clock::now() + kAutosaveInterval;
@@ -833,7 +896,13 @@ void Tick(TransportService& aTransport) noexcept
         request.Revision = s.Revision;
         if (s.Step == Phase::Download)
         {
+            const size_t count = std::min<uint64_t>(P::ChunkSize, s.Bytes.size() - s.Offset);
             request.Action = P::DownloadChunk;
+            if (s.Offset + count <= s.CachedSize)
+            {
+                request.Action = P::DownloadIfChanged;
+                request.Digest = BlockDigest(s.Offset, count);
+            }
             request.Offset = s.Offset;
             Send(aTransport, request);
             return;
@@ -853,7 +922,15 @@ void Tick(TransportService& aTransport) noexcept
                 request.Offset = s.Offset;
                 request.Count = static_cast<uint16_t>(std::min<uint64_t>(P::ChunkSize, s.Bytes.size() - s.Offset));
                 s.LastCount = request.Count;
-                std::copy_n(s.Bytes.begin() + static_cast<size_t>(s.Offset), request.Count, request.Data.begin());
+                const size_t block = s.Offset / P::ChunkSize;
+                if (block < s.BaseBlocks.size() && BlockDigest(s.Offset, request.Count) == s.BaseBlocks[block])
+                {
+                    request.Action = P::UploadCopy;
+                    request.Count = 0;
+                    s.ReusedBytes += s.LastCount;
+                }
+                else
+                    std::copy_n(s.Bytes.begin() + static_cast<size_t>(s.Offset), request.Count, request.Data.begin());
             }
             else request.Action = P::Commit;
             Send(aTransport, request);
@@ -894,12 +971,23 @@ void Tick(TransportService& aTransport) noexcept
         {
             Fail("The named file is not a native Skyrim save."); return;
         }
+        const auto digest = BlockDigest(0, s.Bytes.size());
+        if (s.Revision && digest == s.Digest && captured.Ess.Size == s.Ess && captured.Co.Size == s.Co)
+        {
+            s.Baseline = captured;
+            s.Bytes.clear();
+            s.CaptureReady = false;
+            s.NextAutoSave = now + kAutosaveInterval;
+            Change(Phase::Ready, "The server already has this checkpoint.");
+            return;
+        }
         s.Captured = captured;
         s.Ess = captured.Ess.Size;
         s.Co = captured.Co.Size;
         s.Offset = 0;
+        s.ReusedBytes = 0;
         s.NeedsBegin = true;
-        CryptoPP::SHA256().CalculateDigest(s.Digest.data(), s.Bytes.data(), s.Bytes.size());
+        s.Digest = digest;
         if (!s.Revision) spdlog::info("Uploading the first character checkpoint ({} bytes)", s.Bytes.size());
         Change(Phase::Upload, "Uploading the completed native save...");
     }

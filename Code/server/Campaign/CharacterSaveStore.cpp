@@ -182,7 +182,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
 {
     aReply.Action = acRequest.Action;
     aReply.Status = P::Invalid;
-    if (acRequest.Status || acRequest.Action > P::Abort || acRequest.Count > P::ChunkSize)
+    if (acRequest.Status || acRequest.Action > P::DownloadIfChanged || acRequest.Count > P::ChunkSize)
         return;
 
     if (acRequest.Action == P::Select)
@@ -268,16 +268,34 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
         aReply.Status = P::Ok;
         return;
     }
+    case P::UploadCopy:
     case P::UploadChunk:
     {
-        if (!lease.Uploading || !acRequest.Count || acRequest.Offset != lease.Written ||
-            acRequest.Count > lease.Upload.Ess + lease.Upload.CoSave - lease.Written)
+        const uint64_t total = lease.Upload.Ess + lease.Upload.CoSave;
+        if (!lease.Uploading || acRequest.Offset != lease.Written || lease.Written >= total)
             return;
+        const uint8_t* data = acRequest.Data.data();
+        size_t count = acRequest.Count;
+        if (acRequest.Action == P::UploadCopy)
+        {
+            count = static_cast<size_t>(std::min<uint64_t>(P::ChunkSize, total - lease.Written));
+            if (acRequest.Count || !lease.Latest.Number ||
+                lease.Written + count > lease.Latest.Ess + lease.Latest.CoSave) return;
+            // The pending revision is a separate file. Its full hash is verified before publication.
+            std::ifstream base(File(lease, lease.Latest.Number), std::ios::binary);
+            base.seekg(HeaderSize + lease.Written);
+            if (!base.read(reinterpret_cast<char*>(aReply.Data.data()), count))
+            {
+                Discard(lease); aReply.Status = P::IoError; return;
+            }
+            data = aReply.Data.data();
+        }
+        if (!count || count > total - lease.Written) return;
         std::ofstream output(pending, std::ios::binary | std::ios::app);
-        output.write(reinterpret_cast<const char*>(acRequest.Data.data()), acRequest.Count);
+        output.write(reinterpret_cast<const char*>(data), count);
         output.close();
         if (!output) { Discard(lease); aReply.Status = P::IoError; return; }
-        lease.Written += acRequest.Count;
+        lease.Written += count;
         aReply.Offset = lease.Written;
         aReply.Status = P::Ok;
         return;
@@ -360,6 +378,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
         }
         return;
     }
+    case P::DownloadIfChanged:
     case P::DownloadChunk:
     {
         if (aInWorld || !lease.Latest.Number || lease.Uploading)
@@ -380,6 +399,9 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
         aReply.Offset = acRequest.Offset;
         lease.Downloaded += aReply.Count;
         lease.Ready = lease.Downloaded == total;
+        if (acRequest.Action == P::DownloadIfChanged &&
+            CryptoPP::SHA256().VerifyDigest(acRequest.Digest.data(), aReply.Data.data(), aReply.Count))
+            aReply.Count = 0;
         aReply.Status = P::Ok;
         return;
     }
