@@ -37,3 +37,21 @@ The built-in adapter forwards successful standalone Papyrus `Actor.PlayIdle` cal
 This adapter covers the idle playback path. Paired or target-driven actions, script effects and animation replacer conditions that apply only to the local player still need separate integration. In-game validation is pending.
 
 [Immersive Interactions – Animated Actions](https://www.nexusmods.com/skyrimspecialedition/mods/47670)
+
+
+## RaceMenu body morphs
+
+Skyrim Together captures the local player's effective RaceMenu body slider values
+and sends them through its native messaging channel. Receivers apply each
+snapshot to the sender's loaded proxy using a dedicated RaceMenu morph key.
+Snapshots are resent for late arrivals and reapplied when a proxy's 3D reloads.
+Slider removals clear the corresponding synced values.
+
+Participating clients need RaceMenu, compatible meshes and the bundled
+`STCheckpointBridge.dll` in `Data/SKSE/Plugins`. The bridge discovers RaceMenu's
+public BodyMorph v5 interface. No MorphSyncTogether DLL or external relay is
+required. The existing Skyrim Together face and tint replication remains active.
+RaceMenu sculpt geometry, custom overlays and node transforms are outside this
+body slider implementation. In-game verification is pending.
+
+[RaceMenu SKEE interface](https://github.com/expired6978/SKSE64Plugins/blob/master/skee64/IPluginInterface.h)

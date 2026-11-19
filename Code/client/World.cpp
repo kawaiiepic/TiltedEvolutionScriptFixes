@@ -31,6 +31,7 @@
 #include <ModCompat/CharacterCheckpoints.h>
 #include <ModCompat/BehaviorVar.h>
 #include <ModCompat/ImmersiveInteractions.h>
+#include <ModCompat/RaceMenuSync.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -62,6 +63,7 @@ World::World()
     ctx().emplace<MapService>(*this, m_dispatcher, m_transport);
     ctx().emplace<PluginMessagingService>(m_dispatcher);
     ImmersiveInteractions::RegisterMessaging();
+    ctx().emplace<RaceMenuSync>(*this, m_dispatcher);
 
     BehaviorVar::Get()->Init();
 }
