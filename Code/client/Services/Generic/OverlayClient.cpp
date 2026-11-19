@@ -124,8 +124,9 @@ bool OverlayClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
                 }
                 else
                 {
-                    request.Action = PlayerDialogueRequest::Vote;
-                    World::Get().GetRunner().Queue([request]() { World::Get().GetTransport().Send(request); });
+                    World::Get().QueueCheckpointTask([request]() {
+                        World::Get().GetOverlayService().ChooseSharedDialogue(request.ActorId, request.Revision, request.Index);
+                    });
                 }
             }
         }

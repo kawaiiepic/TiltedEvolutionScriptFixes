@@ -9,6 +9,9 @@ bool IsReady() noexcept;
 bool ConsumePlayRequest() noexcept;
 bool ConsumeSettingsRequest() noexcept;
 bool PrefillCharacterName(const char* apName) noexcept;
+// Only hide the presentation, never close or pause the actual conversation.
+bool HideDialogueMovie(void*& apHiddenMovie) noexcept;
+void RestoreDialogueMovie(void*& apHiddenMovie) noexcept;
 bool RequestNewGame() noexcept;
 bool NewGameRequestFailed() noexcept;
 void CancelNewGame() noexcept;

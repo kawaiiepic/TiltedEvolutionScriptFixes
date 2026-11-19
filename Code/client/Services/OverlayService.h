@@ -5,6 +5,9 @@
 #include <chrono>
 #include <atomic>
 #include <Messages/NotifyPlayerMapMarkers.h>
+#include <Messages/NotifyPlayerDialogue.h>
+#include <map>
+#include <set>
 
 namespace TiltedPhoques
 {
@@ -78,6 +81,7 @@ struct OverlayService
     uint32_t GetDialogueGrant(uint32_t aActorId) const noexcept;
     bool CanSelectDialogue(const char* apText) noexcept;
     void ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept;
+    void ChooseSharedDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aIndex) noexcept;
 
     void SetPlayerHealthPercentage(uint32_t aFormId) const noexcept;
 
@@ -102,6 +106,9 @@ protected:
 
 private:
     void RefreshDialogueSession() noexcept;
+    void UpdateSharedConversation() noexcept;
+    void PublishSharedConversation() noexcept;
+    void EndSharedConversation() noexcept;
     void CloseDialogueSession() noexcept;
     void PublishDialogueOptions() noexcept;
     void PublishDialogueFocus(bool aForce = false) noexcept;
@@ -132,6 +139,13 @@ private:
     bool m_settingsOpenRequested = false;
     bool m_browserWaitLogged = false;
     std::chrono::steady_clock::time_point m_mainMenuSince{};
+
+    std::map<uint32_t, NotifyPlayerDialogue> m_conversationPanels;
+    std::set<uint32_t> m_dismissedConversations;
+    uint32_t m_sharedConversationActor{};
+    bool m_sharedConversationNative{};
+    void* m_hiddenDialogueMovie{};
+    std::atomic_bool m_conversationTickQueued{false};
 
     uint32_t m_dialogueActorId{};
     uint32_t m_dialogueToken{};

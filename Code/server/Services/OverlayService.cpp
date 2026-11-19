@@ -202,7 +202,7 @@ bool OverlayService::CanListen(uint32_t aActorId, const DialogueSession& acSessi
 void OverlayService::RecordConversationSubtitle(uint32_t aActorId, const String& acText) noexcept
 {
     const auto session = m_dialogueSessions.find(aActorId);
-    if (session == m_dialogueSessions.end() || !bRemoteDialogueSpectating || session->second.Private)
+    if (session == m_dialogueSessions.end() || session->second.Private)
         return;
     auto& state = session->second;
     state.Subtitle = acText.size() <= 2048 ? acText : String{};
@@ -311,7 +311,7 @@ void OverlayService::RefreshDialoguePanels() noexcept
             panel.Name = pOwner->GetUsername();
             if (cNearby || cListening)
                 panel.Options = session.Options;
-            if (cListening && !cNearby)
+            if (cNearby || cListening || cOwner)
                 panel.Text = session.Subtitle;
             panel.Votes.resize(panel.Options.size(), 0);
             for (const auto& [voter, index] : session.Votes)

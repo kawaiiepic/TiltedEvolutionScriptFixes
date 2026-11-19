@@ -68,6 +68,15 @@ export class RootComponent implements OnInit {
 
   dialogueFocus$ = this.client.dialogueFocus.asObservable();
   sharedDialogues$ = this.client.sharedDialogueChange.asObservable();
+  conversation$ = combineLatest([this.sharedDialogues$, this.client.conversationMode,
+    this.client.activationStateChange]).pipe(
+    map(([panels, actorId, active]) => active && actorId ? panels.find(panel => panel.actorId === actorId) : undefined),
+  );
+  closeConversation(): void { this.client.deactivate(); }
+  selectConversationOption(panel: SharedDialoguePanel, index: number): void {
+    if ((panel.canChoose || panel.canVote) && panel.options[index])
+      this.client.voteDialogue(panel.actorId, panel.revision, index);
+  }
   focusedDialogue$ = combineLatest([this.sharedDialogues$, this.dialogueFocus$]).pipe(
     map(([panels, focus]) => focus.open ? panels.find(panel => panel.actorId === focus.actorId) : undefined),
   );
@@ -193,7 +202,7 @@ export class RootComponent implements OnInit {
         if (
           this.client.inGameStateChange.getValue() &&
           state &&
-          !this.uiRepository.isViewOpen()
+          !this.uiRepository.isViewOpen() && !this.client.conversationMode.value
         ) {
           setTimeout(() => this.chatComp?.focus(), 100);
         }

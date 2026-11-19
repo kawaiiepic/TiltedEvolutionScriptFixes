@@ -242,7 +242,8 @@ void OverlayService::SetActive(bool aActive) noexcept
         return;
 
     m_active = aActive;
-
+    if (!aActive && m_sharedConversationActor)
+        EndSharedConversation();
     m_pOverlay->ExecuteAsync(m_active ? "activate" : "deactivate");
 }
 
@@ -366,6 +367,7 @@ void OverlayService::OnBrowserReady() noexcept
     }
     m_pOverlay->ExecuteAsync(m_active ? "activate" : "deactivate");
     PublishDialogueFocus(true);
+    PublishSharedConversation();
 }
 
 void OverlayService::RefreshMenuPresentation() noexcept
@@ -456,6 +458,13 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
     RefreshDialogueSession();
     PublishDialogueFocus();
     PublishDialogueOptions();
+    // Scaleform and input ownership must be changed on the window/game
+    // thread, never a CEF or transport callback. Keep at most one task pending.
+    if (!m_conversationTickQueued.exchange(true))
+        m_world.QueueCheckpointTask([this]() {
+            m_conversationTickQueued.store(false);
+            UpdateSharedConversation();
+        });
     if (m_transport.IsOnline())
         DialoguePortraits::Update(m_world, m_pOverlay.get(), m_transport.GetLocalPlayerId());
     RunDebugDataUpdates();
@@ -491,6 +500,8 @@ void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
     PublishPlayerMapMarkers();
     InputService::SetWorldCursorSuppressed(false);
     CloseDialogueSession();
+    m_conversationPanels.clear();
+    m_dismissedConversations.clear();
     PublishDialogueFocus(true);
     DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("disconnect");
@@ -702,6 +713,130 @@ void OverlayService::PublishDialogueOptions() noexcept
     }
 }
 
+void OverlayService::PublishSharedConversation() noexcept
+{
+    if (!m_pOverlay) return;
+    auto args = CefListValue::Create();
+    args->SetDouble(0, m_sharedConversationActor);
+    m_pOverlay->ExecuteAsync("conversationMode", args);
+}
+
+void OverlayService::EndSharedConversation() noexcept
+{
+    if (m_sharedConversationActor)
+        m_dismissedConversations.insert(m_sharedConversationActor);
+    m_sharedConversationActor = 0;
+    m_sharedConversationNative = false;
+    if (m_world.IsGameThread())
+        MainMenuBridge::RestoreDialogueMovie(m_hiddenDialogueMovie);
+    else
+        m_world.QueueCheckpointTask([this]() { MainMenuBridge::RestoreDialogueMovie(m_hiddenDialogueMovie); });
+    PublishSharedConversation();
+}
+
+void OverlayService::UpdateSharedConversation() noexcept
+{
+    const auto close = [this]() {
+        if (!InputService::SetOverlayActive(*this, false))
+        {
+            SetActive(false);
+            TiltedPhoques::DInputHook::Get().SetEnabled(false);
+            if (m_pOverlay && m_pOverlay->GetClient())
+                if (const auto renderer = m_pOverlay->GetClient()->GetOverlayRenderHandler())
+                    renderer->SetCursorVisible(false);
+        }
+    };
+    auto* ui = UI::Get();
+    const auto* manager = MenuTopicManager::Get();
+    const bool native = manager && manager->menuOpen;
+    const bool busy = !ui || ui->numPausesGame || ui->IsUnpausedMenuOpen() ||
+        ui->GetMenuOpen("Loading Menu") || ui->GetMenuOpen("RaceSex Menu") ||
+        ui->GetMenuOpen("MapMenu") || ui->GetMenuOpen("Journal Menu") ||
+        ui->GetMenuOpen("BarterMenu") || ui->GetMenuOpen("GiftMenu") ||
+        ui->GetMenuOpen("Training Menu") || ui->GetMenuOpen("Book Menu") ||
+        ui->GetMenuOpen("Crafting Menu") || ui->GetMenuOpen("Lockpicking Menu");
+    const bool ready = m_transport.IsOnline() && m_inGame && !m_mainMenu && m_browserReady && !busy;
+    if (m_sharedConversationActor)
+    {
+        const auto it = m_conversationPanels.find(m_sharedConversationActor);
+        if (!ready || !m_active || it == m_conversationPanels.end() || it->second.Private ||
+            it->second.Remote || (m_sharedConversationNative ?
+                (!native || !m_dialogueGranted || m_dialogueActorId != m_sharedConversationActor ||
+                 !MainMenuBridge::HideDialogueMovie(m_hiddenDialogueMovie)) : native))
+            close();
+        return;
+    }
+    if (!ready || m_active || m_hiddenDialogueMovie)
+        return;
+    // Priority: our own native conversation, then a nearby public one.
+    const NotifyPlayerDialogue* selected = nullptr;
+    if (native)
+    {
+        const auto it = m_conversationPanels.find(m_dialogueActorId);
+        if (m_dialogueGranted && !m_dialogueYielded && it != m_conversationPanels.end() &&
+            !it->second.Private && !it->second.Remote)
+            selected = &it->second;
+    }
+    else
+    {
+        if (!ui->GetMenuOpen("HUD Menu")) return;
+        for (const auto& [id, panel] : m_conversationPanels)
+            if (!panel.Private && !panel.Remote && panel.CanVote &&
+                !m_dismissedConversations.contains(id))
+            {
+                selected = &panel;
+                break;
+            }
+    }
+    if (!selected || m_dismissedConversations.contains(selected->ActorId))
+        return;
+    if (native && !MainMenuBridge::HideDialogueMovie(m_hiddenDialogueMovie))
+    {
+        // Do not strand users in a hidden or nonfunctional native menu.
+        m_dismissedConversations.insert(selected->ActorId);
+        spdlog::warn("Shared conversation: native presentation unavailable; keeping vanilla dialogue");
+        return;
+    }
+    m_sharedConversationActor = selected->ActorId;
+    m_sharedConversationNative = native;
+    PublishSharedConversation();
+    if (!InputService::SetOverlayActive(*this, true))
+        EndSharedConversation();
+    else
+        spdlog::info("Shared conversation {} opened (native context: {})", m_sharedConversationActor, native);
+}
+
+void OverlayService::ChooseSharedDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aIndex) noexcept
+{
+    const auto it = m_conversationPanels.find(aActorId);
+    if (!m_transport.IsOnline() || it == m_conversationPanels.end() || it->second.Revision != aRevision ||
+        aIndex >= it->second.Options.size() || it->second.Options[aIndex].empty())
+        return;
+
+    const auto& panel = it->second;
+    if (panel.CanChoose)
+    {
+        auto* manager = MenuTopicManager::Get();
+        if (!m_active || m_sharedConversationActor != aActorId || !m_sharedConversationNative ||
+            !m_dialogueGranted || !m_dialogueCanChoose || m_dialogueYielded ||
+            m_dialogueActorId != aActorId || m_dialoguePanelRevision != aRevision ||
+            !m_dialogueOptionsPublished || m_lastDialogueOptions != panel.Options ||
+            !manager || !manager->menuOpen || manager->speaker.handle.iBits != m_dialogueSpeakerHandle ||
+            std::chrono::steady_clock::now() < m_dialoguePublishAfter)
+            return;
+        manager->ChooseSharedOption(aIndex, panel.Options[aIndex].c_str());
+        return;
+    }
+    if (!panel.CanVote || panel.Private)
+        return;
+    PlayerDialogueRequest request{};
+    request.Action = PlayerDialogueRequest::Vote;
+    request.ActorId = aActorId;
+    request.Revision = aRevision;
+    request.Index = aIndex;
+    m_transport.Send(request);
+}
+
 void OverlayService::ManageDialogue(uint32_t aActorId, uint32_t aRevision, uint32_t aAction) noexcept
 {
     if (aAction == 3 || aAction == 4)
@@ -805,6 +940,13 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
     if (acMessage.Kind == NotifyPlayerDialogue::Panel || acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
     {
         DialoguePortraits::Observe(acMessage);
+        if (acMessage.Kind == NotifyPlayerDialogue::PanelClosed)
+        {
+            m_conversationPanels.erase(acMessage.ActorId);
+            m_dismissedConversations.erase(acMessage.ActorId);
+        }
+        else
+            m_conversationPanels.insert_or_assign(acMessage.ActorId, acMessage);
         if (acMessage.ActorId == m_dialogueActorId)
             m_dialoguePanelRevision = acMessage.CanChoose ? acMessage.Revision : 0;
         if (!m_pOverlay)

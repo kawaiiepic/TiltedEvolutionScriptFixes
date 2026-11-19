@@ -6,6 +6,7 @@ struct MenuTopicManager
 {
     static MenuTopicManager* Get() noexcept;
     static bool IsPlayerDialogueSpeaker(const TESObjectREFR* apSpeaker) noexcept;
+    bool ChooseSharedOption(uint32_t aIndex, const char* apExpectedText) noexcept;
 
     bool IsCurrentSpeaker(const BSPointerHandle<TESObjectREFR>& acHandle) const noexcept
     {

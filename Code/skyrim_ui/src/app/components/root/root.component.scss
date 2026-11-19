@@ -393,3 +393,93 @@
   background: rgba(12, 17, 20, 0.88);
   font-size: 0.8rem;
 }
+
+/* Identical custom dialogue presentation on both sides; the game remains visible. */
+.conversation-view {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  color: #eee9db;
+  background: linear-gradient(90deg, transparent 42%, rgba(10, 11, 12, .6) 100%);
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+  .conversation-heading {
+    position: absolute;
+    right: 6vw;
+    top: 17vh;
+    width: min(34vw, 34rem);
+    border-bottom: 1px solid rgba(210, 199, 168, .55);
+    padding-bottom: .7rem;
+    h2 { font-weight: normal; font-size: 2rem; margin: .4rem 0; }
+    p { color: #c5bda8; font-size: .95rem; margin: 0; }
+  }
+  .conversation-kicker { color: #bdad86; letter-spacing: .14em; font-size: .8rem; }
+  .conversation-options {
+    position: absolute;
+    right: 6vw;
+    top: 35vh;
+    width: min(34vw, 34rem);
+    max-height: 39vh;
+    overflow-y: auto;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      text-align: left;
+      text-transform: none;
+      opacity: 1;
+      font-size: 1.12rem;
+      padding: .65rem .75rem;
+      min-height: 2.65rem;
+      color: inherit;
+      background: rgba(15, 15, 16, .5);
+      border-left: 2px solid transparent;
+      &:hover:not(:disabled), &:focus-visible, &.selected {
+        background: rgba(176, 155, 111, .24);
+        border-left-color: #e0c998;
+      }
+      &:disabled { opacity: .45; }
+    }
+  }
+  .conversation-option-text { line-height: 1.25; overflow-wrap: anywhere; }
+  .conversation-votes {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: .25rem;
+    margin-left: .5rem;
+    .character-avatar { width: 1.4rem; height: 1.4rem; font-size: .7rem; }
+  }
+  .conversation-waiting { color: #c5bda8; padding-inline: .75rem; }
+  .conversation-actions {
+    pointer-events: auto;
+    position: absolute;
+    right: 6vw;
+    bottom: 17vh;
+    width: min(34vw, 34rem);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .45rem;
+    padding-top: .55rem;
+    border-top: 1px solid rgba(210, 199, 168, .55);
+    font-size: .8rem;
+    span { flex: 1; color: #c5bda8; }
+    button { font-size: .8rem; opacity: .8; }
+  }
+  .conversation-subtitle {
+    position: absolute;
+    left: 15vw;
+    right: 15vw;
+    bottom: 4vh;
+    text-align: center;
+    color: #fff;
+    font-size: 1.15rem;
+    line-height: 1.35;
+    text-shadow: 0 2px 4px #000, 0 1px 7px #000;
+  }
+}

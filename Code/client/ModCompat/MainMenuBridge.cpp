@@ -256,6 +256,45 @@ bool PrefillCharacterName(const char* apName) noexcept
     return true;
 }
 
+bool HideDialogueMovie(void*& apHiddenMovie) noexcept
+{
+    // GFxMovie virtual SetVisible/GetVisible slots 8/9 (public SKSE/
+    // CommonLib declarations). Like the main-menu adapter, this is a
+    // source-backed ABI and needs verification in the shipped runtime.
+    const auto& db = VersionDb::Get();
+    if (db.GetLoadedVersionString() != "1.7.104.0" && db.GetLoadedVersionString() != "1.6.1170.0")
+        return false;
+    auto* ui = UI::Get();
+    auto* menu = ui && ui->GetMenuOpen("Dialogue Menu") ? ui->FindMenuByName("Dialogue Menu") : nullptr;
+    if (!Accessible(menu, sizeof(IMenu))) return false;
+    void* movie = menu->uiMovie;
+    using SetVisible = void (*)(void*, bool);
+    using GetVisible = bool (*)(const void*);
+    const auto set = MovieFunction<SetVisible>(movie, 8);
+    const auto get = MovieFunction<GetVisible>(movie, 9);
+    if (!set || !get) return false;
+    if (apHiddenMovie == movie) return !get(movie);
+    if (!get(movie)) return false; // another UI mod owns visibility
+    set(movie, false);
+    if (get(movie)) return false;
+    apHiddenMovie = movie;
+    return true;
+}
+
+void RestoreDialogueMovie(void*& apHiddenMovie) noexcept
+{
+    void* hidden = apHiddenMovie;
+    apHiddenMovie = nullptr;
+    if (!hidden) return;
+    auto* ui = UI::Get();
+    auto* menu = ui && ui->GetMenuOpen("Dialogue Menu") ? ui->FindMenuByName("Dialogue Menu") : nullptr;
+    // The native menu may have been destroyed. Do not use the old pointer.
+    if (!Accessible(menu, sizeof(IMenu)) || menu->uiMovie != hidden) return;
+    using SetVisible = void (*)(void*, bool);
+    if (const auto set = MovieFunction<SetVisible>(menu->uiMovie, 8))
+        set(menu->uiMovie, true);
+}
+
 bool RequestNewGame() noexcept
 {
     if (!s_ready.load() || !s_menu.load() || !s_invoke) return false;

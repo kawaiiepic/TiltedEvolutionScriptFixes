@@ -64,6 +64,7 @@ export class ClientService implements OnDestroy {
   });
   public readonly travelInvitations = new BehaviorSubject<TravelInvitation[]>([]);
   public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
+  public readonly conversationMode = new BehaviorSubject<number>(0);
   public readonly dialogueFocus = new BehaviorSubject<{ open: boolean; actorId: number }>({ open: false, actorId: 0 });
   public readonly characterPortraits = new BehaviorSubject<ReadonlyMap<number, string>>(new Map());
 
@@ -262,6 +263,7 @@ export class ClientService implements OnDestroy {
       });
     });
     skyrimtogether.on('sharedDialogue', this.onSharedDialogue.bind(this));
+    skyrimtogether.on('conversationMode', actorId => this.zone.run(() => this.conversationMode.next(actorId)));
     skyrimtogether.on('dialogueFocus', (open, actorId) => this.zone.run(() => this.dialogueFocus.next({ open, actorId })));
     skyrimtogether.on('characterPortrait', this.onCharacterPortrait.bind(this));
     skyrimtogether.on('questUpdated', this.onQuestUpdated.bind(this));
@@ -304,6 +306,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyLeft');
     skyrimtogether.off('partyInviteReceived');
     skyrimtogether.off('sharedDialogue');
+    skyrimtogether.off('conversationMode');
     skyrimtogether.off('travelInvitation');
     skyrimtogether.off('playerMapMarkers');
     skyrimtogether.off('dialogueFocus');
@@ -510,6 +513,7 @@ export class ClientService implements OnDestroy {
    */
   private onExitGame(): void {
     this.zone.run(() => {
+      this.conversationMode.next(0);
       this.sharedDialogueChange.next([]);
       this.travelInvitations.next([]);
       this.playerMapMarkers.next({ mapOpen: false, markers: [] });
@@ -551,6 +555,7 @@ export class ClientService implements OnDestroy {
       this.localPlayerId = undefined;
       this.checkpointChange.next(emptyCheckpoint);
       this.characterSlotsChange.next([]);
+      this.conversationMode.next(0);
       this.sharedDialogueChange.next([]);
       this.travelInvitations.next([]);
       this.playerMapMarkers.next({ mapOpen: false, markers: [] });

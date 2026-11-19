@@ -3,6 +3,7 @@
 #include <Services/OverlayService.h>
 #include <World.h>
 #include <TESObjectREFR.h>
+#include <cstring>
 
 TP_THIS_FUNCTION(TPlayDialogueOption, bool, MenuTopicManager, int32_t aIndex);
 static TPlayDialogueOption* RealPlayDialogueOption = nullptr;
@@ -49,6 +50,24 @@ bool TP_MAKE_THISCALL(HookPlayDialogueOption, MenuTopicManager, int32_t aIndex)
     }
 
     return TiltedPhoques::ThisCall(RealPlayDialogueOption, apThis, aIndex);
+}
+
+bool MenuTopicManager::ChooseSharedOption(uint32_t aIndex, const char* apExpectedText) noexcept
+{
+    if (!menuOpen || !pOptions || !RealPlayDialogueOption || !apExpectedText || !*apExpectedText || aIndex >= 64)
+        return false;
+    uint32_t index = 0;
+    for (auto* option : *pOptions)
+    {
+        if (index++ != aIndex) continue;
+        if (!option || !option->text || std::strcmp(option->text, apExpectedText) != 0)
+            return false;
+        // Same ownership gate and engine choice routine as a native menu click.
+        if (!World::Get().GetOverlayService().CanSelectDialogue(option->text))
+            return false;
+        return TiltedPhoques::ThisCall(RealPlayDialogueOption, this, static_cast<int32_t>(aIndex));
+    }
+    return false;
 }
 
 static TiltedPhoques::Initializer s_menuTopicHooks(
