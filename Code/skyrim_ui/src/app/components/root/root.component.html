@@ -123,14 +123,22 @@
       <h3>Connected to character lobby</h3>
       <ng-container *ngIf="checkpoint$ | async as checkpoint">
         <ng-container *ngIf="checkpoint.required; else legacyLobby">
-          <section *ngIf="checkpoint.phase === 'choose'" class="character-selector">
-            <h4>Select character</h4>
-            <button type="button" *ngFor="let slot of characterSlots$ | async" (click)="selectCharacter(slot)">{{ slot.label }}</button>
-            <input #label type="text" maxlength="26" placeholder="New character name" [value]="characterLabel" (input)="characterLabel = label.value">
-            <button type="button" [disabled]="!characterLabel.trim()" (click)="createCharacter()">Create new character</button>
-            <small>Character keys are stored on this device for this server address.</small>
+          <section *ngIf="checkpoint.phase === 'choose'" class="character-selector" aria-labelledby="character-picker-title">
+            <h4 id="character-picker-title">Choose a character</h4>
+            <ng-container *ngIf="characterSlots$ | async as slots">
+              <ul *ngIf="slots.length" class="character-slots">
+                <li *ngFor="let slot of slots">
+                  <button type="button" (click)="selectCharacter(slot)">{{ slot.label }}</button>
+                </li>
+              </ul>
+              <form class="character-create" *ngIf="slots.length < 32" (ngSubmit)="createCharacter()">
+                <label for="new-character-name">New character name</label>
+                <input id="new-character-name" name="characterName" [(ngModel)]="characterLabel" type="text" maxlength="26" required>
+                <button type="submit" [disabled]="!characterLabel.trim()">Create Character</button>
+              </form>
+            </ng-container>
           </section>
-          <p>{{ checkpoint.detail }}</p>
+          <p role="status">{{ checkpoint.detail }}</p>
           <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'staged')">
             <p *ngIf="checkpoint.revision === '0'">Use New Game, finish character creation, then open the Skyrim console and enter:</p>
             <p *ngIf="checkpoint.revision !== '0'">Use Skyrim's Load menu or console to load this exact staged save before entering:</p>
