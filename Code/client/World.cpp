@@ -33,6 +33,7 @@
 #include <ModCompat/BehaviorVar.h>
 #include <ModCompat/ImmersiveInteractions.h>
 #include <ModCompat/RaceMenuSync.h>
+#include <ModCompat/PlayerVoiceSync.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -66,6 +67,7 @@ World::World()
     ctx().emplace<TradeService>(*this, m_dispatcher);
     ImmersiveInteractions::RegisterMessaging();
     ctx().emplace<RaceMenuSync>(*this, m_dispatcher);
+    ctx().emplace<PlayerVoiceSync>(*this, m_dispatcher);
 
     BehaviorVar::Get()->Init();
 }

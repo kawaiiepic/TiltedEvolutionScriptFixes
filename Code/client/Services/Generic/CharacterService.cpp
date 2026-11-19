@@ -4,6 +4,7 @@
 #include <Services/PartyService.h>
 
 #include <Services/CharacterService.h>
+#include <ModCompat/PlayerVoiceSync.h>
 #include <Services/OverlayService.h>
 #include <Services/QuestService.h>
 #include <Services/TransportService.h>
@@ -1196,6 +1197,12 @@ void CharacterService::OnDialogueEvent(const DialogueEvent& acEvent) noexcept
 {
     if (!m_transport.IsConnected())
         return;
+    if (acEvent.ActorID == 0x14)
+    {
+        // The owning player speaks independently of an NPC dialogue grant.
+        m_world.ctx().at<PlayerVoiceSync>().CaptureNative(acEvent.VoiceFile.c_str());
+        return;
+    }
 
     auto view = m_world.view<FormIdComponent>(entt::exclude<ObjectComponent>);
     auto entityIt = std::find_if(view.begin(), view.end(), [view, formId = acEvent.ActorID](auto entity) { return view.get<FormIdComponent>(entity).Id == formId; });

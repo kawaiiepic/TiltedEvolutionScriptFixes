@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <array>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string_view>
 
@@ -53,6 +54,62 @@ struct PendingOperation
     bool SawNamedEvent{}, SawPost{}, PostSuccess{}, CallReturned{}, CallSuccess{}, Abandoned{}, Mismatch{};
 };
 PendingOperation s_op;
+std::deque<VoiceEvent> s_voiceEvents;
+
+// Public DBReV API v1 prefix (append-only; freely redistributable).
+// Provider-generated audio has no replayable file path and is ignored.
+struct VoiceLineStartV1
+{
+    uint32_t Version, Size;
+    float AudioSeconds, TotalSeconds;
+    uint32_t TopicIndex, LipSize;
+    const char* VoicePath;
+    const char* VoicePackId;
+    const char* TopicKey;
+    const void* LipData;
+};
+struct VoiceLineEndV1 { uint32_t Version, Size, TopicIndex, Reason; };
+static_assert(sizeof(VoiceLineStartV1) == 56);
+static_assert(sizeof(VoiceLineEndV1) == 16);
+
+void OnPlayerVoice(Messaging::Message* apMessage)
+{
+    if (!apMessage || !apMessage->data || !apMessage->sender || std::strcmp(apMessage->sender, "DBReV") != 0)
+        return;
+    VoiceEvent event{};
+    if (apMessage->type == 1 && apMessage->dataLen >= sizeof(VoiceLineStartV1))
+    {
+        VoiceLineStartV1 line{};
+        std::memcpy(&line, apMessage->data, sizeof(line));
+        if (!line.Version || line.Size < sizeof(line) || line.Size > apMessage->dataLen || !line.VoicePath)
+            return;
+        size_t length = 0;
+        while (length < sizeof(event.Path) && line.VoicePath[length])
+            ++length;
+        if (!length || length >= sizeof(event.Path))
+            return;
+        event.Type = VoiceStarted;
+        event.Topic = line.TopicIndex;
+        std::memcpy(event.Path, line.VoicePath, length);
+    }
+    else if (apMessage->type == 2 && apMessage->dataLen >= sizeof(VoiceLineEndV1))
+    {
+        VoiceLineEndV1 line{};
+        std::memcpy(&line, apMessage->data, sizeof(line));
+        if (!line.Version || line.Size < sizeof(line) || line.Size > apMessage->dataLen || line.Reason > 2)
+            return;
+        event.Type = VoiceEnded;
+        event.Topic = line.TopicIndex;
+        event.Reason = line.Reason;
+    }
+    else
+        return;
+
+    std::lock_guard lock(s_mutex);
+    if (s_voiceEvents.size() >= 64)
+        s_voiceEvents.pop_front();
+    s_voiceEvents.push_back(event);
+}
 
 bool ValidName(std::string_view acName)
 {
@@ -99,7 +156,23 @@ void OnMessage(Messaging::Message* apMessage)
 {
     if (!apMessage || !apMessage->sender || std::strcmp(apMessage->sender, "SKSE") != 0) return;
     const auto& msg = *apMessage;
+    // SKSE kPostLoad (0), not kPostLoadGame (3): every plugin is loaded.
+    if (msg.type == 0)
+    {
+        const Messaging* messaging;
+        uint32_t handle;
+        {
+            std::lock_guard lock(s_mutex);
+            messaging = s_messaging;
+            handle = s_pluginHandle;
+        }
+        if (messaging && messaging->RegisterListener)
+            messaging->RegisterListener(handle, "DBReV", &OnPlayerVoice);
+        return;
+    }
     std::lock_guard lock(s_mutex);
+    if (msg.type == kPreLoad || msg.type == kNewGame)
+        s_voiceEvents.clear();
     if (msg.type == kPreLoad || msg.type == kNewGame) ++s_loadGeneration;
     if (msg.type == kNewGame) ++s_newGameGeneration;
     if (!s_op.Token) return;
@@ -209,6 +282,18 @@ __declspec(dllexport) void* STQueryRaceMenuInterfaces() noexcept
     if (messaging && messaging->Dispatch)
         messaging->Dispatch(handle, 0x9E3779B9, &exchange, sizeof(exchange), "skee");
     return exchange.InterfaceMap;
+}
+
+__declspec(dllexport) bool STPollPlayerVoiceEvent(STCheckpointBridge::VoiceEvent* apEvent, uint32_t aSize) noexcept
+{
+    if (!apEvent || aSize != sizeof(STCheckpointBridge::VoiceEvent))
+        return false;
+    std::lock_guard lock(s_mutex);
+    if (s_voiceEvents.empty())
+        return false;
+    *apEvent = s_voiceEvents.front();
+    s_voiceEvents.pop_front();
+    return true;
 }
 
 __declspec(dllexport) const STCheckpointBridge::Api* STCheckpointGetApi(uint32_t aVersion) noexcept

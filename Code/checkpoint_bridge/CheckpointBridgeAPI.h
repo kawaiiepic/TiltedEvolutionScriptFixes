@@ -23,4 +23,13 @@ struct Api
 };
 
 using GetApi = const Api* (*)(uint32_t) noexcept;
+
+// Copied player speech event. No borrowed SKSE data crosses the bridge.
+enum VoiceEventType : uint32_t { VoiceStarted = 1, VoiceEnded = 2 };
+struct VoiceEvent
+{
+    uint32_t Type, Topic, Reason;
+    char Path[512];
+};
+using PollVoiceEvent = bool (*)(VoiceEvent*, uint32_t) noexcept;
 }
