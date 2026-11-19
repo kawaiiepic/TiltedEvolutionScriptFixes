@@ -119,6 +119,12 @@ bool ShouldSyncObject(const TESObjectREFR* apObject, const Set<const TESObjectRE
     }
 }
 
+bool ShouldSyncInteraction(const TESObjectREFR& acObject) noexcept
+{
+    return !acObject.baseForm || acObject.baseForm->formType != FormType::Container ||
+           ShouldSyncObject(&acObject, GetPlayerStashContainers());
+}
+
 static void ApplyLockState(TESObjectREFR& aObject, bool aLocked, uint8_t aLevel) noexcept
 {
     Lock* pLock = aObject.GetLock();
@@ -272,6 +278,7 @@ static void RestoreContainerStock(TESObjectREFR& aContainer, const Inventory& ac
 
 void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessage) noexcept
 {
+    const auto playerStashContainers = GetPlayerStashContainers();
     for (const ObjectData& objectData : acMessage.Objects)
     {
         if (!m_cell || objectData.CellId != m_cell)
@@ -284,6 +291,9 @@ void ObjectService::OnAssignObjectsResponse(const AssignObjectsResponse& acMessa
             spdlog::error("Object not found for form id {:X}", objectData.Id);
             continue;
         }
+
+        if (!ShouldSyncObject(pObject, playerStashContainers))
+            continue;
 
         CreateObjectEntity(pObject->formID, objectData.ServerId);
 
@@ -349,6 +359,9 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
     // The local activation already runs the transition and any attached scripts.
     if (IsPlayerTravelDoor(*acEvent.pObject, *acEvent.pActivator))
+        return;
+
+    if (!ShouldSyncInteraction(*acEvent.pObject))
         return;
 
     if (Lock* pLock = acEvent.pObject->GetLock())
@@ -421,6 +434,9 @@ void ObjectService::OnActivateNotify(const NotifyActivate& acMessage) noexcept
         IsPlayerTravelDoor(*pObject, *pActor))
         return;
 
+    if (!ShouldSyncInteraction(*pObject))
+        return;
+
     if (pObject->baseForm->formType == FormType::Door)
     {
         auto remotePreActivationState = static_cast<TESObjectREFR::OpenState>(acMessage.PreActivationOpenState);
@@ -453,7 +469,7 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
     }
 
     const auto* const pObject = Cast<TESObjectREFR>(TESForm::GetById(acEvent.FormId));
-    if (!pObject)
+    if (!pObject || !ShouldSyncInteraction(*pObject))
         return;
 
     TESObjectCELL* pCell = pObject->GetParentCellEx();
@@ -493,6 +509,9 @@ void ObjectService::OnLockChangeNotify(const NotifyLockChange& acMessage) noexce
         spdlog::error("Failed to retrieve object to (un)lock.");
         return;
     }
+
+    if (!ShouldSyncInteraction(*pObject))
+        return;
 
     ApplyLockState(*pObject, acMessage.IsLocked, acMessage.LockLevel);
 }

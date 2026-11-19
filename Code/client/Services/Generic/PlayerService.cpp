@@ -165,8 +165,12 @@ void PlayerService::OnNotifyPlayerRespawn(const NotifyPlayerRespawn& acMessage) 
     }
     else
     {
+        ReportGroupTravelResult(RequestTravelResult::Interrupted);
+        m_carriage.reset();
+        m_carriageTeleport.reset();
+        m_fastTravelOrigin = {};
+        m_waitingFastTravelArrival = false;
         FadeOutGame(true, true, 0.5f, true, 2.f);
-        pPlayer->PayCrimeGoldToAllFactions();
         pPlayer->RespawnPlayer();
     }
 
