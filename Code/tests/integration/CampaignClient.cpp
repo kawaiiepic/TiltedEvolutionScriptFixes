@@ -180,13 +180,15 @@ public:
                 EnterExteriorCellRequest cell{};
                 cell.CellId = GameId(VanillaMod, Mode == "dialogue-owner" ? 0x510 : 0x511);
                 cell.WorldSpaceId = GameId(VanillaMod, Mode == "dialogue-foreign" ? 0x800 : 0x3C);
+                const glm::vec3 position(Mode == "dialogue-owner" ? 0.f : 4096.f, 0.f, 0.f);
+                cell.CurrentCoords = GridCellCoords::CalculateGridCellCoords(position.x, position.y);
                 Transmit(cell);
 
                 AssignCharacterRequest character{};
                 character.ReferenceId = GameId(0, 0x14);
                 character.CellId = cell.CellId;
                 character.WorldSpaceId = cell.WorldSpaceId;
-                character.Position = glm::vec3(Mode == "dialogue-owner" ? 0.f : 4096.f, 0.f, 0.f);
+                character.Position = position;
                 Transmit(character);
                 if (Mode == "dialogue-owner")
                 {
@@ -658,6 +660,7 @@ public:
             return false;
         const auto panel = CastUnique<NotifyPlayerDialogue>(std::move(aMessage));
         assert(Mode != "dialogue-foreign");
+        assert(panel->Kind != NotifyPlayerDialogue::Denied);
         PlayerDialogueRequest request{};
         request.ActorId = panel->ActorId;
         request.Revision = panel->Revision;
@@ -745,6 +748,7 @@ public:
         EnterExteriorCellRequest cell{};
         cell.CellId = GameId(VanillaMod, aForeign ? 0x512 : 0x511);
         cell.WorldSpaceId = GameId(VanillaMod, aForeign ? 0x800 : 0x3C);
+        cell.CurrentCoords = GridCellCoords::CalculateGridCellCoords(4096.f, 0.f);
         Transmit(cell);
     }
 
