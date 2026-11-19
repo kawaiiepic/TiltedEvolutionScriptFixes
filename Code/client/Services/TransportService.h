@@ -4,6 +4,7 @@
 #include "Events/DisconnectedEvent.h"
 
 #include <atomic>
+#include <chrono>
 #include <Client.hpp>
 
 struct ImguiService;
@@ -69,6 +70,7 @@ private:
     entt::dispatcher& m_dispatcher;
     bool m_connected{};
     bool m_connectionPending{};
+    std::chrono::steady_clock::time_point m_connectionDeadline{};
     bool m_lobbyAuthenticated{};
     bool m_enterPending{};
     bool m_enterAfterLogin{};

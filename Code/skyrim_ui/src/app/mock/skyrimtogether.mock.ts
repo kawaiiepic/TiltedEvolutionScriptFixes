@@ -96,7 +96,8 @@ export class SkyrimtogetherMock extends EventEmitter implements SkyrimTogether {
 
   uiReady(): void { /* Native handshake is unnecessary in browser mock. */ }
   enterWorld(): void { /* Browser mock has no native character lobby. */ }
-  selectCharacter(_key: string): void { /* Native-only checkpoint transport. */ }
+  requestCharacters(_owner: string, _legacy: string): void { /* Native-only checkpoint transport. */ }
+  selectCharacter(_key: string, _label: string): void { /* Native-only checkpoint transport. */ }
 
   disconnect(): void {
     if (this.connected) {

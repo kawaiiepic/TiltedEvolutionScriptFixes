@@ -2,6 +2,14 @@
   <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
     SKYRIM TOGETHER · F2 / RIGHT CTRL TO PLAY
   </aside>
+  <ng-container *ngIf="checkpoint$ | async as checkpoint">
+    <aside class="first-save-status" role="status" *ngIf="(lobby$ | async) &&
+      (checkpoint.phase === 'saving-first-checkpoint' || (checkpoint.phase === 'uploading' && checkpoint.revision === '0') ||
+       (checkpoint.phase === 'failed' && checkpoint.name && checkpoint.revision === '0') ||
+       (checkpoint.phase === 'ready' && checkpoint.revision === '1'))">
+      {{ checkpoint.detail }}
+    </aside>
+  </ng-container>
   <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
 
@@ -110,27 +118,28 @@
       >
         {{ 'COMPONENT.ROOT.SETTINGS' | transloco }}
       </button>
-      <button
-        *ngIf="connectionInProgress$ | async"
-        data-style-ornament="inverted"
-        [attr.data-style-active]="(view$ | async) === RootView.DISCONNECT"
-        (click)="setView(RootView.DISCONNECT)"
-      >
-        {{ 'COMPONENT.ROOT.CONNECTION_IN_PROGRESS' | transloco }}
-      </button>
     </app-window>
     <app-window *ngIf="lobby$ | async" class="server-lobby-info">
       <h3>Connected to character lobby</h3>
       <ng-container *ngIf="checkpoint$ | async as checkpoint">
         <ng-container *ngIf="checkpoint.required; else legacyLobby">
-          <section *ngIf="checkpoint.phase === 'choose'" class="character-selector">
-            <h4>Select character</h4>
-            <button type="button" *ngFor="let slot of characterSlots$ | async" (click)="selectCharacter(slot)">{{ slot.label }}</button>
-            <input #label type="text" maxlength="64" placeholder="New character name" [value]="characterLabel" (input)="characterLabel = label.value">
-            <button type="button" [disabled]="!characterLabel.trim()" (click)="createCharacter()">Create new character</button>
-            <small>Character keys are stored on this device for this server address.</small>
+          <section *ngIf="checkpoint.phase === 'choose'" class="character-selector" aria-labelledby="character-picker-title">
+            <h4 id="character-picker-title">Choose a character</h4>
+            <ng-container *ngIf="characterSlots$ | async as slots">
+              <ul *ngIf="slots.length" class="character-slots">
+                <li *ngFor="let slot of slots">
+                  <button type="button" (click)="selectCharacter(slot)">{{ slot.label }}</button>
+                </li>
+              </ul>
+              <form class="character-create" *ngIf="slots.length < 32" (ngSubmit)="createCharacter()">
+                <label for="new-character-name">New character name</label>
+                <input id="new-character-name" name="characterName" [(ngModel)]="characterLabel" type="text" maxlength="26" required>
+                <button type="submit" [disabled]="!characterLabel.trim()">Create Character</button>
+              </form>
+            </ng-container>
           </section>
-          <p>{{ checkpoint.detail }}</p>
+          <p role="status">{{ checkpoint.detail }}</p>
+          <button type="button" *ngIf="checkpoint.phase === 'waiting-for-new-game'" (click)="returnToNativeMenu()">Return to Skyrim</button>
           <ng-container *ngIf="checkpoint.name && (checkpoint.phase === 'new' || checkpoint.phase === 'staged')">
             <p *ngIf="checkpoint.revision === '0'">Use New Game, finish character creation, then open the Skyrim console and enter:</p>
             <p *ngIf="checkpoint.revision !== '0'">Use Skyrim's Load menu or console to load this exact staged save before entering:</p>
@@ -160,27 +169,36 @@
   <div [@fadeInOutActive]="active$ | async" class="app-root-popups">
     <app-loading></app-loading>
 
+    <app-popup *ngIf="connectionInProgress$ | async">
+      <p role="status">{{ 'COMPONENT.ROOT.CONNECTION_IN_PROGRESS' | transloco }}</p>
+      <app-action-buttons>
+        <button type="button" data-style-ornament="simple" (click)="cancelConnection()">
+          {{ 'COMPONENT.CONNECT.CANCEL' | transloco }}
+        </button>
+      </app-action-buttons>
+    </app-popup>
+
     <ng-container [ngSwitch]="view$ | async">
-      <app-popup *ngSwitchCase="RootView.CONNECT">
-        <app-connect (done)="closeView()"></app-connect>
+      <app-popup *ngSwitchCase="RootView.CONNECT" [hidden]="connectionInProgress$ | async">
+        <app-connect (done)="closeView()" (cancelled)="closeTitleView()"></app-connect>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.CONNECT_PASSWORD">
+      <app-popup *ngSwitchCase="RootView.CONNECT_PASSWORD" [hidden]="connectionInProgress$ | async">
         <app-connect-password (done)="closeView()"></app-connect-password>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.DISCONNECT">
+      <app-popup *ngSwitchCase="RootView.DISCONNECT" [hidden]="connectionInProgress$ | async">
         <app-disconnect (done)="closeView()"></app-disconnect>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.SERVER_LIST" data-popup="server">
+      <app-popup *ngSwitchCase="RootView.SERVER_LIST" [hidden]="connectionInProgress$ | async" data-popup="server">
         <app-server-list (done)="closeView()"></app-server-list>
       </app-popup>
-      <app-popup *ngSwitchCase="RootView.SETTINGS" data-popup="settings">
+      <app-popup *ngSwitchCase="RootView.SETTINGS" [hidden]="connectionInProgress$ | async" data-popup="settings">
         <app-settings
-          (done)="closeView()"
+          (done)="closeTitleView()"
           (settingsUpdated)="updateGroupPosition()"
         ></app-settings>
       </app-popup>
       <app-popup
-        *ngSwitchCase="RootView.PLAYER_MANAGER"
+        *ngSwitchCase="RootView.PLAYER_MANAGER" [hidden]="connectionInProgress$ | async"
         data-popup="playerManager"
       >
         <app-player-manager (done)="closeView()"></app-player-manager>

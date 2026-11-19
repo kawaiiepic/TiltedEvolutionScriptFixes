@@ -10,6 +10,8 @@ export interface ErrorEvent {
     | 'client_mods_disallowed'
     | 'wrong_password'
     | 'server_full'
+    | 'connection_failed'
+    | 'connection_timeout'
     | 'no_reason'
     | 'bad_uGridsToLoad'
     | 'non_default_install'
@@ -59,6 +61,12 @@ export class ErrorService {
     let message: string;
     if (typeof error === 'string') {
       message = error;
+    } else if (error.error === 'connection_failed') {
+      message = await firstValueFrom(
+        this.translocoService.selectTranslate('COMPONENT.CONNECT.ERROR.CONNECTION'),
+      );
+    } else if (error.error === 'connection_timeout') {
+      message = 'The server did not respond. Check that it is online, then try again.';
     } else {
       let data: Record<string, any> = error.data;
       switch (error.error) {

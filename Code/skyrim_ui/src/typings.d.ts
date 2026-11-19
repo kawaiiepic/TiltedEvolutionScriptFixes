@@ -105,13 +105,16 @@ declare const skyrimtogether: SkyrimTogether;
 
 /** Global Skyrim: Together object type. */
 interface SkyrimTogether {
+  on(event: 'openSettings', callback: () => void): void;
+  off(event: 'openSettings', callback?: () => void): void;
   on(event: 'mainMenu' | 'serverLobby', callback: (state: boolean) => void): void;
   off(event: 'mainMenu' | 'serverLobby', callback?: (state: boolean) => void): void;
   uiReady(): void;
   enterWorld(): void;
-  selectCharacter(key: string): void;
-  on(event: 'characterCheckpoint', callback: (required: boolean, phase: string, name: string, revision: string, detail: string) => void): void;
-  off(event: 'characterCheckpoint', callback?: (required: boolean, phase: string, name: string, revision: string, detail: string) => void): void;
+  selectCharacter(key: string, label: string, create: boolean): void;
+  requestCharacters(owner: string, legacy: string): void;
+  on(event: 'characterCheckpoint', callback: (required: boolean, phase: string, name: string, revision: string, detail: string, roster: string) => void): void;
+  off(event: 'characterCheckpoint', callback?: (required: boolean, phase: string, name: string, revision: string, detail: string, roster: string) => void): void;
   on(event: 'characterPortrait', callback: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   off(event: 'characterPortrait', callback?: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;

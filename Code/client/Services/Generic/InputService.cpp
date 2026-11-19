@@ -100,17 +100,19 @@ bool IsDisableKey(int aKey) noexcept
 
 void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
 {
+    apRenderer->SetCursorVisible(aActive);
     TiltedPhoques::DInputHook::Get().SetEnabled(aActive);
     // Publish actual menu context before activation; the Angular exitGame
     // handler closes any open view, so it must precede opening Connect.
-    aOverlay.SetVersion(BUILD_COMMIT);
-    aOverlay.RefreshMenuPresentation();
+    if (aActive)
+    {
+        aOverlay.SetVersion(BUILD_COMMIT);
+        aOverlay.RefreshMenuPresentation();
+    }
     aOverlay.SetActive(aActive);
 
-    apRenderer->SetCursorVisible(aActive);
-
     // This is to disable the Windows cursor
-    while (ShowCursor(FALSE) >= 0)
+    while (aActive && ShowCursor(FALSE) >= 0)
         ;
 }
 

@@ -5,7 +5,8 @@
 // No Skyrim object layouts are exposed by this ABI.
 namespace STCheckpointBridge
 {
-constexpr uint32_t Version = 2;
+constexpr uint32_t Version = 3;
+inline constexpr char LobbySaveName[] = "STLobbyTest";
 enum Operation : uint32_t { Load = 1, Save = 2 };
 enum Result : uint32_t { Pending = 0, Succeeded = 1, Failed = 2 };
 

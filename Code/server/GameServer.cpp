@@ -599,7 +599,7 @@ void GameServer::OnUpdate()
 
 void GameServer::OnConsume(const void* apData, const uint32_t aSize, const ConnectionId_t aConnectionId)
 {
-    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == RequestCharacterSave::Opcode && !CharacterSavePayload::ValidWireSize(apData, aSize, true)))
+    if (!aSize || (static_cast<const uint8_t*>(apData)[0] == RequestCharacterSave::Opcode && !CharacterSavePayload::ValidPacket(apData, aSize)))
         return;
     ViewBuffer buf((uint8_t*)apData, aSize);
     Buffer::Reader reader(&buf);

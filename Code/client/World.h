@@ -25,6 +25,7 @@ struct World : entt::registry
     static void PumpMainMenu() noexcept;
     static void SetMenuWindowThread(uint32_t aThreadId) noexcept;
 
+    void QueueCheckpointTask(std::function<void()> aTask) noexcept;
     RunnerService& GetRunner() noexcept;
     TransportService& GetTransport() noexcept;
     ModSystem& GetModSystem() noexcept;
@@ -54,6 +55,7 @@ private:
     void UpdateMainMenu() noexcept;
     entt::dispatcher m_dispatcher;
     RunnerService m_runner;
+    TiltedPhoques::TaskQueue m_checkpointTasks;
     TransportService m_transport;
     ModSystem m_modSystem;
     ServerSettings m_serverSettings{};
@@ -63,6 +65,7 @@ private:
     std::atomic<uint64_t> m_lastRegularUpdate{};
     uint64_t m_lastMenuUpdate{};
     std::atomic_flag m_updating = ATOMIC_FLAG_INIT;
+    bool m_hasLoadedCharacter{};
     bool m_loggedMenuPump{};
     std::atomic_bool m_loggedWrongMenuThread{};
 };

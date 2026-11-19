@@ -5,10 +5,11 @@
 #include "../server/Campaign/CharacterSaveStore.h"
 #include <cryptopp/sha.h>
 #include <zlib.h>
-#include <algorithm>
-#include <vector>
 #include <chrono>
 #include <cstring>
+#include <algorithm>
+#include <memory>
+#include <vector>
 #include <filesystem>
 
 TEST_CASE("Character checkpoints enforce leases, revisions and complete transfers", "[campaign.saves]")
@@ -29,10 +30,11 @@ TEST_CASE("Character checkpoints enforce leases, revisions and complete transfer
     const auto length = sizeof(bytes) - 1;
     {
         Campaign::CharacterSaveStore store(root);
-        auto doRequest = [&](uint64_t session, bool world, const P& req) {
-            P reply{};
-            store.Handle(session, world, req, reply);
-            return reply;
+        auto response = std::make_unique<P>();
+        auto doRequest = [&](uint64_t session, bool world, const P& req) -> const P& {
+            *response = {};
+            store.Handle(session, world, req, *response);
+            return *response;
         };
         REQUIRE(doRequest(1, false, select).Status == P::Ok);
         REQUIRE(doRequest(2, false, select).Status == P::Busy);
@@ -76,94 +78,186 @@ TEST_CASE("Character checkpoints enforce leases, revisions and complete transfer
     }
 }
 
-TEST_CASE("Checkpoint packets use compact headers and bounded data", "[campaign.saves]")
-{
-    using P = CharacterSavePayload;
-    RequestCharacterSave upload{};
-    upload.Action = P::CompressedUploadChunk;
-    upload.Count = 21;
-    upload.EssSize = P::ChunkSize;
-    upload.Data[0] = 42;
-    TiltedPhoques::Buffer buffer(P::WireSize);
-    TiltedPhoques::Buffer::Writer writer(&buffer);
-    upload.Serialize(writer);
-    REQUIRE(writer.Size() == P::HeaderWireSize + upload.Count);
-    REQUIRE(P::ValidWireSize(buffer.GetWriteData(), static_cast<uint32_t>(writer.Size()), true));
-    REQUIRE_FALSE(P::ValidWireSize(buffer.GetWriteData(), static_cast<uint32_t>(writer.Size() - 1), true));
-    REQUIRE_FALSE(P::ValidWireSize(buffer.GetWriteData(), static_cast<uint32_t>(writer.Size()), false));
-    NotifyCharacterSave ack{};
-    ack.Action = upload.Action;
-    ack.Offset = P::ChunkSize;
-    TiltedPhoques::Buffer ackBuffer(P::WireSize);
-    TiltedPhoques::Buffer::Writer ackWriter(&ackBuffer);
-    ack.Serialize(ackWriter);
-    REQUIRE(ackWriter.Size() == P::HeaderWireSize);
-    REQUIRE(P::ValidWireSize(ackBuffer.GetWriteData(), static_cast<uint32_t>(ackWriter.Size()), false));
-}
-
-TEST_CASE("Compressed and reused blocks preserve the complete canonical save", "[campaign.saves]")
+TEST_CASE("Checkpoint revisions reuse matching blocks and verify the reconstructed save", "[campaign.saves]")
 {
     using P = CharacterSavePayload;
     const auto root = std::filesystem::temp_directory_path() /
-        ("st-checkpoint-blocks-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    struct Cleanup { std::filesystem::path Path; ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); } } cleanup{root};
-    std::vector<uint8_t> bytes(P::ChunkSize * 2 + 17, 42);
-    std::memcpy(bytes.data(), "TESV_SAVEGAME", 13);
+        ("st-delta-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup
+    {
+        std::filesystem::path Path;
+        ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); }
+    } cleanup{root};
     Campaign::CharacterSaveStore store(root);
-    auto send = [&](const P& req, bool world = false) {
-        P reply{};
-        store.Handle(1, world, req, reply);
-        return reply;
+    auto req = std::make_unique<P>();
+    auto reply = std::make_unique<P>();
+    std::vector<uint8_t> bytes(P::ChunkSize + 3, 42);
+    std::memcpy(bytes.data(), "TESV_SAVEGAME", 13);
+    uint64_t revision = 0;
+    auto send = [&](P::Operation action) {
+        req->Action = action;
+        req->Revision = revision;
+        reply->Count = 0;
+        store.Handle(1, revision != 0 && action != P::Select && action != P::DownloadIfChanged, *req, *reply);
+        REQUIRE(reply->Status == P::Ok);
     };
-    P request{};
-    request.Action = P::Select; request.Key[0] = 5;
-    REQUIRE(send(request).Status == P::Ok);
-    auto begin = [&](uint64_t revision) {
-        P req{};
-        req.Action = P::BeginUpload; req.Revision = revision; req.EssSize = bytes.size();
-        CryptoPP::SHA256().CalculateDigest(req.Digest.data(), bytes.data(), bytes.size());
-        return send(req, revision != 0);
-    };
-    REQUIRE(begin(0).Status == P::Ok);
-    for (size_t offset = 0; offset < bytes.size(); offset += P::ChunkSize)
+    req->Key[0] = 1;
+    send(P::Select);
+    for (; revision < 2; ++revision)
     {
-        P req{};
-        req.Action = P::CompressedUploadChunk; req.Offset = offset;
-        req.EssSize = std::min(P::ChunkSize, bytes.size() - offset);
-        uLongf length = req.Data.size();
-        REQUIRE(compress2(req.Data.data(), &length, bytes.data() + offset, static_cast<uLong>(req.EssSize), Z_BEST_SPEED) == Z_OK);
-        req.Count = static_cast<uint16_t>(length);
-        const auto reply = send(req);
-        REQUIRE(reply.Status == P::Ok);
-        REQUIRE(reply.Offset == offset + req.EssSize);
+        bytes.back() = static_cast<uint8_t>(revision);
+        req->Count = 0;
+        req->EssSize = bytes.size();
+        CryptoPP::SHA256().CalculateDigest(req->Digest.data(), bytes.data(), bytes.size());
+        send(P::BeginUpload);
+        req->Offset = 0;
+        if (revision == 0)
+        {
+            std::copy_n(bytes.begin(), P::ChunkSize, req->Data.begin());
+            req->Count = P::ChunkSize;
+            send(P::UploadChunk);
+        }
+        else
+            send(P::UploadCopy);
+        REQUIRE(reply->Offset == P::ChunkSize);
+        req->Offset = P::ChunkSize;
+        req->Count = 3;
+        std::copy(bytes.end() - 3, bytes.end(), req->Data.begin());
+        send(P::UploadChunk);
+        req->Count = 0;
+        send(P::Commit);
+        REQUIRE(reply->Revision == revision + 1);
     }
-    request = {}; request.Action = P::Commit;
-    REQUIRE(send(request).Revision == 1);
-    bytes[P::ChunkSize + 1] = 99;
-    REQUIRE(begin(1).Status == P::Ok);
-    for (size_t offset = 0; offset < bytes.size(); offset += P::ChunkSize)
-    {
-        P req{};
-        req.Revision = 1; req.Offset = offset;
-        req.Count = static_cast<uint16_t>(std::min(P::ChunkSize, bytes.size() - offset));
-        req.Action = offset == P::ChunkSize ? P::UploadChunk : P::ReuseChunk;
-        if (req.Action == P::UploadChunk) std::memcpy(req.Data.data(), bytes.data() + offset, req.Count);
-        const auto reply = send(req, true);
-        REQUIRE(reply.Status == P::Ok);
-        REQUIRE(reply.Offset == offset + req.Count);
-    }
-    request = {}; request.Revision = 1; request.Action = P::Commit;
-    REQUIRE(send(request, true).Revision == 2);
     store.Release(1);
-    request = {}; request.Action = P::Select; request.Key[0] = 5;
-    REQUIRE(send(request).Revision == 2);
-    for (size_t offset = 0; offset < bytes.size(); offset += P::ChunkSize)
-    {
-        request = {}; request.Revision = 2; request.Action = P::DownloadChunk; request.Offset = offset;
-        const auto reply = send(request);
-        REQUIRE(reply.Status == P::Ok);
-        REQUIRE(reply.Count == std::min(P::ChunkSize, bytes.size() - offset));
-        REQUIRE(std::memcmp(reply.Data.data(), bytes.data() + offset, reply.Count) == 0);
-    }
+    send(P::Select);
+    req->Offset = 0;
+    CryptoPP::SHA256().CalculateDigest(req->Digest.data(), bytes.data(), P::ChunkSize);
+    send(P::DownloadIfChanged);
+    REQUIRE(reply->Count == 0);
+    REQUIRE_FALSE(store.CanEnter(1));
+    req->Offset = P::ChunkSize;
+    send(P::DownloadIfChanged);
+    REQUIRE(reply->Count == 3);
+    REQUIRE(std::equal(bytes.end() - 3, bytes.end(), reply->Data.begin()));
     REQUIRE(store.CanEnter(1));
+}
+
+TEST_CASE("Character picker follows committed server slots across reconnects and wipes", "[campaign.saves]")
+{
+    using P = CharacterSavePayload;
+    const auto root = std::filesystem::temp_directory_path() /
+        ("st-roster-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup
+    {
+        std::filesystem::path Path;
+        ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); }
+    } cleanup{root};
+    auto req = std::make_unique<P>();
+    auto reply = std::make_unique<P>();
+    Campaign::CharacterSaveStore store(root);
+    auto send = [&](uint64_t session, P::Operation action) {
+        req->Action = action;
+        *reply = {};
+        store.Handle(session, false, *req, *reply);
+    };
+    auto roster = [&](uint64_t session, uint8_t owner, const std::string& claims) {
+        *req = {};
+        req->Key[0] = owner;
+        req->Count = static_cast<uint16_t>(claims.size());
+        std::copy(claims.begin(), claims.end(), req->Data.begin());
+        send(session, P::Roster);
+        REQUIRE(reply->Status == P::Ok);
+        return std::string(reinterpret_cast<const char*>(reply->Data.data()), reply->Count);
+    };
+    const std::string legacy = "01" + std::string(62, '0') + "Mia\n";
+    REQUIRE(roster(1, 9, legacy).empty());
+    bool migrate = false;
+    SECTION("New slot") {}
+    SECTION("Existing checkpoint from an older client") { migrate = true; }
+    req->Key[0] = 1;
+    req->Count = 3;
+    std::memcpy(req->Data.data(), "Mia", 3);
+    send(1, migrate ? P::Select : P::Create);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(roster(2, 9, "").empty());
+    const std::string save = "TESV_SAVEGAME test";
+    req->Count = 0;
+    req->EssSize = save.size();
+    CryptoPP::SHA256().CalculateDigest(req->Digest.data(), reinterpret_cast<const uint8_t*>(save.data()), save.size());
+    send(1, P::BeginUpload);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(roster(2, 9, "").empty());
+    req->Count = static_cast<uint16_t>(save.size());
+    std::copy(save.begin(), save.end(), req->Data.begin());
+    send(1, P::UploadChunk);
+    REQUIRE(reply->Status == P::Ok);
+    req->Count = 0;
+    send(1, P::Commit);
+    REQUIRE(reply->Status == P::Ok);
+    store.Release(1);
+    const auto listed = roster(2, 9, migrate ? legacy : "");
+    REQUIRE(listed.size() == 68);
+    REQUIRE(listed.substr(64) == "Mia\n");
+    store.Release(2);
+    REQUIRE(roster(3, 9, "") == listed);
+    REQUIRE(roster(4, 8, legacy).empty());
+    std::array<uint8_t, 32> id{};
+    for (size_t i = 0; i < id.size(); ++i)
+        id[i] = static_cast<uint8_t>(std::stoul(listed.substr(2 * i, 2), nullptr, 16));
+    req->Key = id;
+    send(4, P::SelectOwned);
+    REQUIRE(reply->Status == P::Missing);
+    send(3, P::SelectOwned);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Revision == 1);
+    store.Release(3);
+    std::filesystem::remove_all(root);
+    REQUIRE(roster(5, 9, legacy).empty());
+}
+
+TEST_CASE("Compressed checkpoint blocks are bounded and verified", "[campaign.saves]")
+{
+    using P = CharacterSavePayload;
+    const auto root = std::filesystem::temp_directory_path() /
+        ("st-checkpoint-compressed-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup { std::filesystem::path Path; ~Cleanup() { std::error_code ec; std::filesystem::remove_all(Path, ec); } } cleanup{root};
+    Campaign::CharacterSaveStore store(root);
+    auto request = std::make_unique<P>();
+    auto reply = std::make_unique<P>();
+    auto send = [&](uint8_t action) {
+        request->Action = action;
+        *reply = {};
+        store.Handle(1, false, *request, *reply);
+    };
+    request->Key[0] = 17;
+    send(P::Select);
+    REQUIRE(reply->Status == P::Ok);
+    std::vector<uint8_t> bytes(P::ChunkSize, 42);
+    std::memcpy(bytes.data(), "TESV_SAVEGAME", 13);
+    request->EssSize = bytes.size();
+    CryptoPP::SHA256().CalculateDigest(request->Digest.data(), bytes.data(), bytes.size());
+    send(P::BeginUpload);
+    REQUIRE(reply->Status == P::Ok);
+    uLongf length = request->Data.size();
+    REQUIRE(compress2(request->Data.data(), &length, bytes.data(), static_cast<uLong>(bytes.size()), Z_BEST_SPEED) == Z_OK);
+    request->Count = static_cast<uint16_t>(length);
+    request->EssSize = bytes.size() + 1;
+    send(P::CompressedUploadChunk);
+    REQUIRE(reply->Status == P::Invalid);
+    request->EssSize = bytes.size();
+    send(P::CompressedUploadChunk);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Offset == bytes.size());
+    request->Count = 0;
+    send(P::Commit);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Revision == 1);
+    store.Release(1);
+    send(P::Select);
+    REQUIRE(reply->Revision == 1);
+    request->Revision = 1;
+    send(P::DownloadChunk);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Count == bytes.size());
+    REQUIRE(std::equal(bytes.begin(), bytes.end(), reply->Data.begin()));
 }

@@ -30,10 +30,14 @@ struct NativeDriver
 };
 bool RegisterNativeDriver(const NativeDriver& acDriver) noexcept;
 bool FinishCharacter(TransportService& aTransport) noexcept;
+bool IsAlternateStartPickerEnabled() noexcept;
+bool CanReplaceStagingWorld() noexcept;
+bool NeedsStagingPump() noexcept;
 
 void Begin(bool aRequired) noexcept;
 void Reset() noexcept;
-void Select(TransportService& aTransport, const std::string& acKey) noexcept;
+void RequestRoster(TransportService& aTransport, const std::string& acOwner, const std::string& acLegacy) noexcept;
+void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel, bool aCreate) noexcept;
 void Receive(const NotifyCharacterSave& acReply) noexcept;
 void Tick(TransportService& aTransport) noexcept;
 bool CanEnter() noexcept;

@@ -31,6 +31,9 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
   public connecting = false;
 
   @Output() public done = new EventEmitter<void>();
+  @Output() public cancelled = new EventEmitter<void>();
+
+  private focusTimer?: ReturnType<typeof setTimeout>;
 
   public constructor(
     private readonly client: ClientService,
@@ -41,21 +44,13 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
     private readonly uiRepository: UiRepository,
   ) {
     this.connectionSubscription = this.client.connectionStateChange.subscribe(
-      async state => {
+      state => {
         if (this.connecting) {
           this.connecting = false;
 
           if (state) {
             this.sound.play(Sound.Success);
             this.done.next();
-          } else if (this.errorService.getError() === '') {
-            // show connection error when there is no more specific error
-            const message = await firstValueFrom(
-              this.translocoService.selectTranslate<string>(
-                'COMPONENT.CONNECT.ERROR.CONNECTION',
-              ),
-            );
-            await this.errorService.setError(message);
           }
         }
       },
@@ -88,12 +83,13 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
   }
 
   public ngAfterViewInit(): void {
-    setTimeout(() => {
+    this.focusTimer = setTimeout(() => {
       this.inputRef.nativeElement.focus();
     }, 100);
   }
 
   public ngOnDestroy(): void {
+    clearTimeout(this.focusTimer);
     this.connectionSubscription.unsubscribe();
     this.lobbySubscription.unsubscribe();
     this.protocolMismatchSubscription.unsubscribe();
@@ -131,8 +127,9 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
   }
 
   public cancel(): void {
+    if (this.connecting) return;
     this.sound.play(Sound.Cancel);
-    this.done.next();
+    this.cancelled.emit();
   }
 
   public openServerList(): void {
@@ -153,7 +150,7 @@ export class ConnectComponent implements OnDestroy, AfterViewInit {
     if (this.errorService.getError()) {
       this.errorService.removeError();
     } else {
-      this.done.next();
+      this.cancel();
     }
 
     event.stopPropagation();

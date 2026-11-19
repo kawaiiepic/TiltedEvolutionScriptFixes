@@ -74,6 +74,7 @@ TiltedOnlineApp::TiltedOnlineApp()
     logger->set_pattern("%^[%Y-%m-%d %H:%M:%S.%e] [%l] [tid %t] %$ %v");
     spdlog::flush_every(std::chrono::seconds(1));
     set_default_logger(logger);
+    spdlog::info("Skyrim Together client build {}", BUILD_COMMIT);
 }
 
 TiltedOnlineApp::~TiltedOnlineApp() = default;

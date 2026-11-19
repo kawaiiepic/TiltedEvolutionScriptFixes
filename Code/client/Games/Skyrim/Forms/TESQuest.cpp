@@ -139,10 +139,3 @@ uint32_t TESQuest::GetStageItemCount(uint16_t aStage) noexcept
 
     return 0;
 }
-
-static TiltedPhoques::Initializer s_questInitHooks(
-    []()
-    {
-        // kill quest init in cold blood
-        // TiltedPhoques::Write<uint8_t>(25003, 0xC3);
-    });

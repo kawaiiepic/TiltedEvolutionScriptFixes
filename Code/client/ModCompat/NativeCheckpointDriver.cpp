@@ -7,7 +7,6 @@
 #include <PlayerCharacter.h>
 #include <Services/TransportService.h>
 #include <Services/OverlayService.h>
-#include <Services/RunnerService.h>
 #include <VersionDb.h>
 #include <World.h>
 #include <OverlayApp.hpp>
@@ -87,8 +86,8 @@ NativeStart Start(uint64_t aToken, const char* apName, uint32_t aKind) noexcept
         return NativeStart::Busy;
     if (aKind == Bridge::Load)
     {
-        // Never replace a running character with a remote checkpoint.
-        if (!transport.IsInLobby() || !ui->GetMenuOpen("Main Menu"))
+        // Replace only a title-screen or client-owned staging session.
+        if (!transport.IsInLobby() || (!ui->GetMenuOpen("Main Menu") && !CharacterCheckpoints::CanReplaceStagingWorld()))
             return NativeStart::Failed;
     }
     else if (BusyForSave(transport)) return NativeStart::Busy;
@@ -99,14 +98,15 @@ NativeStart Start(uint64_t aToken, const char* apName, uint32_t aKind) noexcept
     s_token = aToken;
     s_called = false;
     // Avoid calling an engine save/load while TiltedConnect is polling
-    // network packets. Dispatch through the existing game thread runner.
-    World::Get().GetRunner().Queue([aToken, aKind]()
+    // network packets or from the VM worker. Dispatch via the game window.
+    World::Get().QueueCheckpointTask([aToken, aKind]()
     {
         if (s_token != aToken) return;
         auto& transport = World::Get().GetTransport();
         auto* ui = UI::Get();
         const bool valid = aKind == Bridge::Load ?
-            transport.IsInLobby() && ui && ui->GetMenuOpen("Main Menu") &&
+            transport.IsInLobby() && ui &&
+                (ui->GetMenuOpen("Main Menu") || CharacterCheckpoints::CanReplaceStagingWorld()) &&
                 !ui->GetMenuOpen("Loading Menu") && !ui->GetMenuOpen("MessageBoxMenu") :
             (transport.IsInLobby() || transport.IsOnline()) && !BusyForSave(transport);
         s_called = true;
@@ -124,6 +124,7 @@ NativeStart Start(uint64_t aToken, const char* apName, uint32_t aKind) noexcept
         const bool accepted = aKind == Bridge::Load ?
             s_load(*s_manager, s_name.data(), -1, 0, true) :
             s_save(*s_manager, 2, 0, s_name.data());
+        spdlog::info("Native checkpoint {} returned (accepted: {})", aKind == Bridge::Load ? "load" : "save", accepted);
         s_bridge->Returned(aToken, accepted);
     });
     return NativeStart::Accepted;
