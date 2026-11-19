@@ -61,6 +61,10 @@ struct State
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
     Clock::time_point NativeDeadline{}, NextAutoSave{}, EnterDeadline{};
+    Clock::time_point EventSaveAfter{}, EventRetryAfter{}, LastSaveFinished{};
+    bool ObservedGameplay{}, ItemMenuOpen{}, LastCellInterior{};
+    uint32_t LastCell{};
+    unsigned SaveReasons{};
     uint8_t Expected{};
     uint64_t Revision{}, Ess{}, Co{}, Offset{}, SentOffset{};
     std::vector<Flight> Flights;
@@ -86,7 +90,55 @@ State s;
 constexpr uint32_t kAbandonedPrison = 0x21594;
 NativeDriver s_driver{};
 uint64_t s_nextNativeToken{};
-constexpr auto kAutosaveInterval = std::chrono::minutes(5);
+constexpr auto kAutosaveInterval = std::chrono::minutes(2);
+constexpr auto kEventSaveCooldown = std::chrono::seconds(20);
+constexpr auto kEventSaveSettle = std::chrono::seconds(2);
+constexpr unsigned kItemMenuClosed = 1, kInteriorTransition = 2;
+
+// Poll alongside checkpoint transport, including while another save is uploading.
+// Coalesce bursts, but retain events occurring after a native save was requested.
+void ObserveSaveEvents(Clock::time_point now)
+{
+    const auto* ui = UI::Get();
+    const auto* player = PlayerCharacter::Get();
+    if (!ui || !player) return;
+    if (ui->GetMenuOpen("Main Menu") || ui->GetMenuOpen("RaceSex Menu"))
+    {
+        s.ObservedGameplay = false;
+        s.ItemMenuOpen = false;
+        s.LastCell = 0;
+        return;
+    }
+    if (ui->GetMenuOpen("Loading Menu")) return;
+    const auto* cell = player->parentCell;
+    if (!cell || !cell->formID || !player->GetNiNode()) return;
+    const bool itemMenu = ui->GetMenuOpen("InventoryMenu") || ui->GetMenuOpen("ContainerMenu") ||
+        ui->GetMenuOpen("BarterMenu") || ui->GetMenuOpen("Crafting Menu");
+    // Skyrim TESObjectCELL flag bit 0 is Interior.
+    const bool interior = (cell->cellFlags & 1u) != 0;
+    if (!s.ObservedGameplay)
+    {
+        s.ObservedGameplay = true;
+        s.ItemMenuOpen = itemMenu;
+        s.LastCell = cell->formID;
+        s.LastCellInterior = interior;
+        return;
+    }
+    unsigned reasons = 0;
+    if (s.ItemMenuOpen && !itemMenu) reasons |= kItemMenuClosed;
+    if (s.LastCell != cell->formID && (interior || s.LastCellInterior))
+        reasons |= kInteriorTransition;
+    s.ItemMenuOpen = itemMenu;
+    s.LastCell = cell->formID;
+    s.LastCellInterior = interior;
+    if (reasons)
+    {
+        s.SaveReasons |= reasons;
+        s.EventSaveAfter = now + kEventSaveSettle;
+        spdlog::debug("Checkpoint event queued: item menu closed {}, interior transition {}",
+            (reasons & kItemMenuClosed) != 0, (reasons & kInteriorTransition) != 0);
+    }
+}
 constexpr auto kNativeTimeout = std::chrono::minutes(2);
 constexpr char kHex[] = "0123456789abcdef";
 const PHANTASM_API::Interface1* s_portraitApi{};
@@ -904,7 +956,8 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Portrait.clear();
             s.Bytes.clear();
             s.CaptureReady = false;
-            s.NextAutoSave = Clock::now() + kAutosaveInterval;
+            s.LastSaveFinished = Clock::now();
+            s.NextAutoSave = s.LastSaveFinished + kAutosaveInterval;
             if (s.AutoEnter) s.EnterDeadline = Clock::now() + kNativeTimeout;
             Change(Phase::Ready, "Checkpoint saved on the server.");
             return;
@@ -922,6 +975,9 @@ void Tick(TransportService& aTransport) noexcept
     {
         const auto now = Clock::now();
         if (s.PortraitRequest && now >= s.PortraitDeadline) CancelPortrait();
+        if (s.NativeEnabled && aTransport.IsOnline() && s.Revision &&
+            (s.Step == Phase::Ready || s.Step == Phase::Upload))
+            ObserveSaveEvents(now);
         if (s.Step == Phase::Choose && s.HasRoster && !s.Pending && s.NextPreview < s.PreviewKeys.size())
         {
             RequestCharacterSave preview{};
@@ -1091,12 +1147,27 @@ void Tick(TransportService& aTransport) noexcept
                 Fail("World entry did not become ready.");
             return;
         }
+        const bool eventDue = s.SaveReasons && now >= s.EventSaveAfter &&
+            now >= s.LastSaveFinished + kEventSaveCooldown;
+        const bool timerDue = now >= s.NextAutoSave;
         if (s.NativeEnabled && s.Step == Phase::Ready && aTransport.IsOnline() &&
-            !s.CaptureReady && now >= s.NextAutoSave && aTransport.CanEnterWorld())
+            !s.CaptureReady && (eventDue || timerDue) && now >= s.EventRetryAfter &&
+            aTransport.CanEnterWorld() && !World::Get().GetOverlayService().GetActive())
         {
             const auto result = StartNative(NativeOperation::Save);
-            s.NextAutoSave = now + (result == NativeStart::Busy ? std::chrono::seconds(5) : kAutosaveInterval);
-            if (result == NativeStart::Failed) Fail("Skyrim rejected the autosave.");
+            if (result == NativeStart::Accepted)
+            {
+                spdlog::info("Server checkpoint scheduled: inventory/loot/trade/crafting {}, interior transition {}, periodic {}",
+                    (s.SaveReasons & kItemMenuClosed) != 0, (s.SaveReasons & kInteriorTransition) != 0, timerDue);
+                s.SaveReasons = 0;
+                s.EventSaveAfter = {};
+                s.EventRetryAfter = {};
+                s.NextAutoSave = now + kAutosaveInterval;
+            }
+            else if (result == NativeStart::Busy)
+                s.EventRetryAfter = now + std::chrono::seconds(2);
+            else
+                Fail("Skyrim rejected the autosave.");
             return;
         }
 
@@ -1231,6 +1302,7 @@ void Tick(TransportService& aTransport) noexcept
             s.Baseline = captured;
             s.Bytes.clear();
             s.CaptureReady = false;
+            s.LastSaveFinished = now;
             s.NextAutoSave = now + kAutosaveInterval;
             Change(Phase::Ready, "The server already has this checkpoint.");
             return;
