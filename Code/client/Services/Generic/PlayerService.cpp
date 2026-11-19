@@ -35,6 +35,7 @@
 #include <PlayerCharacter.h>
 #include <Games/ActorExtension.h>
 #include <Forms/TESObjectCELL.h>
+#include <ExtraData/ExtraTeleport.h>
 #include <Forms/TESGlobal.h>
 #include <Forms/BGSKeyword.h>
 #include <Forms/TESWorldSpace.h>
@@ -122,6 +123,8 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     m_reportedInCustody = false;
     m_groupTravelArrival.reset();
     m_reportedCell = {};
+    m_reportedWorldSpace = {};
+    m_pendingEntrance.reset();
     m_fastTravelOrigin = {};
     m_waitingFastTravelArrival = false;
     m_fastTravelSequence = 0;
@@ -313,15 +316,29 @@ void PlayerService::OnCellChangeEvent(const CellChangeEvent& acEvent) noexcept
         message.CurrentCoords = acEvent.CurrentCoords;
 
         if (m_transport.Send(message))
+        {
             m_reportedCell = message.CellId;
+            m_reportedWorldSpace = message.WorldSpaceId;
+        }
     }
     else
     {
         EnterInteriorCellRequest message;
         message.CellId = acEvent.CellId;
+        if (m_pendingEntrance && m_pendingEntrance->WorldSpace == m_reportedWorldSpace &&
+            m_pendingEntrance->Destination == message.CellId &&
+            std::chrono::steady_clock::now() < m_pendingEntrance->ExpiresAt)
+        {
+            message.SourceDoor = m_pendingEntrance->Door;
+            message.SourceDoorPosition = m_pendingEntrance->Position;
+        }
 
         if (m_transport.Send(message))
+        {
             m_reportedCell = message.CellId;
+            m_reportedWorldSpace = {};
+            m_pendingEntrance.reset();
+        }
     }
 }
 
@@ -329,7 +346,35 @@ void PlayerService::OnActivate(const ActivateEvent& acEvent) noexcept
 {
     auto* pPlayer = PlayerCharacter::Get();
     if (!m_transport.IsOnline() || !pPlayer || acEvent.pActivator != pPlayer || !acEvent.pObject ||
-        !acEvent.pObject->baseForm || acEvent.pObject->baseForm->formType != FormType::Furniture)
+        !acEvent.pObject->baseForm)
+        return;
+
+    if (acEvent.pObject->baseForm->formType == FormType::Door && m_reportedCell)
+    {
+        m_pendingEntrance.reset();
+        const auto* pDoor = acEvent.pObject;
+        const auto* pTeleport = static_cast<const ExtraTeleport*>(pDoor->extraData.GetByType(ExtraDataType::Teleport));
+        const auto* pLinked = pTeleport && pTeleport->teleportData ?
+            TESObjectREFR::GetByHandle(pTeleport->teleportData->linkedDoor) : nullptr;
+        const auto* pDestination = pLinked ? pLinked->GetParentCellEx() : nullptr;
+        const auto& mods = m_world.GetModSystem();
+        GameId door{}, worldSpace{}, destination{};
+        const auto* pWorldSpace = pDoor->GetWorldSpace();
+        const auto* pSourceCell = pDoor->GetParentCellEx();
+        GameId sourceCell{};
+        const bool matchesOrigin = pWorldSpace ?
+            mods.GetServerModId(pWorldSpace->formID, worldSpace) && worldSpace == m_reportedWorldSpace :
+            !m_reportedWorldSpace && pSourceCell && mods.GetServerModId(pSourceCell->formID, sourceCell) &&
+                sourceCell == m_reportedCell;
+        if (matchesOrigin && !pDoor->IsTemporary() && pDestination && !pLinked->GetWorldSpace() &&
+            mods.GetServerModId(pDoor->formID, door) && mods.GetGameId(door) == pDoor->formID &&
+            mods.GetServerModId(pDestination->formID, destination))
+            m_pendingEntrance = PendingEntrance{door, destination, worldSpace, pDoor->position,
+                std::chrono::steady_clock::now() + std::chrono::seconds(30)};
+        return;
+    }
+
+    if (acEvent.pObject->baseForm->formType != FormType::Furniture)
         return;
 
     // Skyrim.esm's isCartTravelPlayer keyword marks the actual passenger furniture.

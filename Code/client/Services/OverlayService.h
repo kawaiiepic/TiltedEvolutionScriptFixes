@@ -4,6 +4,7 @@
 #include <vector>
 #include <chrono>
 #include <atomic>
+#include <Messages/NotifyPlayerMapMarkers.h>
 
 namespace TiltedPhoques
 {
@@ -107,12 +108,20 @@ private:
     bool SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
+    void OnPlayerMapMarkers(const NotifyPlayerMapMarkers&) noexcept;
+    void PublishPlayerMapMarkers() noexcept;
 
     CefRefPtr<OverlayApp> m_pOverlay{nullptr};
     TiltedPhoques::UniquePtr<D3D11RenderProvider> m_pProvider;
 
     World& m_world;
     TransportService& m_transport;
+
+    NotifyPlayerMapMarkers m_playerMapMarkers;
+    std::chrono::steady_clock::time_point m_markerExpiry{};
+    std::chrono::steady_clock::time_point m_nextMarkerFrame{};
+    bool m_markersVisible{};
+    entt::scoped_connection m_playerMapMarkersConnection;
 
     bool m_active = false;
     bool m_inGame = false;

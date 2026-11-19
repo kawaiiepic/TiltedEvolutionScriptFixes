@@ -15,6 +15,14 @@ export interface CharacterCheckpoint {
 export interface CharacterSlot { label: string; key: string; name?: string; race?: string; level?: number; location?: string; playtime?: string; portrait?: string; }
 const emptyCheckpoint: CharacterCheckpoint = { required: false, phase: 'disabled', name: '', revision: '0', detail: '' };
 
+export interface PlayerMapMarker {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  entrance: boolean;
+}
+
 export interface TravelInvitation {
   id: number;
   expiresAt: number;
@@ -51,6 +59,9 @@ export interface SharedDialoguePanel {
 })
 export class ClientService implements OnDestroy {
   /** Initialization done. */
+  public readonly playerMapMarkers = new BehaviorSubject<{ mapOpen: boolean; markers: PlayerMapMarker[] }>({
+    mapOpen: false, markers: [],
+  });
   public readonly travelInvitations = new BehaviorSubject<TravelInvitation[]>([]);
   public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
   public readonly dialogueFocus = new BehaviorSubject<{ open: boolean; actorId: number }>({ open: false, actorId: 0 });
@@ -220,6 +231,26 @@ export class ClientService implements OnDestroy {
       'partyInviteReceived',
       this.onPartyInviteReceived.bind(this),
     );
+    skyrimtogether.on('playerMapMarkers', (mapOpen, rows) => {
+      this.zone.run(() => {
+        const markers: PlayerMapMarker[] = [];
+        const entrances = new Map<string, PlayerMapMarker>();
+        for (const [id, name, x, y, entrance] of rows) {
+          const marker = { id, name, x, y, entrance };
+          if (entrance) {
+            const key = x + ',' + y;
+            const existing = entrances.get(key);
+            if (existing) {
+              existing.name += ', ' + name;
+              continue;
+            }
+            entrances.set(key, marker);
+          }
+          markers.push(marker);
+        }
+        this.playerMapMarkers.next({ mapOpen, markers });
+      });
+    });
     skyrimtogether.on('travelInvitation', (id, remainingMs, count, canCancel, accepted, leader, destination, nativeRoute) => {
       this.zone.run(() => {
         const now = performance.now();
@@ -274,6 +305,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyInviteReceived');
     skyrimtogether.off('sharedDialogue');
     skyrimtogether.off('travelInvitation');
+    skyrimtogether.off('playerMapMarkers');
     skyrimtogether.off('dialogueFocus');
     skyrimtogether.off('characterPortrait');
     skyrimtogether.off('questUpdated');
@@ -480,6 +512,7 @@ export class ClientService implements OnDestroy {
     this.zone.run(() => {
       this.sharedDialogueChange.next([]);
       this.travelInvitations.next([]);
+      this.playerMapMarkers.next({ mapOpen: false, markers: [] });
       this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.inGameStateChange.next(false);
@@ -520,6 +553,7 @@ export class ClientService implements OnDestroy {
       this.characterSlotsChange.next([]);
       this.sharedDialogueChange.next([]);
       this.travelInvitations.next([]);
+      this.playerMapMarkers.next({ mapOpen: false, markers: [] });
       this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.lobbyStateChange.next(false);

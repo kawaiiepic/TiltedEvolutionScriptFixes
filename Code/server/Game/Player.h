@@ -46,6 +46,10 @@ struct Player
 
     void SetCellComponent(const CellIdComponent& aCellComponent) noexcept;
 
+    GameId InteriorEntrance{};
+    GameId EntranceWorldSpace{};
+    glm::vec3 EntrancePosition{};
+
     void Send(const ServerMessage& acServerMessage, TiltedPhoques::EPacketFlags aPacketFlags = TiltedPhoques::kReliable) const;
 
 private:

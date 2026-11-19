@@ -92,7 +92,17 @@ private:
     };
     std::optional<CarriageBoarding> m_carriage;
     std::optional<NotifyTeleport> m_carriageTeleport;
+    struct PendingEntrance
+    {
+        GameId Door;
+        GameId Destination;
+        GameId WorldSpace;
+        glm::vec3 Position;
+        std::chrono::steady_clock::time_point ExpiresAt;
+    };
+    std::optional<PendingEntrance> m_pendingEntrance;
     GameId m_reportedCell{};
+    GameId m_reportedWorldSpace{};
     GameId m_fastTravelOrigin{};
     std::chrono::steady_clock::time_point m_fastTravelUntil{};
     bool m_waitingFastTravelArrival{};

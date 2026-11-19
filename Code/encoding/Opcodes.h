@@ -125,5 +125,6 @@ enum ServerOpcode : unsigned char
     kNotifyCharacterSave,
     kNotifyTravelInvitation,
     kNotifyMapDiscoveries,
+    kNotifyPlayerMapMarkers,
     kServerOpcodeMax
 };

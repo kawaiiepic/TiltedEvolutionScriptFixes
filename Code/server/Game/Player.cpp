@@ -16,7 +16,10 @@ Player::Player(ConnectionId_t aConnectionId)
 }
 
 Player::Player(Player&& aRhs) noexcept
-    : m_id{std::exchange(aRhs.m_id, 0)}
+    : InteriorEntrance{std::exchange(aRhs.InteriorEntrance, {})}
+    , EntranceWorldSpace{std::exchange(aRhs.EntranceWorldSpace, {})}
+    , EntrancePosition{std::exchange(aRhs.EntrancePosition, {})}
+    , m_id{std::exchange(aRhs.m_id, 0)}
     , m_connectionId{std::exchange(aRhs.m_connectionId, 0)}
     , m_character{std::exchange(aRhs.m_character, std::nullopt)}
     , m_mods{std::exchange(aRhs.m_mods, {})}
@@ -93,6 +96,11 @@ void Player::SetLevel(uint16_t aLevel) noexcept
 void Player::SetCellComponent(const CellIdComponent& aCellComponent) noexcept
 {
     m_cell = aCellComponent;
+    if (aCellComponent.WorldSpaceId || !aCellComponent.Cell)
+    {
+        InteriorEntrance = {};
+        EntranceWorldSpace = {};
+    }
 }
 
 void Player::Send(const ServerMessage& acServerMessage, const TiltedPhoques::EPacketFlags aPacketFlags) const

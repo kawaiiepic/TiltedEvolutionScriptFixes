@@ -15,6 +15,13 @@
 #include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
 
 #include <World.h>
+#include <Camera/PlayerCamera.h>
+#include <Forms/TESObjectCELL.h>
+#include <Forms/TESWorldSpace.h>
+#include <Interface/Menus/MapMenu.h>
+#include <NetImmerse/NiCamera.h>
+#include <algorithm>
+#include <cmath>
 
 #include <Services/OverlayClient.h>
 #include <Services/TransportService.h>
@@ -150,6 +157,7 @@ OverlayService::OverlayService(World& aWorld, TransportService& transport, entt:
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&OverlayService::OnDisconnectedEvent>(this);
     m_lobbyConnection = aDispatcher.sink<ServerLobbyEvent>().connect<&OverlayService::OnServerLobbyEvent>(this);
     m_connectionErrorConnection = aDispatcher.sink<ConnectionErrorEvent>().connect<&OverlayService::OnConnectionError>(this);
+    m_playerMapMarkersConnection = aDispatcher.sink<NotifyPlayerMapMarkers>().connect<&OverlayService::OnPlayerMapMarkers>(this);
     m_travelInvitationConnection = aDispatcher.sink<NotifyTravelInvitation>().connect<&OverlayService::OnTravelInvitation>(this);
     m_chatMessageConnection = aDispatcher.sink<NotifyChatMessageBroadcast>().connect<&OverlayService::OnChatMessageReceived>(this);
     m_playerJoinedConnection = aDispatcher.sink<NotifyPlayerJoined>().connect<&OverlayService::OnPlayerJoined>(this);
@@ -452,6 +460,7 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
         DialoguePortraits::Update(m_world, m_pOverlay.get(), m_transport.GetLocalPlayerId());
     RunDebugDataUpdates();
     RunPlayerHealthUpdates();
+    PublishPlayerMapMarkers();
 }
 
 void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
@@ -477,6 +486,9 @@ void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 
 void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
 {
+    m_playerMapMarkers.Tick = 0;
+    m_playerMapMarkers.Players.clear();
+    PublishPlayerMapMarkers();
     InputService::SetWorldCursorSuppressed(false);
     CloseDialogueSession();
     PublishDialogueFocus(true);
@@ -916,6 +928,7 @@ void OverlayService::OnPlayerJoined(const NotifyPlayerJoined& acMessage) noexcep
 void OverlayService::OnPlayerLeft(const NotifyPlayerLeft& acMessage) noexcept
 {
     DialoguePortraits::RemovePlayer(acMessage.PlayerId);
+    std::erase_if(m_playerMapMarkers.Players, [&acMessage](const auto& marker) { return marker.Id == acMessage.PlayerId; });
     auto pArguments = CefListValue::Create();
     pArguments->SetInt(0, acMessage.PlayerId);
     pArguments->SetString(1, acMessage.Username.c_str());
@@ -956,7 +969,125 @@ void OverlayService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcep
 
 void OverlayService::OnPartyLeftEvent(const PartyLeftEvent& acEvent) noexcept
 {
+    m_playerMapMarkers.Players.clear();
     m_world.GetOverlayService().GetOverlayApp()->ExecuteAsync("partyLeft");
+}
+
+void OverlayService::OnPlayerMapMarkers(const NotifyPlayerMapMarkers& acMessage) noexcept
+{
+    if (acMessage.Tick <= m_playerMapMarkers.Tick)
+        return;
+
+    m_playerMapMarkers = acMessage;
+    m_markerExpiry = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+}
+
+void OverlayService::PublishPlayerMapMarkers() noexcept
+{
+    if (!m_pOverlay)
+        return;
+    const auto now = std::chrono::steady_clock::now();
+    if (m_transport.IsOnline() && now < m_nextMarkerFrame)
+        return;
+    m_nextMarkerFrame = now + std::chrono::milliseconds(33);
+
+    auto send = [this](bool aMap, CefRefPtr<CefListValue> apMarkers)
+    {
+        if (!m_markersVisible && !apMarkers->GetSize())
+            return;
+        m_markersVisible = apMarkers->GetSize() != 0;
+        auto args = CefListValue::Create();
+        args->SetBool(0, aMap);
+        args->SetList(1, apMarkers);
+        m_pOverlay->ExecuteAsync("playerMapMarkers", args);
+    };
+
+    auto frame = CefListValue::Create();
+    auto* pUI = UI::Get();
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!m_transport.IsOnline() || now >= m_markerExpiry || !pUI || !pPlayer ||
+        m_playerMapMarkers.Players.empty() || pUI->GetMenuOpen("Loading Menu"))
+    {
+        send(false, frame);
+        return;
+    }
+
+    const bool mapOpen = pUI->GetMenuOpen("MapMenu");
+    const auto& mods = m_world.GetModSystem();
+    GameId visibleWorld{}, localCell{};
+    NiCamera* pProjection = nullptr;
+    const TESCamera* pPlayerCamera = nullptr;
+    if (mapOpen)
+    {
+        auto* pMap = static_cast<MapMenu*>(pUI->FindMenuByName("MapMenu"));
+        const auto* pWorld = pMap ? pMap->GetMapWorldSpace() : nullptr;
+        if (pMap && pWorld && !pMap->IsLocalMapOpen() &&
+            mods.GetServerModId(pWorld->formID, visibleWorld) && pMap->GetWorldCamera().cameraNode)
+            pProjection = pMap->GetWorldCamera().GetNiCamera();
+    }
+    else if (!pUI->numPausesGame && !pUI->IsUnpausedMenuOpen() && pUI->GetMenuOpen("HUD Menu"))
+    {
+        pPlayerCamera = PlayerCamera::Get();
+        if (const auto* pWorld = pPlayer->GetWorldSpace())
+            mods.GetServerModId(pWorld->formID, visibleWorld);
+        else if (const auto* pCell = pPlayer->GetParentCellEx())
+            mods.GetServerModId(pCell->formID, localCell);
+    }
+
+    if (!pProjection && !pPlayerCamera)
+    {
+        send(mapOpen, frame);
+        return;
+    }
+
+    for (const auto& marker : m_playerMapMarkers.Players)
+    {
+        if (marker.Id == m_transport.GetLocalPlayerId())
+            continue;
+
+        NiPoint3 position(marker.Position);
+        const bool sameInterior = pPlayerCamera && localCell && !marker.WorldSpace && marker.Cell == localCell;
+        const bool useEntrance = !marker.WorldSpace && !sameInterior;
+        if (useEntrance)
+        {
+            if (!visibleWorld || marker.EntranceWorldSpace != visibleWorld || !marker.Entrance)
+                continue;
+            position = marker.EntrancePosition;
+        }
+        else if (!sameInterior && (!visibleWorld || marker.WorldSpace != visibleWorld))
+            continue;
+
+        float x{}, y{};
+        if (pProjection)
+        {
+            NiPoint3 projected;
+            if (!pProjection->WorldPtToScreenPt3(position, projected) ||
+                !(projected.x >= 0.02f && projected.x <= 0.98f && projected.y >= 0.06f && projected.y <= 0.98f))
+                continue;
+            x = projected.x;
+            y = 1.f - projected.y;
+        }
+        else
+        {
+            const glm::vec3 delta = position - pPlayer->position;
+            if (std::abs(delta.x) < 1.f && std::abs(delta.y) < 1.f)
+                continue;
+            constexpr float kHalfTurn = 3.14159265f;
+            const float bearing = std::remainder(std::atan2(delta.x, delta.y) - pPlayerCamera->rotZ, 2.f * kHalfTurn);
+            if (!(std::abs(bearing) <= kHalfTurn / 2.f))
+                continue;
+            x = 0.5f + bearing / kHalfTurn;
+        }
+
+        auto row = CefListValue::Create();
+        row->SetDouble(0, marker.Id);
+        row->SetString(1, marker.Name.c_str());
+        row->SetDouble(2, x);
+        row->SetDouble(3, y);
+        row->SetBool(4, useEntrance);
+        frame->SetList(frame->GetSize(), row);
+    }
+    send(mapOpen, frame);
 }
 
 void OverlayService::RunDebugDataUpdates() noexcept

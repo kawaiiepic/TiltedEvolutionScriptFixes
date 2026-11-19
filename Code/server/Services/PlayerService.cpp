@@ -714,7 +714,28 @@ void PlayerService::HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellR
 
     auto& message = acMessage.Packet;
 
-    const auto oldCell = pPlayer->GetCellComponent().Cell;
+    const auto& previousLocation = pPlayer->GetCellComponent();
+    const auto oldCell = previousLocation.Cell;
+    const auto& mods = m_world.ctx().at<ModsComponent>();
+    const bool linkedDoor = message.SourceDoor && mods.FindFormKey(message.SourceDoor, *pPlayer);
+    if (oldCell != message.CellId && !linkedDoor)
+    {
+        pPlayer->InteriorEntrance = {};
+        pPlayer->EntranceWorldSpace = {};
+    }
+    if (previousLocation.WorldSpaceId && message.CellId && linkedDoor &&
+        mods.FindFormKey(previousLocation.WorldSpaceId, *pPlayer))
+    {
+        const auto character = pPlayer->GetCharacter();
+        const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
+        constexpr float kEntranceDistance = 1024.f;
+        if (pMovement && glm::distance(pMovement->Position, message.SourceDoorPosition) <= kEntranceDistance)
+        {
+            pPlayer->InteriorEntrance = message.SourceDoor;
+            pPlayer->EntranceWorldSpace = previousLocation.WorldSpaceId;
+            pPlayer->EntrancePosition = message.SourceDoorPosition;
+        }
+    }
 
     auto cell = CellIdComponent{message.CellId, {}, {}};
     pPlayer->SetCellComponent(cell);
