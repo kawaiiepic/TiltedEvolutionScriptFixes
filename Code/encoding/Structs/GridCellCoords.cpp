@@ -1,5 +1,6 @@
 #include <Structs/GridCellCoords.h>
 #include <TiltedCore/Serialization.hpp>
+#include <cstdlib>
 
 using TiltedPhoques::Serialization;
 
@@ -48,18 +49,31 @@ GridCellCoords GridCellCoords::CalculateGridCellCoords(const float aX, const flo
     return GridCellCoords(x, y);
 }
 
+namespace
+{
+bool IsKnownGrid(const GridCellCoords& acCoords) noexcept
+{
+    constexpr int32_t kUnknown = std::numeric_limits<int32_t>::max();
+    return acCoords.X != kUnknown && acCoords.Y != kUnknown;
+}
+
+bool IsWithinGridDistance(const GridCellCoords& acLeft, const GridCellCoords& acRight,
+                          int32_t aDistance) noexcept
+{
+    if (!IsKnownGrid(acLeft) || !IsKnownGrid(acRight))
+        return false;
+    return std::abs(static_cast<int64_t>(acLeft.X) - acRight.X) <= aDistance &&
+           std::abs(static_cast<int64_t>(acLeft.Y) - acRight.Y) <= aDistance;
+}
+}
+
 bool GridCellCoords::AreGridCellsOverlapping(const GridCellCoords& aCoords1, const GridCellCoords& aCoords2) noexcept
 {
-    if ((abs(aCoords1.X - aCoords2.X) < m_gridsToLoad) && (abs(aCoords1.Y - aCoords2.Y) < m_gridsToLoad))
-        return true;
-    return false;
+    return IsWithinGridDistance(aCoords1, aCoords2, m_gridsToLoad - 1);
 }
 
 bool GridCellCoords::IsCellInGridCell(const GridCellCoords& aCell, const GridCellCoords& aGridCell, bool aIsDragon) noexcept
 {
-    int32_t gridsToLoad = aIsDragon ? m_gridsToLoadIfDragon : m_gridsToLoad;
-    int32_t distanceToBorder = gridsToLoad / 2;
-    if ((abs(aCell.X - aGridCell.X) <= distanceToBorder) && (abs(aCell.Y - aGridCell.Y) <= distanceToBorder))
-        return true;
-    return false;
+    const int32_t cGridSize = aIsDragon ? m_gridsToLoadIfDragon : m_gridsToLoad;
+    return IsWithinGridDistance(aCell, aGridCell, cGridSize / 2);
 }
