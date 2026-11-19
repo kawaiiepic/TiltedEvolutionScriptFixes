@@ -15,12 +15,8 @@ The packaged SWF initializes Credits and Downloadable Content with their native 
 
 ## Alternate Start character picker
 
-The Abandoned Prison picker opens automatically with `Alternate Start - Live Another Life.esp` loaded, a server that requires checkpoints, the SKSE checkpoint bridge, and a working native Play menu. Other setups use the title-screen picker. To use the title-screen picker on an eligible setup, set `ST_ALTERNATE_START_PICKER=0` in the Skyrim Together launcher’s environment before starting the game.
+The preview uses the title-screen picker by default when the local lobby test files are unavailable. Connecting never starts New Game as a staging fallback.
 
-The prototype starts a local New Game and holds the Alternate Start quest at its RaceMenu step. It opens the picker only after the expected New Game reaches the Abandoned Prison. Selecting an existing slot loads its checkpoint. Creating a slot resumes the quest, opens RaceMenu, and runs the initial campaign save after character creation. A disconnect or staging error requires returning to the title screen before trying again.
+To test an in-game picker, keep `STLobbyTest.ess` and `STLobbyTest.skse` in the active Skyrim save directory. The preview checks the standard and GOG Documents save folders. For a redirected profile, point `ST_SAVE_DIRECTORY` at its actual save directory. Use a save made with the same mod profile in the Abandoned Prison after RaceMenu closes and before using the statue. The local files are excluded from checkpoint upload and are not distributed.
 
-If Alternate Start opens RaceMenu before the quest-stage hook can hold it, the picker opens over RaceMenu. Creating a character continues in that menu. Selecting an existing character downloads its checkpoint and waits for the player to return to the title screen before loading it.
-
-The uploaded plugin and scripts establish the quest and stage IDs. Whether the supported runtimes route the startup stage through the existing `TESQuest::SetStage` address, and whether resuming it from the game window dispatch works in game, still need testing.
-
-If the active Skyrim save directory contains `STLobbyTest.ess` and its matching `STLobbyTest.skse`, the picker loads that local pair in preference to the quest-stage prototype. Use a save made with the same mod profile in the Abandoned Prison after RaceMenu closes and before using the statue. The files stay in the local saves directory and are excluded from checkpoint upload. Selecting an existing slot replaces the lobby save. Creating a new slot waits for you to return to the title screen, then starts a fresh Alternate Start game automatically.
+Selecting an existing slot replaces the lobby save. Creating a new slot waits for you to return to the title screen, then starts a fresh Alternate Start game automatically. Set `ST_ALTERNATE_START_PICKER=0` before launch to use the title-screen picker even when the test save is present.

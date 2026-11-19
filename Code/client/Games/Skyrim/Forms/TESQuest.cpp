@@ -3,7 +3,6 @@
 #include <Services/PapyrusService.h>
 
 #include <Games/Overrides.h>
-#include <ModCompat/CharacterCheckpoints.h>
 
 TESObjectREFR* TESQuest::GetAliasedRef(uint32_t aAliasID) noexcept
 {
@@ -140,22 +139,3 @@ uint32_t TESQuest::GetStageItemCount(uint16_t aStage) noexcept
 
     return 0;
 }
-
-TP_THIS_FUNCTION(TSetCampaignQuestStage, bool, TESQuest, uint16_t);
-static TSetCampaignQuestStage* RealSetCampaignQuestStage{};
-
-bool TP_MAKE_THISCALL(HookSetCampaignQuestStage, TESQuest, uint16_t aStage)
-{
-    if (CharacterCheckpoints::HoldAlternateStartStage(apThis->formID, aStage))
-        return true;
-    return TiltedPhoques::ThisCall(RealSetCampaignQuestStage, apThis, aStage);
-}
-
-static TiltedPhoques::Initializer s_questInitHooks(
-    []()
-    {
-        if (!CharacterCheckpoints::IsAlternateStartPickerEnabled()) return;
-        POINTER_SKYRIMSE(TSetCampaignQuestStage, stage, 25004);
-        RealSetCampaignQuestStage = stage.Get();
-        TP_HOOK(&RealSetCampaignQuestStage, HookSetCampaignQuestStage);
-    });
