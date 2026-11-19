@@ -69,11 +69,14 @@ private:
     void OnFastTravelCatchUp(const PacketEvent<RequestFastTravelCatchUp>& acMessage) noexcept;
     void OfferCatchUp(const Player& acLeader, const glm::vec3& acPosition, const std::set<uint32_t>& acAlreadyTraveling,
                       bool aFastTravel) noexcept;
+    uint32_t NextTravelInvitationId() noexcept;
+    void RetryTravel(const Player& acPlayer, uint32_t aPreviousId) noexcept;
     void OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept;
     void UpdateTravelInvitation(const UpdateEvent&) noexcept;
     void PublishTravelInvitation(const TravelInvitation& acInvitation, bool aClosed = false) const noexcept;
     void EndTravelInvitation(const TravelInvitation& acInvitation, std::string_view aMessage) const noexcept;
     bool UpdateTravelOffer(const TravelInvitation& acInvitation, std::chrono::steady_clock::time_point aNow) noexcept;
+    bool IsTravelLeaderReady(const Player& acLeader, const glm::vec3& acPosition) const noexcept;
     bool CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept;
 
     World& m_world;
@@ -87,11 +90,15 @@ private:
     struct TravelDispatch
     {
         uint32_t Id{};
+        uint32_t Leader{};
+        bool FastTravel{};
         GameId Cell{};
         GameId WorldSpace{};
+        glm::vec3 Position{};
         std::chrono::steady_clock::time_point Deadline;
     };
     std::unordered_map<uint32_t, TravelDispatch> m_travelDispatches;
+    std::unordered_map<uint32_t, TravelDispatch> m_travelRetries;
     std::unordered_map<uint32_t, uint32_t> m_fastTravelSequences;
     std::unordered_map<uint32_t, CellDeparture> m_cellDepartures;
     std::unordered_map<uint32_t, CarriageBoarding> m_carriageBoardings;

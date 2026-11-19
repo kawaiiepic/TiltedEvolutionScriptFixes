@@ -73,7 +73,8 @@ class Runner:
         print(self.log.decode(errors="replace"))
 
 def test_client(mode, build_id=version):
-    subprocess.run([harness, mode, build_id, f"127.0.0.1:{port}"], check=True, timeout=15)
+    timeout = 30 if mode == "carriage-leader" else 15
+    subprocess.run([harness, mode, build_id, f"127.0.0.1:{port}"], check=True, timeout=timeout)
 
 with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     directory = pathlib.Path(tmp)

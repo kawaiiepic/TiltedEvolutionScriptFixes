@@ -39,6 +39,7 @@
 namespace
 {
 constexpr auto kTravelInviteDuration = std::chrono::seconds(10);
+constexpr auto kTravelRetryDuration = std::chrono::seconds(30);
 constexpr float kDefaultGoldLossFactor = 0.10f;
 using RecoveryState = CharacterComponent::RecoveryState;
 
@@ -195,12 +196,7 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
             invitation.Invited.insert(pPlayer->GetId());
     if (invitation.Invited.empty())
         return;
-    do
-    {
-        ++m_nextTravelId;
-    }
-    while (!m_nextTravelId || m_travelInvitations.contains(m_nextTravelId));
-    invitation.Id = m_nextTravelId;
+    invitation.Id = NextTravelInvitationId();
     for (auto& [id, other] : m_travelInvitations)
         if (other.Accepted.erase(leaderId))
             PublishTravelInvitation(other);
@@ -214,6 +210,16 @@ void PlayerService::OfferCatchUp(const Player& acLeader, const glm::vec3& acPosi
     SendTravelMessage(acLeader, fmt::format("Catch-up invitation sent. Type /travel cancel {} to cancel.", invitation.Id));
     const auto inserted = m_travelInvitations.emplace(invitation.Id, std::move(invitation));
     PublishTravelInvitation(inserted.first->second);
+}
+
+uint32_t PlayerService::NextTravelInvitationId() noexcept
+{
+    do
+    {
+        ++m_nextTravelId;
+    }
+    while (!m_nextTravelId || m_travelInvitations.contains(m_nextTravelId));
+    return m_nextTravelId;
 }
 
 bool PlayerService::CanJoinTravel(const Player& acPlayer, const TravelInvitation& acInvitation) const noexcept
@@ -238,17 +244,26 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
     const auto separator = aCommand.find(' ');
     const auto action = aCommand.substr(0, separator);
     const auto idText = separator == aCommand.npos ? std::string_view{} : aCommand.substr(separator + 1);
-    if (idText.empty() || (action != "join" && action != "decline" && action != "cancel"))
+    if (idText.empty() || (action != "join" && action != "decline" && action != "cancel" && action != "retry"))
     {
-        SendTravelMessage(acPlayer, "Use /travel join ID, /travel decline ID, or /travel cancel ID.");
+        SendTravelMessage(acPlayer, "Use /travel join ID, /travel decline ID, /travel cancel ID, or /travel retry ID.");
         return true;
     }
 
     uint32_t id{};
     const auto result = std::from_chars(idText.data(), idText.data() + idText.size(), id);
+    if (result.ec != std::errc{} || result.ptr != idText.data() + idText.size() || !id)
+    {
+        SendTravelMessage(acPlayer, "That travel invitation is no longer open.");
+        return true;
+    }
+    if (action == "retry")
+    {
+        RetryTravel(acPlayer, id);
+        return true;
+    }
     const auto offer = m_travelInvitations.find(id);
-    if (result.ec != std::errc{} || result.ptr != idText.data() + idText.size() ||
-        offer == m_travelInvitations.end() || std::chrono::steady_clock::now() >= offer->second.ExpiresAt)
+    if (offer == m_travelInvitations.end() || std::chrono::steady_clock::now() >= offer->second.ExpiresAt)
     {
         SendTravelMessage(acPlayer, "That travel invitation is no longer open.");
         return true;
@@ -285,6 +300,56 @@ bool PlayerService::HandleTravelCommand(const Player& acPlayer, std::string_view
     return true;
 }
 
+void PlayerService::RetryTravel(const Player& acPlayer, uint32_t aPreviousId) noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    const uint32_t playerId = acPlayer.GetId();
+    const auto retry = m_travelRetries.find(playerId);
+    if (retry == m_travelRetries.end() || retry->second.Id != aPreviousId || now >= retry->second.Deadline)
+    {
+        SendTravelMessage(acPlayer, "That travel retry is no longer available.");
+        return;
+    }
+
+    const auto& attempt = retry->second;
+    const auto* pLeader = m_world.GetPlayerManager().GetById(attempt.Leader);
+    TravelInvitation invitation{};
+    invitation.Leader = attempt.Leader;
+    invitation.FastTravel = attempt.FastTravel;
+    invitation.Cell = attempt.Cell;
+    invitation.WorldSpace = attempt.WorldSpace;
+    invitation.Position = attempt.Position;
+    if ((attempt.FastTravel ? !bFastTravelCatchUp : !bCarriageCatchUp) || !pLeader ||
+        pLeader->GetCellComponent().Cell != invitation.Cell || pLeader->GetCellComponent().WorldSpaceId != invitation.WorldSpace ||
+        !IsTravelLeaderReady(*pLeader, invitation.Position))
+    {
+        m_travelRetries.erase(retry);
+        SendTravelMessage(acPlayer, "Travel cannot be retried because the destination is no longer available.");
+        return;
+    }
+
+    if (!CanJoinTravel(acPlayer, invitation) || m_travelDispatches.contains(attempt.Leader) ||
+        std::ranges::any_of(m_travelInvitations, [&](const auto& entry)
+        {
+            const auto& other = entry.second;
+            return other.Leader == playerId || other.Leader == attempt.Leader ||
+                   other.Accepted.contains(playerId) || other.Accepted.contains(attempt.Leader);
+        }))
+    {
+        SendTravelMessage(acPlayer, "Travel cannot be retried while either traveler is busy.");
+        return;
+    }
+
+    invitation.Id = NextTravelInvitationId();
+    invitation.ExpiresAt = now + kTravelInviteDuration;
+    invitation.Invited.insert(playerId);
+    invitation.Accepted.insert(playerId);
+    m_travelRetries.erase(retry);
+    const auto inserted = m_travelInvitations.emplace(invitation.Id, std::move(invitation));
+    PublishTravelInvitation(inserted.first->second);
+    SendTravelMessage(acPlayer, fmt::format("Travel retry accepted. Type /travel decline {} to stay here.", inserted.first->first));
+}
+
 void PlayerService::OnTravelResult(const PacketEvent<RequestTravelResult>& acMessage) noexcept
 {
     const auto& result = acMessage.Packet;
@@ -300,6 +365,13 @@ void PlayerService::OnTravelResult(const PacketEvent<RequestTravelResult>& acMes
         (cell.Cell != dispatch->second.Cell || cell.WorldSpaceId != dispatch->second.WorldSpace))
         return;
 
+    if (result.Outcome == RequestTravelResult::Busy || result.Outcome == RequestTravelResult::Failed)
+    {
+        auto retry = dispatch->second;
+        retry.Deadline = std::chrono::steady_clock::now() + kTravelRetryDuration;
+        m_travelRetries.insert_or_assign(player.GetId(), retry);
+        SendTravelMessage(player, fmt::format("Type /travel retry {} within 30 seconds to retry.", retry.Id));
+    }
     m_travelDispatches.erase(dispatch);
     switch (result.Outcome)
     {
@@ -313,6 +385,7 @@ void PlayerService::OnTravelResult(const PacketEvent<RequestTravelResult>& acMes
 void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
 {
     const auto now = std::chrono::steady_clock::now();
+    std::erase_if(m_travelRetries, [now](const auto& entry) { return now >= entry.second.Deadline; });
     std::erase_if(m_travelDispatches, [&](const auto& entry)
     {
         if (now < entry.second.Deadline)
@@ -326,6 +399,15 @@ void PlayerService::UpdateTravelInvitation(const UpdateEvent&) noexcept
     {
         return UpdateTravelOffer(entry.second, now);
     });
+}
+
+bool PlayerService::IsTravelLeaderReady(const Player& acLeader, const glm::vec3& acPosition) const noexcept
+{
+    const auto character = acLeader.GetCharacter();
+    const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
+    const auto* pState = character ? m_world.try_get<CharacterComponent>(*character) : nullptr;
+    return pMovement && pState && !pState->IsDead() && pState->Recovery == RecoveryState::Standing &&
+           glm::distance(pMovement->Position, acPosition) <= CarriageTravel::kBoardingDistance;
 }
 
 bool PlayerService::UpdateTravelOffer(const TravelInvitation& acInvitation, std::chrono::steady_clock::time_point aNow) noexcept
@@ -342,11 +424,7 @@ bool PlayerService::UpdateTravelOffer(const TravelInvitation& acInvitation, std:
     if (aNow < invitation.ExpiresAt)
         return false;
 
-    const auto character = pLeader->GetCharacter();
-    const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
-    const auto* pState = character ? m_world.try_get<CharacterComponent>(*character) : nullptr;
-    if (!pMovement || !pState || pState->IsDead() || pState->Recovery != RecoveryState::Standing ||
-        !(glm::distance(pMovement->Position, invitation.Position) <= CarriageTravel::kBoardingDistance))
+    if (!IsTravelLeaderReady(*pLeader, invitation.Position))
     {
         EndTravelInvitation(invitation, "Travel canceled because the traveler is no longer at the arrival point.");
         return true;
@@ -362,8 +440,9 @@ bool PlayerService::UpdateTravelOffer(const TravelInvitation& acInvitation, std:
         {
             if (CanJoinTravel(*pRider, invitation))
             {
-                m_travelDispatches.emplace(id, TravelDispatch{invitation.Id, invitation.Cell, invitation.WorldSpace,
-                    aNow + std::chrono::seconds(20)});
+                m_travelRetries.erase(id);
+                m_travelDispatches.emplace(id, TravelDispatch{invitation.Id, invitation.Leader, invitation.FastTravel,
+                    invitation.Cell, invitation.WorldSpace, invitation.Position, aNow + std::chrono::seconds(20)});
                 pRider->Send(notify);
             }
             else
@@ -418,6 +497,8 @@ void PlayerService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
     m_carriageBoardings.erase(playerId);
     m_fastTravelSequences.erase(playerId);
     m_travelDispatches.erase(playerId);
+    m_travelRetries.erase(playerId);
+    std::erase_if(m_travelRetries, [playerId](const auto& entry) { return entry.second.Leader == playerId; });
     m_cellDepartures.erase(playerId);
     for (auto it = m_travelInvitations.begin(); it != m_travelInvitations.end();)
     {
