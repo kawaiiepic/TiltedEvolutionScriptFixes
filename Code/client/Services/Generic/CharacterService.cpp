@@ -1317,15 +1317,7 @@ void CharacterService::OnNotifyActorTeleport(const NotifyActorTeleport& acMessag
 void CharacterService::OnPartyJoinedEvent(const PartyJoinedEvent& acEvent) noexcept
 {
     m_cachedExperience = 0.f;
-    // Takes ownership of all actors
-    if (acEvent.IsLeader)
-    {
-        auto view = m_world.view<FormIdComponent>(entt::exclude<ObjectComponent>);
-        Vector<entt::entity> entities(view.begin(), view.end());
-
-        for (auto entity : entities)
-            ProcessNewEntity(entity);
-    }
+    // Automatic campaign membership must not seize every loaded NPC.
 }
 
 void CharacterService::MoveActor(const Actor* apActor, const GameId& acWorldSpaceId, const GameId& acCellId, const Vector3_NetQuantize& acPosition) const noexcept

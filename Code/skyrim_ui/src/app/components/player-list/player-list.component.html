@@ -12,27 +12,14 @@
         <tr>
           <th>{{ 'COMPONENT.PARTY_LIST.TABLE_HEADERS.LEVEL' | transloco }}</th>
           <th>{{ 'COMPONENT.PARTY_LIST.TABLE_HEADERS.NAME' | transloco }}</th>
-          <th></th>
+          <th>Location</th>
         </tr>
       </thead>
       <tbody class="listBody">
         <tr *ngFor="let player of playerList$ | async">
           <td>{{ player.level }}</td>
           <td>{{ player.name }}</td>
-          <td class="actions-col">
-            <button
-              [class.hidden]="player.isMember || !(isPartyLeader$ | async)"
-              [disabled]="
-                player.hasBeenInvited ||
-                player.isMember ||
-                !(isPartyLeader$ | async)
-              "
-              class="user-action-button"
-              (click)="sendPartyInvite(player.id)"
-            >
-              {{ 'COMPONENT.PARTY_LIST.INVITE' | transloco }}
-            </button>
-          </td>
+          <td>{{ player.cellName }}</td>
         </tr>
       </tbody>
     </table>

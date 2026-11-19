@@ -124,7 +124,7 @@ void PartyService::OnPartyInfo(const NotifyPartyInfo& acPartyInfo) noexcept
         if (m_isLeader)
         {
             TESGlobal* pWorldEncountersEnabled = Cast<TESGlobal>(TESForm::GetById(0xB8EC1));
-            pWorldEncountersEnabled->f = 1.f;
+            if (pWorldEncountersEnabled) pWorldEncountersEnabled->f = 1.f;
         }
 
         auto pArguments = CefListValue::Create();

@@ -2,6 +2,7 @@ import { Injectable, OnDestroy } from '@angular/core';
 import { TranslocoService } from '@ngneat/transloco';
 import {
   BehaviorSubject,
+  combineLatest,
   firstValueFrom,
   Observable,
   of,
@@ -325,14 +326,8 @@ export class GroupService implements OnDestroy {
 
   public selectMembers(): Observable<Player[]> {
     if (this.group) {
-      return this.playerListService.playerList.asObservable().pipe(
-        filter(playerlist => !!playerlist),
-        pluck('players'),
-        map(players =>
-          players.filter(player =>
-            this.group.getValue().members.includes(player.id),
-          ),
-        ),
+      return combineLatest([this.playerListService.playerList, this.group]).pipe(
+        map(([list, group]) => (list?.players || []).filter(player => group?.members.includes(player.id))),
       );
     } else {
       return of([]);
@@ -356,7 +351,7 @@ export class GroupService implements OnDestroy {
       map(members => {
         if (excludeLocal) {
           members = members.filter(
-            member => member !== this.clientService.localPlayerId,
+            member => member.id !== this.clientService.localPlayerId,
           );
         }
         return members.length;

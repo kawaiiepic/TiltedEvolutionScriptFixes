@@ -15,7 +15,7 @@ struct PartyChangeLeaderRequest;
 struct PartyKickRequest;
 
 /**
- * @brief Manages every party in the server.
+ * @brief Compatibility group for all authenticated players in the campaign.
  */
 struct PartyService
 {
@@ -56,8 +56,7 @@ private:
     World& m_world;
 
     TiltedPhoques::Map<uint32_t, Party> m_parties;
-    uint32_t m_nextId{0};
-    uint64_t m_nextInvitationExpire{0};
+    static constexpr uint32_t kGlobalPartyId = 1;
 
     entt::scoped_connection m_updateEvent;
     entt::scoped_connection m_playerJoinConnection;

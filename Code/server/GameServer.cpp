@@ -46,8 +46,8 @@ Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the 
 Console::Setting uPlayerRespawnDelay{"Gameplay:uPlayerRespawnDelay", "Seconds to wait for a revive before automatically respawning (1 to 120)", 30u, Console::SettingsFlags::kLocked};
 Console::Setting uTimeScale{"Gameplay:uTimeScale", "How many seconds pass ingame for every real second (0 to 1000). Changing this can make the game unstable", 20u};
 Console::Setting bSyncPlayerCalendar{"Gameplay:bSyncPlayerCalendar", "Syncs up all player calendars to be the same day, month, and year. This uses the date of the player with the furthest ahead date at connection.", false};
-Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Share combat skill XP within a party", false, Console::SettingsFlags::kLocked};
-Console::Setting bAutoPartyJoin{"Gameplay:bAutoPartyJoin", "Join parties automatically, as long as there is only one party in the server", true};
+Console::Setting bEnableXpSync{"Gameplay:bEnableXpSync", "Share combat skill XP among connected campaign members", false, Console::SettingsFlags::kLocked};
+
 // ModPolicy Stuff
 Console::Setting bEnableModCheck{"ModPolicy:bEnableModCheck", "Refuse clients whose mods do not match Data/loadorder.txt", false, Console::SettingsFlags::kLocked};
 Console::Setting bAllowSKSE{"ModPolicy:bAllowSKSE", "Allow players using SKSE to join. Applies even when bEnableModCheck is off", true, Console::SettingsFlags::kLocked};
@@ -148,7 +148,7 @@ ServerSettings GetSettings()
     settings.DeathSystemEnabled = bEnableDeathSystem;
     settings.PlayerRespawnDelay = GameServer::GetPlayerRespawnDelay();
     settings.SyncPlayerCalendar = bSyncPlayerCalendar;
-    settings.AutoPartyJoin = bAutoPartyJoin;
+    settings.AutoPartyJoin = true;
     settings.ShareCombatExperience = bEnableXpSync;
     return settings;
 }
@@ -241,7 +241,7 @@ uint32_t GameServer::GetPlayerRespawnDelay() noexcept
 
 bool GameServer::AllowsAutoPartyJoin() const noexcept
 {
-    return bAutoPartyJoin && !IsPublicServer();
+    return true;
 }
 
 void GameServer::Initialize()
