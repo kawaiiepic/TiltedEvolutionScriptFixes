@@ -119,7 +119,7 @@ void Fail(const char* apDetail)
     spdlog::warn("Character checkpoint: {}", apDetail);
 }
 
-std::filesystem::path SaveDirectory()
+std::filesystem::path SaveDirectory(bool aGog = false)
 {
     // Mod managers can redirect saves. The override must name the actual
     // native save directory; guessing a profile is never safe.
@@ -132,7 +132,12 @@ std::filesystem::path SaveDirectory()
     wchar_t documents[MAX_PATH]{};
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, documents)))
         return {};
-    return std::filesystem::path(documents) / L"My Games" / L"Skyrim Special Edition" / L"Saves";
+    const auto base = std::filesystem::path(documents) / L"My Games" /
+        (aGog ? L"Skyrim Special Edition GOG" : L"Skyrim Special Edition");
+    auto* settings = INISettingCollection::Get();
+    const auto* setting = settings ? settings->GetSetting("sLocalSavePath:General") : nullptr;
+    const auto* configuredPath = setting ? reinterpret_cast<const char*>(setting->data) : nullptr;
+    return base / (configuredPath && *configuredPath ? configuredPath : "Saves");
 }
 bool PrepareLocalLobbySave() noexcept
 {
@@ -153,22 +158,33 @@ bool PrepareLocalLobbySave() noexcept
         };
         if (hasPair(directory)) return true;
         if (GetEnvironmentVariableW(L"ST_SAVE_DIRECTORY", nullptr, 0) == 0 &&
-            hasPair(directory.parent_path().parent_path() / L"Skyrim Special Edition GOG" / L"Saves"))
+            hasPair(SaveDirectory(true)))
             return true;
 
         const auto source = TiltedPhoques::GetPath() / "LobbySave";
-        if (!hasPair(source)) return false;
+        if (!hasPair(source))
+        {
+            spdlog::warn(L"Bundled lobby save pair is missing or unreadable in {}", source.wstring());
+            return false;
+        }
         const std::string stem(STCheckpointBridge::LobbySaveName);
         const auto ess = directory / (stem + ".ess");
         const auto coSave = directory / (stem + ".skse");
         std::error_code ec;
         if (std::filesystem::exists(ess, ec) || ec || std::filesystem::exists(coSave, ec) || ec)
+        {
+            spdlog::warn(L"Cannot install the bundled lobby save over existing or inaccessible files in {}", directory.wstring());
             return false;
+        }
         std::filesystem::create_directories(directory, ec);
         if (ec || !std::filesystem::copy_file(source / coSave.filename(), coSave, ec))
+        {
+            spdlog::warn(L"Could not install the lobby co-save in {} (filesystem error {})", directory.wstring(), ec.value());
             return false;
+        }
         if (!std::filesystem::copy_file(source / ess.filename(), ess, ec))
         {
+            spdlog::warn(L"Could not install the lobby save in {} (filesystem error {})", directory.wstring(), ec.value());
             std::filesystem::remove(coSave, ec);
             return false;
         }
@@ -784,7 +800,7 @@ void Tick(TransportService& aTransport) noexcept
         if ((s.Step != Phase::NewCharacter && !(s.Step == Phase::Ready && aTransport.IsOnline())) ||
             now < s.NextPoll || !aTransport.CanEnterWorld()) return;
         if (s.NativeEnabled && !s.CaptureReady) return;
-        if (s.NativeEnabled && now >= s.NativeDeadline) { Fail("Completed native save files never became readable."); return; }
+        if (s.NativeEnabled && now >= s.NativeDeadline) { Fail("Completed native save files never became readable. Check the active profile save directory."); return; }
         s.NextPoll = now + std::chrono::seconds(1);
         PairStamp stamp{};
         if (!Snapshot(stamp, false) || stamp.Ess == s.Baseline.Ess ||
