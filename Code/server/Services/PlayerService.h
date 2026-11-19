@@ -18,6 +18,7 @@ struct PlayerJoinEvent;
 struct PlayerLevelRequest;
 struct PlayerLeaveEvent;
 struct RequestCarriageTravel;
+struct RequestFastTravelCatchUp;
 struct UpdateEvent;
 
 /**
@@ -32,8 +33,8 @@ struct PlayerService
     bool HandleTravelCommand(const Player& acPlayer, std::string_view aCommand) noexcept;
 
 protected:
-    void HandleGridCellShift(const PacketEvent<ShiftGridCellRequest>& acMessage) const noexcept;
-    void HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellRequest>& acMessage) const noexcept;
+    void HandleGridCellShift(const PacketEvent<ShiftGridCellRequest>& acMessage) noexcept;
+    void HandleExteriorCellEnter(const PacketEvent<EnterExteriorCellRequest>& acMessage) noexcept;
     void HandleInteriorCellEnter(const PacketEvent<EnterInteriorCellRequest>& acMessage) const noexcept;
     void OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnRequest>& acMessage) const noexcept;
     void OnPlayerLevelRequest(const PacketEvent<PlayerLevelRequest>& acMessage) const noexcept;
@@ -55,6 +56,7 @@ private:
     {
         uint32_t Id{};
         uint32_t Leader{};
+        bool FastTravel{};
         GameId Cell{};
         GameId WorldSpace{};
         glm::vec3 Position{};
@@ -63,6 +65,9 @@ private:
         std::set<uint32_t> Accepted;
     };
 
+    void OnFastTravelCatchUp(const PacketEvent<RequestFastTravelCatchUp>& acMessage) noexcept;
+    void OfferCatchUp(const Player& acLeader, const glm::vec3& acPosition, const std::set<uint32_t>& acAlreadyTraveling,
+                      bool aFastTravel) noexcept;
     void UpdateTravelInvitation(const UpdateEvent&) noexcept;
     void PublishTravelInvitation(bool aClosed = false) const noexcept;
     void EndTravelInvitation(std::string_view aMessage) noexcept;
@@ -71,6 +76,13 @@ private:
     World& m_world;
     std::optional<TravelInvitation> m_travelInvitation;
     uint32_t m_nextTravelId{};
+    struct CellDeparture
+    {
+        GameId Cell;
+        std::chrono::steady_clock::time_point Time;
+    };
+    std::unordered_map<uint32_t, uint32_t> m_fastTravelSequences;
+    std::unordered_map<uint32_t, CellDeparture> m_cellDepartures;
     std::unordered_map<uint32_t, CarriageBoarding> m_carriageBoardings;
 
     void GrantRecovery(const Player& acPlayer, entt::entity aCharacter, uint32_t aDownId, bool aRevived) const noexcept;
@@ -82,6 +94,7 @@ private:
     entt::scoped_connection m_playerLevelConnection;
     entt::scoped_connection m_carriageTravelConnection;
     entt::scoped_connection m_travelUpdateConnection;
+    entt::scoped_connection m_fastTravelCatchUpConnection;
     entt::scoped_connection m_playerLeaveConnection;
     entt::scoped_connection m_playerJoinConnection;
 };

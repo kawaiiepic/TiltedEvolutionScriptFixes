@@ -1002,3 +1002,25 @@ TEST_CASE("Travel invitation snapshots preserve consent and countdown fields", "
     CHECK(parsed->WorldSpaceId == sent.WorldSpaceId);
     CHECK(parsed->LeaderName == sent.LeaderName);
 }
+
+TEST_CASE("Fast-travel catch-up reports preserve the departure and destination", "[encoding.travel]")
+{
+    RequestFastTravelCatchUp sent{};
+    sent.Sequence = 43;
+    sent.Origin = GameId(2, 0x510);
+    sent.Destination = GameId(1, 0x750);
+    sent.Position = glm::vec3(32.f, 64.f, 128.f);
+
+    Buffer buffer(1024);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ClientMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == RequestFastTravelCatchUp::Opcode);
+    auto parsed = CastUnique<RequestFastTravelCatchUp>(std::move(message));
+    CHECK(parsed->Sequence == sent.Sequence);
+    CHECK(parsed->Origin == sent.Origin);
+    CHECK(parsed->Destination == sent.Destination);
+    CHECK(parsed->Position == sent.Position);
+}

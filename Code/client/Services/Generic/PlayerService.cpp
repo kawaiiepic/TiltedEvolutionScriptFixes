@@ -23,6 +23,7 @@
 #include <Messages/EnterInteriorCellRequest.h>
 #include <Messages/PlayerLevelRequest.h>
 #include <Messages/RequestCarriageTravel.h>
+#include <Messages/RequestFastTravelCatchUp.h>
 
 #include <Structs/CarriageTravel.h>
 #include <Structs/PlayerRevive.h>
@@ -76,6 +77,7 @@ void PlayerService::OnUpdate(const UpdateEvent&) noexcept
     RunLevelUpdates();
     RunBeastFormDetection();
     RunCarriageTravelUpdates();
+    RunFastTravelCatchUp();
 }
 
 void PlayerService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -94,6 +96,9 @@ void PlayerService::OnDisconnected(const DisconnectedEvent& acEvent) noexcept
     m_carriageTeleport.reset();
     m_lastGroupTravelId = 0;
     m_reportedCell = {};
+    m_fastTravelOrigin = {};
+    m_waitingFastTravelArrival = false;
+    m_fastTravelSequence = 0;
     PlayerCharacter::Get()->SetDifficulty(m_previousDifficulty);
     m_serverDifficulty = m_previousDifficulty = 6;
 
@@ -333,8 +338,50 @@ BSTEventResult PlayerService::OnEvent(const TESFastTravelEndEvent*, const EventD
     {
         if (m_carriage)
             m_carriage->Arrived = true;
+        else if (m_fastTravelOrigin && std::chrono::steady_clock::now() < m_fastTravelUntil)
+            m_waitingFastTravelArrival = true;
     });
     return BSTEventResult::kOk;
+}
+
+void PlayerService::RunFastTravelCatchUp() noexcept
+{
+    if (!m_transport.IsOnline())
+        return;
+    const auto* pUI = UI::Get();
+    auto* pPlayer = PlayerCharacter::Get();
+    if (!pUI || !pPlayer)
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= m_fastTravelUntil)
+    {
+        m_fastTravelOrigin = {};
+        m_waitingFastTravelArrival = false;
+    }
+    if (!m_waitingFastTravelArrival && pUI->GetMenuOpen("MapMenu"))
+    {
+        m_fastTravelOrigin = m_reportedCell;
+        m_fastTravelUntil = now + std::chrono::minutes(2);
+        return;
+    }
+    if (!m_waitingFastTravelArrival || !m_reportedCell || m_reportedCell == m_fastTravelOrigin ||
+        pUI->GetMenuOpen("Loading Menu") || pUI->GetMenuOpen("MapMenu"))
+        return;
+
+    const auto* pCell = pPlayer->GetParentCellEx();
+    RequestFastTravelCatchUp request{};
+    if (!pCell || !pPlayer->GetWorldSpace() ||
+        !m_world.GetModSystem().GetServerModId(pCell->formID, request.Destination) ||
+        request.Destination != m_reportedCell)
+        return;
+
+    request.Origin = m_fastTravelOrigin;
+    request.Position = pPlayer->position;
+    request.Sequence = ++m_fastTravelSequence;
+    m_fastTravelOrigin = {};
+    m_waitingFastTravelArrival = false;
+    m_transport.Send(request);
 }
 
 void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
@@ -344,6 +391,8 @@ void PlayerService::OnNotifyTeleport(const NotifyTeleport& acMessage) noexcept
         if (acMessage.GroupTravelId == m_lastGroupTravelId)
             return;
         m_lastGroupTravelId = acMessage.GroupTravelId;
+        m_fastTravelOrigin = {};
+        m_waitingFastTravelArrival = false;
         auto* pPlayer = PlayerCharacter::Get();
         const auto* pUI = UI::Get();
         if (!pPlayer || !pUI || m_carriage || pPlayer->IsDead() || pPlayer->IsInCombat() ||

@@ -31,7 +31,7 @@
   </ng-container>
 
   <aside *ngIf="(inGame$ | async) && (travelInvitation$ | async) as travel" class="travel-invitation">
-    <strong>{{ travel.canCancel ? 'Carriage invitation' : travel.leader + ' arrived by carriage' }}</strong>
+    <strong>{{ travel.canCancel ? 'Travel invitation' : travel.leader + ' invited you to travel' }}</strong>
     <p *ngIf="travel.destination && travel.destination !== 'UNKNOWN'">{{ travel.destination }}</p>
     <p>{{ travel.seconds }} seconds · {{ travel.count }} joining</p>
     <div *ngIf="active$ | async; else travelHint" class="travel-actions">

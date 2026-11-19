@@ -55,7 +55,22 @@ public:
             EnterExteriorCellRequest cell{};
             cell.CellId = GameId(VanillaMod, 0xA22);
             cell.WorldSpaceId = GameId(VanillaMod, 0x3C);
+            cell.CurrentCoords = {0, 0};
             Transmit(cell);
+
+            if (Mode == "carriage-fast-leader")
+            {
+                RequestFastTravelCatchUp fastTravel{};
+                fastTravel.Sequence = 1;
+                fastTravel.Origin = GameId(VanillaMod, 0xA20);
+                fastTravel.Destination = cell.CellId;
+                fastTravel.Position = glm::vec3(32.f, 64.f, 128.f);
+                Transmit(fastTravel); // Wrong departure must not start an invitation.
+                fastTravel.Origin = GameId(VanillaMod, 0xA21);
+                Transmit(fastTravel);
+                Transmit(fastTravel); // A duplicate completion must not create another invitation.
+                return;
+            }
 
             RequestCarriageTravel arrival{};
             arrival.Seat = GameId(QuestMod, 0x915);
@@ -236,16 +251,19 @@ public:
         if (message->GetOpcode() == NotifyChatMessageBroadcast::Opcode && Mode.starts_with("carriage-"))
         {
             const auto notice = CastUnique<NotifyChatMessageBroadcast>(std::move(message));
-            if (Mode == "carriage-cancel-leader" && notice->ChatMessage.find("/travel cancel 2") != String::npos)
+            const bool cCarriageCancel = Mode == "carriage-cancel-leader" && notice->ChatMessage.find("/travel cancel 2") != String::npos;
+            const bool cFastTravelCancel = Mode == "carriage-fast-leader" && notice->ChatMessage.find("/travel cancel 3") != String::npos;
+            if (cCarriageCancel || cFastTravelCancel)
             {
                 SendChatMessageRequest command{};
                 command.MessageType = kGlobalChat;
-                command.ChatMessage = "/travel cancel 2";
+                command.ChatMessage = cCarriageCancel ? "/travel cancel 2" : "/travel cancel 3";
                 Transmit(command);
                 OwnerReady = true;
                 ReadyAt = std::chrono::steady_clock::now() - 3s;
             }
-            if (Mode == "carriage-cancel-observer" && notice->ChatMessage == "The carriage traveler canceled the invitation.")
+            if ((Mode == "carriage-cancel-observer" || Mode == "carriage-fast-observer") &&
+                notice->ChatMessage == "The traveler canceled the invitation.")
                 Done = true;
             if ((Mode == "carriage-catchup" || Mode == "carriage-ignore") &&
                 notice->ChatMessage.find("/travel join 1 ") != String::npos)
@@ -288,7 +306,7 @@ public:
                 }
             }
             if ((Mode == "carriage-catchup" || Mode == "carriage-ignore" ||
-                 Mode == "carriage-cancel-observer") && !invitation->RemainingMs)
+                 Mode == "carriage-cancel-observer" || Mode == "carriage-fast-observer") && !invitation->RemainingMs)
                 SawTravelClose = true;
             return;
         }
@@ -433,7 +451,7 @@ public:
                     boarding.Token = cLeader ? 1 : 2;
                     Transmit(boarding);
                 }
-                if (cLeader)
+                if (cLeader || Mode == "carriage-fast-leader")
                     DepartureAt = std::chrono::steady_clock::now() + 400ms;
                 else
                 {
@@ -441,7 +459,8 @@ public:
                     std::fflush(stdout);
                 }
                 if (Mode != "carriage-rider" && Mode != "carriage-catchup" && Mode != "carriage-ignore" &&
-                    Mode != "carriage-cancel-leader" && Mode != "carriage-cancel-observer")
+                    Mode != "carriage-cancel-leader" && Mode != "carriage-cancel-observer" &&
+                    Mode != "carriage-fast-leader" && Mode != "carriage-fast-observer")
                 {
                     OwnerReady = true;
                     ReadyAt = std::chrono::steady_clock::now() + (Mode == "carriage-leader" ? 8s : 2s);
@@ -924,7 +943,7 @@ int main(int argc, char** argv)
         assert(client.Done);
     if (client.Mode == "carriage-catchup")
         assert(client.SawTravelConsent && client.SawTravelClose && client.SawCarriageTeleport);
-    if (client.Mode == "carriage-ignore" || client.Mode == "carriage-cancel-observer")
+    if (client.Mode == "carriage-ignore" || client.Mode == "carriage-cancel-observer" || client.Mode == "carriage-fast-observer")
         assert(client.SawTravelClose && !client.SawCarriageTeleport);
     if (client.Mode.starts_with("death-"))
         assert(client.SawRevive && client.SawPenalty);

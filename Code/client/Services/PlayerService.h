@@ -65,6 +65,7 @@ private:
     void RunLevelUpdates() const noexcept;
     void RunBeastFormDetection() const noexcept;
     void RunCarriageTravelUpdates() noexcept;
+    void RunFastTravelCatchUp() noexcept;
     void ApplyTeleport(const NotifyTeleport& acMessage) noexcept;
 
     void ToggleDeathSystem(bool aSet) noexcept;
@@ -88,6 +89,10 @@ private:
     std::optional<CarriageBoarding> m_carriage;
     std::optional<NotifyTeleport> m_carriageTeleport;
     GameId m_reportedCell{};
+    GameId m_fastTravelOrigin{};
+    std::chrono::steady_clock::time_point m_fastTravelUntil{};
+    bool m_waitingFastTravelArrival{};
+    uint32_t m_fastTravelSequence{};
     uint32_t m_lastGroupTravelId{};
     uint32_t m_nextCarriageToken{};
 

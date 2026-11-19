@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     config = directory / "config"
     config.mkdir()
     (config / "STServer.ini").write_text(
-        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\nbRemoteDialogueSpectating=true\nbCarriageCatchUp=true\n"
+        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\nbRemoteDialogueSpectating=true\nbCarriageCatchUp=true\nbFastTravelCatchUp=true\n"
     )
     (directory / "shared-quest-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x8AC\n'
@@ -169,6 +169,12 @@ end)
             assert select.select([observer.stdout], [], [], 12)[0]
             assert observer.stdout.readline().strip() == "CARRIAGE_READY"
             test_client("carriage-cancel-leader")
+            assert observer.wait(timeout=8) == 0
+        with subprocess.Popen([harness, "carriage-fast-observer", version, f"127.0.0.1:{port}"],
+                              stdout=subprocess.PIPE, text=True) as observer:
+            assert select.select([observer.stdout], [], [], 12)[0]
+            assert observer.stdout.readline().strip() == "CARRIAGE_READY"
+            test_client("carriage-fast-leader")
             assert observer.wait(timeout=8) == 0
         with subprocess.Popen([harness, "stock-owner", version, f"127.0.0.1:{port}"],
                               stdout=subprocess.PIPE, text=True) as owner:
