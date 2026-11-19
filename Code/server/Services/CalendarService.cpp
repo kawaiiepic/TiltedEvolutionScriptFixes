@@ -7,9 +7,25 @@
 #include <Events/UpdateEvent.h>
 
 #include <Messages/ServerTimeSettings.h>
+#include <Messages/NotifyChatMessageBroadcast.h>
+#include <charconv>
 #include <cmath>
 
 #include "Game/Player.h"
+
+namespace
+{
+void SendRestMessage(const Player* apPlayer, std::string_view aText)
+{
+    NotifyChatMessageBroadcast notify{};
+    notify.MessageType = kSystemMessage;
+    notify.ChatMessage.assign(aText.begin(), aText.end());
+    if (apPlayer)
+        apPlayer->Send(notify);
+    else
+        GameServer::Get()->SendToLoaded(notify);
+}
+}
 
 CalendarService::CalendarService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
@@ -32,6 +48,114 @@ void CalendarService::OnUpdate(const UpdateEvent&) noexcept
     auto delta = now - m_lastTick;
     m_lastTick = now;
     m_dateTime.Update(delta);
+    UpdateRestVote();
+}
+
+std::set<uint32_t> CalendarService::GetRestVoters() const
+{
+    std::set<uint32_t> voters;
+    for (const auto* pPlayer : m_world.GetPlayerManager())
+        if (pPlayer->GetCharacter() && pPlayer->GetCellComponent())
+            voters.insert(pPlayer->GetId());
+    return voters;
+}
+
+void CalendarService::UpdateRestVote() noexcept
+{
+    if (!m_restVote)
+        return;
+
+    if (std::chrono::steady_clock::now() < m_restVote->Deadline)
+    {
+        size_t activeVoters = 0;
+        bool changed = false;
+        for (const auto* pPlayer : m_world.GetPlayerManager())
+        {
+            if (!pPlayer->GetCharacter() || !pPlayer->GetCellComponent())
+                continue;
+            ++activeVoters;
+            changed |= !m_restVote->Voters.contains(pPlayer->GetId());
+        }
+        if (!changed && activeVoters == m_restVote->Voters.size())
+            return;
+    }
+
+    m_restVote.reset();
+    SendRestMessage(nullptr, "Rest vote expired or the active players changed.");
+}
+
+bool CalendarService::HandleRestCommand(const Player& acPlayer, std::string_view aCommand) noexcept
+{
+    if (aCommand != "/rest" && !aCommand.starts_with("/rest "))
+        return false;
+
+    UpdateRestVote();
+    aCommand = aCommand.size() > 5 ? aCommand.substr(6) : std::string_view{};
+    const auto separator = aCommand.find(' ');
+    const auto action = aCommand.substr(0, separator);
+    const auto number = separator == aCommand.npos ? std::string_view{} : aCommand.substr(separator + 1);
+    uint32_t value{};
+    if (number.empty())
+    {
+        SendRestMessage(&acPlayer, "Use /rest sleep HOURS, /rest wait HOURS, /rest yes ID, /rest no ID, or /rest cancel ID.");
+        return true;
+    }
+    const auto parsed = std::from_chars(number.data(), number.data() + number.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != number.data() + number.size() || !value)
+    {
+        SendRestMessage(&acPlayer, "Enter a positive whole number for hours or vote ID.");
+        return true;
+    }
+
+    const uint32_t playerId = acPlayer.GetId();
+    if (action == "sleep" || action == "wait")
+    {
+        if (value > 24 || m_restVote || !acPlayer.GetCharacter() || !acPlayer.GetCellComponent())
+        {
+            SendRestMessage(&acPlayer, "Request 1 to 24 hours while in the world and no other vote is active.");
+            return true;
+        }
+
+        if (++m_nextRestVote == 0)
+            ++m_nextRestVote;
+        m_restVote = RestVote{m_nextRestVote, playerId, value, action == "sleep", GetRestVoters(), {playerId},
+                              std::chrono::steady_clock::now() + std::chrono::seconds(30)};
+        SendRestMessage(nullptr, fmt::format("{} proposed {} for {} hour(s). Vote within 30 seconds with /rest yes {} or /rest no {}.",
+            acPlayer.GetUsername().c_str(), action, value, m_nextRestVote, m_nextRestVote));
+    }
+    else
+    {
+        if (!m_restVote || m_restVote->Id != value || !m_restVote->Voters.contains(playerId))
+        {
+            SendRestMessage(&acPlayer, "That rest vote is no longer open to you.");
+            return true;
+        }
+
+        if (action == "no" || (action == "cancel" && playerId == m_restVote->Organizer))
+        {
+            m_restVote.reset();
+            SendRestMessage(nullptr, "Rest vote canceled.");
+            return true;
+        }
+
+        if (action != "yes")
+        {
+            SendRestMessage(&acPlayer, "Use /rest yes ID or /rest no ID. The organizer can use /rest cancel ID.");
+            return true;
+        }
+        m_restVote->Approved.insert(playerId);
+    }
+
+    if (m_restVote->Approved == m_restVote->Voters)
+    {
+        const uint32_t hours = m_restVote->Hours;
+        const bool sleep = m_restVote->Sleep;
+        m_restVote.reset();
+        m_dateTime.AdvanceHours(static_cast<float>(hours));
+        SendTimeResync(static_cast<uint8_t>(hours));
+        SendRestMessage(nullptr, fmt::format("Group {} approved. The calendar advanced by {} hour(s).", sleep ? "sleep" : "wait", hours));
+    }
+    return true;
 }
 
 void CalendarService::OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept
@@ -97,9 +221,10 @@ bool CalendarService::SetDate(int aDay, int aMonth, float aYear) noexcept
     return false;
 }
 
-void CalendarService::SendTimeResync() noexcept
+void CalendarService::SendTimeResync(uint8_t aRestHours) noexcept
 {
     ServerTimeSettings timeMsg;
+    timeMsg.RestHours = aRestHours;
     timeMsg.timeModel.TimeScale = m_dateTime.m_timeModel.TimeScale;
     timeMsg.timeModel.Time = m_dateTime.m_timeModel.Time;
     timeMsg.timeModel.Day = m_dateTime.m_timeModel.Day;

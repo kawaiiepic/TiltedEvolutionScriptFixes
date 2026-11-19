@@ -36,6 +36,13 @@ void CalendarService::OnTimeUpdate(const ServerTimeSettings& acMessage) noexcept
     }
     m_lastTick = m_world.GetTick();
     m_onlineTime.m_timeModel.TimeScale = acMessage.timeModel.TimeScale;
+    if (acMessage.RestHours > 0 && acMessage.RestHours <= 24)
+    {
+        if (!cFirstSync && !m_world.GetServerSettings().SyncPlayerCalendar)
+            m_onlineTime.AdvanceHours(static_cast<float>(acMessage.RestHours));
+        TimeData::Get()->GameDaysPassed->f += static_cast<float>(acMessage.RestHours) / 24.f;
+        m_fadeTimer = kTransitionSpeed;
+    }
     m_onlineTime.m_timeModel.Time = acMessage.timeModel.Time;
 
     if (m_world.GetServerSettings().SyncPlayerCalendar)

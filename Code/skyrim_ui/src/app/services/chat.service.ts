@@ -108,5 +108,9 @@ export class ChatService {
       name: 'travel',
       executor: async args => skyrimtogether.sendMessage(MessageTypes.GLOBAL_CHAT, ['/travel', ...args].join(' ')),
     });
+    this.CommandHandler.register({
+      name: 'rest',
+      executor: async args => skyrimtogether.sendMessage(MessageTypes.GLOBAL_CHAT, ['/rest', ...args].join(' ')),
+    });
   }
 }

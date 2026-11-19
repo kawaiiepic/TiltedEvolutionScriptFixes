@@ -184,6 +184,7 @@ struct TESQuestStageItemDoneEvent
 
 struct TESResetEvent
 {
+    TESObjectREFR* object;
 };
 
 struct TESResolveNPCTemplatesEvent

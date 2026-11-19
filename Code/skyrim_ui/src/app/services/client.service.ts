@@ -31,6 +31,7 @@ export interface TravelInvitation {
   accepted: boolean;
   leader: string;
   destination: string;
+  nativeRoute: string;
 }
 
 export interface SharedDialoguePanel {
@@ -250,12 +251,12 @@ export class ClientService implements OnDestroy {
         this.playerMapMarkers.next({ mapOpen, markers });
       });
     });
-    skyrimtogether.on('travelInvitation', (id, remainingMs, count, canCancel, accepted, leader, destination) => {
+    skyrimtogether.on('travelInvitation', (id, remainingMs, count, canCancel, accepted, leader, destination, nativeRoute) => {
       this.zone.run(() => {
         const now = performance.now();
         const invitations = this.travelInvitations.value.filter(offer => offer.id !== id && offer.expiresAt > now);
         if (remainingMs > 0) {
-          invitations.push({ id, expiresAt: now + remainingMs, count, canCancel, accepted, leader, destination });
+          invitations.push({ id, expiresAt: now + remainingMs, count, canCancel, accepted, leader, destination, nativeRoute });
         }
         this.travelInvitations.next(invitations.sort((left, right) => left.id - right.id));
       });
