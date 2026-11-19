@@ -60,6 +60,7 @@ enum ClientOpcode : unsigned char
     kRequestFastTravelCatchUp,
     kRequestTravelResult,
     kRequestMapDiscovery,
+    kRequestGroundItems,
     kClientOpcodeMax
 };
 
@@ -126,5 +127,6 @@ enum ServerOpcode : unsigned char
     kNotifyTravelInvitation,
     kNotifyMapDiscoveries,
     kNotifyPlayerMapMarkers,
+    kNotifyGroundItem,
     kServerOpcodeMax
 };

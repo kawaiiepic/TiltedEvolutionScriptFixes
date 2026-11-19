@@ -81,6 +81,13 @@ uint32_t ExtraDataList::GetCount() const
     return count;
 }
 
+void ExtraDataList::SetStackCount(uint16_t aCount) noexcept
+{
+    TP_THIS_FUNCTION(TSetCount, void, ExtraDataList, uint16_t);
+    POINTER_SKYRIMSE(TSetCount, s_setCount, 11617);
+    TiltedPhoques::ThisCall(s_setCount, this, aCount);
+}
+
 void ExtraDataList::SetType(ExtraDataType aType, bool aClear)
 {
     uint32_t index = static_cast<uint8_t>(aType) >> 3;

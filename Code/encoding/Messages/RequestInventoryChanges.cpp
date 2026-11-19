@@ -8,6 +8,16 @@ void RequestInventoryChanges::SerializeRaw(TiltedPhoques::Buffer::Writer& aWrite
     Item.Serialize(aWriter);
     Serialization::WriteBool(aWriter, Drop);
     Serialization::WriteBool(aWriter, UpdateClients);
+    Serialization::WriteVarInt(aWriter, GroundReference);
+    if (GroundReference)
+    {
+        GroundCell.Serialize(aWriter);
+        for (int i = 0; i < 3; ++i)
+        {
+            Serialization::WriteFloat(aWriter, GroundPosition[i]);
+            Serialization::WriteFloat(aWriter, GroundRotation[i]);
+        }
+    }
 }
 
 void RequestInventoryChanges::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -19,4 +29,14 @@ void RequestInventoryChanges::DeserializeRaw(TiltedPhoques::Buffer::Reader& aRea
     Item.Deserialize(aReader);
     Drop = Serialization::ReadBool(aReader);
     UpdateClients = Serialization::ReadBool(aReader);
+    GroundReference = static_cast<uint32_t>(Serialization::ReadVarInt(aReader));
+    if (GroundReference)
+    {
+        GroundCell.Deserialize(aReader);
+        for (int i = 0; i < 3; ++i)
+        {
+            GroundPosition[i] = Serialization::ReadFloat(aReader);
+            GroundRotation[i] = Serialization::ReadFloat(aReader);
+        }
+    }
 }

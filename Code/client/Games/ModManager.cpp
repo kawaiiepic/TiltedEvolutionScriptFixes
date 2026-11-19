@@ -3,6 +3,7 @@
 #include <Games/TES.h>
 
 #include <Actor.h>
+#include <Forms/TESObjectCELL.h>
 
 ModManager* ModManager::Get() noexcept
 {
@@ -36,6 +37,16 @@ uint32_t& TP_MAKE_THISCALL(SpawnNewREFR, ModManager, uint32_t& aRefHandleOut, TE
     TP_EMPTY_HOOK_PLACEHOLDER;
 
     return TiltedPhoques::ThisCall(RealSpawnNewREFR, apThis, aRefHandleOut, apBaseForm, apPosition, apRotation, apParentCell, apWorldSpace, apActor, a9, a10, aForcePersist, a12);
+}
+
+uint32_t ModManager::SpawnGroundItem(TESForm* apBase, NiPoint3& aPosition, NiPoint3& aRotation, TESObjectCELL* apCell) noexcept
+{
+    uint32_t handle{};
+    // For exteriors the engine selects the cell from the coordinates.
+    auto* pWorldSpace = apCell->worldspace;
+    TiltedPhoques::ThisCall(RealSpawnNewREFR, this, handle, apBase, &aPosition, &aRotation,
+        pWorldSpace ? nullptr : apCell, pWorldSpace, nullptr, 0, 0, static_cast<char>(0), static_cast<char>(1));
+    return handle;
 }
 
 uint32_t ModManager::Spawn(NiPoint3& aPosition, NiPoint3& aRotation, TESObjectCELL* apParentCell, TESWorldSpace* apWorldSpace, Actor* apCharacter) noexcept

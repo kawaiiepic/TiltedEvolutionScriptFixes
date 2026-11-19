@@ -5,11 +5,13 @@
 
 enum class FormType : uint8_t
 {
+    Scroll = 23,
     Armor = 26,
     Book = 27,
     Container = 28,
     Door = 29,
     Ingredient = 30,
+    Misc = 32,
     Furniture = 40,
     Weapon = 41,
     Ammo = 42,

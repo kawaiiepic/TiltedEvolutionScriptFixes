@@ -1,4 +1,5 @@
 #include <Services/ObjectService.h>
+#include <Services/InventoryService.h>
 
 #include <World.h>
 #include <Games/Overrides.h>
@@ -405,7 +406,8 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
     if (IsPlayerTravelDoor(*acEvent.pObject, *acEvent.pActivator))
         return;
 
-    if (!ShouldSyncInteraction(*acEvent.pObject))
+    if (!ShouldSyncInteraction(*acEvent.pObject) ||
+        (acEvent.pObject->IsTemporary() && m_world.ctx().at<InventoryService>().IsTrackedGroundItem(acEvent.pObject->formID)))
         return;
 
     if (Lock* pLock = acEvent.pObject->GetLock())
