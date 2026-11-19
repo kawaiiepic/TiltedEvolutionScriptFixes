@@ -33,6 +33,7 @@ local function build_server()
         "entt",
         "cpp-httplib",
         "cryptopp",
+        "zlib",
         "tiltedcore")
 end
 

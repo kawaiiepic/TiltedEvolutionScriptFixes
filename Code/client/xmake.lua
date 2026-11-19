@@ -51,6 +51,7 @@ target(name)
         "spdlog",
         "hopscotch-map",
         "cryptopp",
+        "zlib",
         "gamenetworkingsockets",
         "discord",
         "imgui",
