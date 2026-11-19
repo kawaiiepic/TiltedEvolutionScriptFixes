@@ -3,12 +3,14 @@
 #include <Events/PacketEvent.h>
 #include <Campaign/DiscoveryJournal.h>
 #include <Campaign/FormSyncPolicies.h>
+#include <chrono>
 
 struct World;
 struct RequestSetWaypoint;
 struct RequestRemoveWaypoint;
 struct RequestMapDiscovery;
 struct PlayerJoinEvent;
+struct UpdateEvent;
 
 /**
  * @brief Handles player specific actions that might change the information needed by other clients about that player.
@@ -27,6 +29,7 @@ struct MapService
 
   private:
     void OnMapDiscovery(const PacketEvent<RequestMapDiscovery>& acMessage) noexcept;
+    void PublishPlayerMarkers(const UpdateEvent&) noexcept;
     void OnPlayerJoin(const PlayerJoinEvent& acEvent) noexcept;
 
     World& m_world;
@@ -34,6 +37,9 @@ struct MapService
     Campaign::DiscoveryJournal m_discoveries{"shared-discoveries.log"};
     entt::scoped_connection m_discoveryConnection;
     entt::scoped_connection m_joinConnection;
+    entt::scoped_connection m_updateConnection;
+    std::chrono::steady_clock::time_point m_nextMarkerUpdate{};
+    uint64_t m_markerTick{};
 
     entt::scoped_connection m_playerSetWaypointConnection;
     entt::scoped_connection m_playerRemoveWaypointConnection;

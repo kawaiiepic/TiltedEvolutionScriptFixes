@@ -123,6 +123,8 @@ interface SkyrimTogether {
   off(event: 'dialogueFocus', callback?: (open: boolean, actorId: number) => void): void;
   on(event: 'travelInvitation', callback: (id: number, remainingMs: number, count: number, canCancel: boolean, accepted: boolean, leader: string, destination: string) => void): void;
   off(event: 'travelInvitation'): void;
+  on(event: 'playerMapMarkers', callback: (mapOpen: boolean, markers: [number, string, number, number, boolean][]) => void): void;
+  off(event: 'playerMapMarkers'): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;
   off(event: 'sharedDialogue', callback?: SkyrimTogetherTypes.SharedDialogueCallback): void;
   /** Add listener to when the UI is first initialized. */

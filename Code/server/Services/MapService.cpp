@@ -2,6 +2,10 @@
 #include <GameServer.h>
 #include <Components.h>
 #include <Events/PlayerJoinEvent.h>
+#include <Events/UpdateEvent.h>
+#include <Messages/NotifyPlayerMapMarkers.h>
+#include <cmath>
+#include <map>
 #include <Messages/MapDiscovery.h>
 #include <Setting.h>
 
@@ -24,6 +28,7 @@ MapService::MapService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
 {
     m_discoveryConnection = aDispatcher.sink<PacketEvent<RequestMapDiscovery>>().connect<&MapService::OnMapDiscovery>(this);
+    m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&MapService::PublishPlayerMarkers>(this);
     m_joinConnection = aDispatcher.sink<PlayerJoinEvent>().connect<&MapService::OnPlayerJoin>(this);
     if (!m_discoveryPolicies.IsHealthy())
         spdlog::error("Unable to read shared-discovery-policies.conf (error line {}); shared map discoveries are disabled.",
@@ -34,6 +39,54 @@ MapService::MapService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
           aDispatcher.sink<PacketEvent<RequestSetWaypoint>>().connect<&MapService::OnSetWaypointRequest>(this);
       m_playerRemoveWaypointConnection =
           aDispatcher.sink<PacketEvent<RequestRemoveWaypoint>>().connect<&MapService::OnRemoveWaypointRequest>(this);
+}
+
+void MapService::PublishPlayerMarkers(const UpdateEvent&) noexcept
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now < m_nextMarkerUpdate)
+        return;
+    m_nextMarkerUpdate = now + std::chrono::milliseconds(250);
+
+    std::map<uint32_t, NotifyPlayerMapMarkers> snapshots;
+    ++m_markerTick;
+    for (const auto* pPlayer : m_world.GetPlayerManager())
+    {
+        const auto& party = pPlayer->GetParty().JoinedPartyId;
+        const auto& cell = pPlayer->GetCellComponent();
+        if (!party || !cell.Cell)
+            continue;
+
+        auto& snapshot = snapshots[*party];
+        snapshot.Tick = m_markerTick;
+        const auto character = pPlayer->GetCharacter();
+        const auto* pMovement = character ? m_world.try_get<MovementComponent>(*character) : nullptr;
+        const auto* pCharacterCell = character ? m_world.try_get<CellIdComponent>(*character) : nullptr;
+        if (!pMovement || !pCharacterCell || pCharacterCell->WorldSpaceId != cell.WorldSpaceId ||
+            (!cell.WorldSpaceId && pCharacterCell->Cell != cell.Cell) ||
+            snapshot.Players.size() >= NotifyPlayerMapMarkers::MaxPlayers ||
+            !std::isfinite(pMovement->Position.x) || !std::isfinite(pMovement->Position.y) || !std::isfinite(pMovement->Position.z))
+            continue;
+
+        auto& marker = snapshot.Players.emplace_back();
+        marker.Id = pPlayer->GetId();
+        marker.Name = pPlayer->GetUsername();
+        marker.Cell = cell.Cell;
+        marker.WorldSpace = cell.WorldSpaceId;
+        marker.Entrance = pPlayer->InteriorEntrance;
+        marker.EntranceWorldSpace = pPlayer->EntranceWorldSpace;
+        marker.EntrancePosition = pPlayer->EntrancePosition;
+        marker.Position = pMovement->Position;
+    }
+
+    for (const auto* pPlayer : m_world.GetPlayerManager())
+    {
+        const auto& party = pPlayer->GetParty().JoinedPartyId;
+        if (!party || !pPlayer->GetCellComponent().Cell)
+            continue;
+        if (const auto it = snapshots.find(*party); it != snapshots.end())
+            pPlayer->Send(it->second, TiltedPhoques::kUnreliableNoNagle);
+    }
 }
 
 void MapService::OnSetWaypointRequest(const PacketEvent<RequestSetWaypoint>& acMessage) const noexcept

@@ -347,3 +347,49 @@
 }
 .voter-initial { display: grid; place-items: center; font-size: .8rem; }
 .native-suggestion-count { color: #d1c4a1; font-size: .85rem; padding-inline: .15rem; }
+
+.player-marker-layer {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.player-marker-compass {
+  inset: 6vh 26vw auto;
+  height: 4rem;
+}
+
+.player-marker {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 0.25rem;
+  transform: translate(-50%, -0.3rem);
+}
+
+.player-marker-pin {
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 1px solid #142526;
+  background: #8ce0da;
+  border-radius: 50%;
+}
+
+.player-marker-entrance .player-marker-pin {
+  transform: rotate(45deg);
+  border-radius: 1px;
+  background: #ffd08b;
+}
+
+.player-marker-name {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.1rem 0.35rem;
+  color: #f5f5f5;
+  background: rgba(12, 17, 20, 0.88);
+  font-size: 0.8rem;
+}

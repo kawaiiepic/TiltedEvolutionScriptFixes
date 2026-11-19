@@ -5,7 +5,7 @@ import { combineLatest, of, switchMap, takeUntil, takeWhile, timer } from 'rxjs'
 import { environment } from '../../../environments/environment';
 import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.animation';
 import { View } from '../../models/view.enum';
-import { ClientService, SharedDialoguePanel, TravelInvitation } from '../../services/client.service';
+import { ClientService, PlayerMapMarker, SharedDialoguePanel, TravelInvitation } from '../../services/client.service';
 import { DestroyService } from '../../services/destroy.service';
 import { PlayerListService } from '../../services/player-list.service';
 import {
@@ -39,6 +39,12 @@ export class RootComponent implements OnInit {
   readonly RootView = View;
 
   view$ = this.uiRepository.view$;
+
+  playerMapMarkers$ = this.client.playerMapMarkers.asObservable();
+
+  trackPlayerMarker(_index: number, marker: PlayerMapMarker): number {
+    return marker.id;
+  }
 
   travelInvitations$ = this.client.travelInvitations.pipe(
     switchMap(invitations => invitations.length ? timer(0, 250).pipe(

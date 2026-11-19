@@ -24,6 +24,18 @@
       {{ checkpoint.detail }}
     </aside>
   </ng-container>
+  <ng-container *ngIf="(inGame$ | async) && !(active$ | async)">
+    <ng-container *ngIf="playerMapMarkers$ | async as frame">
+      <div *ngIf="frame.markers.length" class="player-marker-layer" [class.player-marker-compass]="!frame.mapOpen">
+        <div *ngFor="let marker of frame.markers; trackBy: trackPlayerMarker" class="player-marker"
+          [class.player-marker-entrance]="marker.entrance"
+          [style.left.%]="marker.x * 100" [style.top.%]="marker.y * 100">
+          <span class="player-marker-pin"></span>
+          <span class="player-marker-name">{{ marker.name }}{{ marker.entrance ? ' · Entrance' : '' }}</span>
+        </div>
+      </div>
+    </ng-container>
+  </ng-container>
   <ng-container *ngIf="(inGame$ | async) && !(menuOpen$ | async)">
     <app-debug></app-debug>
 
