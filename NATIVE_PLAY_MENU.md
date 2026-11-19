@@ -19,4 +19,6 @@ The Abandoned Prison picker opens automatically with `Alternate Start - Live Ano
 
 The prototype starts a local New Game and holds the Alternate Start quest at its RaceMenu step. It opens the picker only after the expected New Game reaches the Abandoned Prison. Selecting an existing slot loads its checkpoint. Creating a slot resumes the quest, opens RaceMenu, and runs the initial campaign save after character creation. A disconnect or staging error requires returning to the title screen before trying again.
 
+If Alternate Start opens RaceMenu before the quest-stage hook can hold it, the picker opens over RaceMenu. Creating a character continues in that menu. Selecting an existing character downloads its checkpoint and waits for the player to return to the title screen before loading it.
+
 The uploaded plugin and scripts establish the quest and stage IDs. Whether the supported runtimes route the startup stage through the existing `TESQuest::SetStage` address, and whether resuming it from the game window dispatch works in game, still need testing.

@@ -27,6 +27,7 @@
 
 #include <Games/Skyrim/Interface/UI.h>
 #include <Games/Skyrim/BSGraphics/BSGraphicsRenderer.h>
+#include <ModCompat/CharacterCheckpoints.h>
 #include <ModCompat/BehaviorVar.h>  
 
 World::World()
@@ -151,7 +152,7 @@ void World::UpdateMainMenu() noexcept
         now - m_lastMenuUpdate < 30 || m_transport.IsOnline()) return;
     m_lastMenuUpdate = now;
     auto* ui = UI::Get();
-    if (!ui || (!ui->IsMainMenuOpen() && !overlay.GetMainMenu())) return;
+    if (!ui || (!ui->IsMainMenuOpen() && !overlay.GetMainMenu() && !CharacterCheckpoints::NeedsStagingPump())) return;
 
     const auto frame = std::chrono::high_resolution_clock::now();
     const double delta = std::chrono::duration<double>(frame - m_lastFrameTime).count();

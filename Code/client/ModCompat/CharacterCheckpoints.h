@@ -33,6 +33,7 @@ bool FinishCharacter(TransportService& aTransport) noexcept;
 bool IsAlternateStartPickerEnabled() noexcept;
 bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept;
 bool CanReplaceStagingWorld() noexcept;
+bool NeedsStagingPump() noexcept;
 
 void Begin(bool aRequired) noexcept;
 void Reset() noexcept;

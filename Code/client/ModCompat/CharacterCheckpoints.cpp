@@ -52,7 +52,7 @@ struct State
     Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
     uint32_t StagingQuest{};
-    bool StagingWorld{};
+    bool StagingWorld{}, StagingRaceMenu{};
     Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
@@ -362,16 +362,29 @@ bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept
     return false;
 }
 
-bool CanReplaceStagingWorld() noexcept
+static bool IsOwnedStagingWorld() noexcept
 {
-    if (!s.StagingWorld || !(s_stageGate.load() & kStageHeld) ||
+    if (!s.StagingWorld ||
         NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame != 1 ||
         NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration != 1)
         return false;
     const auto* player = PlayerCharacter::Get();
     const auto* ui = UI::Get();
     return player && player->parentCell && player->parentCell->formID == kAbandonedPrison && ui &&
-        !ui->GetMenuOpen("RaceSex Menu") && !ui->GetMenuOpen("Loading Menu");
+        !ui->GetMenuOpen("Loading Menu");
+}
+
+bool CanReplaceStagingWorld() noexcept
+{
+    const auto* ui = UI::Get();
+    return !s.StagingRaceMenu && (s_stageGate.load() & kStageHeld) && IsOwnedStagingWorld() &&
+        ui && !ui->GetMenuOpen("RaceSex Menu");
+}
+
+bool NeedsStagingPump() noexcept
+{
+    return s.StagingQuest && (s.Step == Phase::StartingStaging || s.StagingWorld ||
+        (s.Step == Phase::NewCharacter && !s.SawRaceMenu));
 }
 
 void Begin(bool aRequired) noexcept
@@ -418,7 +431,7 @@ bool CanEnter() noexcept
 void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept
 {
     if (!aTransport.IsInLobby() || s.Step != Phase::Choose || acKey.size() != 64) return;
-    if (s.StagingWorld && !CanReplaceStagingWorld())
+    if (s.StagingWorld && !IsOwnedStagingWorld())
     {
         Fail("The temporary character lobby was interrupted. Return to the main menu and reconnect.");
         return;
@@ -467,6 +480,23 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             {
                 if (s.NativeEnabled)
                 {
+                    if (s.StagingRaceMenu && IsOwnedStagingWorld())
+                    {
+                        const auto* ui = UI::Get();
+                        if (!ui || !ui->GetMenuOpen("RaceSex Menu"))
+                        {
+                            Fail("RaceMenu was closed before character selection. Return to the main menu and reconnect.");
+                            return;
+                        }
+                        s_stageGate.store(0);
+                        s.StagingWorld = false;
+                        s.StagingRaceMenu = false;
+                        s.AwaitCharacterCreation = true;
+                        s.SawRaceMenu = true;
+                        Change(Phase::NewCharacter, "Finish customizing your new character in RaceMenu.");
+                        InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                        return;
+                    }
                     if (CanReplaceStagingWorld())
                     {
                         const uint32_t quest = s.StagingQuest;
@@ -588,14 +618,17 @@ void Tick(TransportService& aTransport) noexcept
                 return;
             }
 
-            s.StagingWorld = (s_stageGate.load() & kStageHeld) != 0;
+            const auto* ui = UI::Get();
+            const bool raceMenuOpen = ui && ui->GetMenuOpen("RaceSex Menu");
+            s.StagingWorld = raceMenuOpen || (s_stageGate.load() & kStageHeld) != 0;
+            s.StagingRaceMenu = raceMenuOpen;
             auto& overlay = World::Get().GetOverlayService();
-            if (CanReplaceStagingWorld() && aTransport.CanEnterWorld() && overlay.GetInGame() &&
-                InputService::SetOverlayActive(overlay, true))
+            if (IsOwnedStagingWorld() && overlay.GetInGame() &&
+                (raceMenuOpen || aTransport.CanEnterWorld()) && InputService::SetOverlayActive(overlay, true))
             {
                 MainMenuBridge::CancelNewGame();
                 Change(Phase::Choose, "Choose a character to enter the campaign.");
-                spdlog::info("Alternate Start staging lobby opened");
+                spdlog::info("Alternate Start staging lobby opened (RaceMenu already open: {})", raceMenuOpen);
             }
             return;
         }
@@ -698,6 +731,22 @@ void Tick(TransportService& aTransport) noexcept
         }
         if (s.NativeEnabled && s.Step == Phase::Staged)
         {
+            if (s.StagingRaceMenu)
+            {
+                const auto* ui = UI::Get();
+                if (!ui || !ui->GetMenuOpen("Main Menu"))
+                {
+                    constexpr auto detail = "The checkpoint is ready. Close the overlay and return to Skyrim's main menu to load it.";
+                    if (s.Detail != detail)
+                    {
+                        s.Detail = detail;
+                        PublishState();
+                    }
+                    return;
+                }
+                s.EnterDeadline = now + kNativeTimeout;
+                s.StagingRaceMenu = false;
+            }
             if (now >= s.EnterDeadline) { Fail("Skyrim did not become ready for the checkpoint load."); return; }
             if (StartNative(NativeOperation::Load) == NativeStart::Failed)
                 Fail("Skyrim rejected the canonical checkpoint load.");
