@@ -12,7 +12,7 @@ import { LoadingService } from './loading.service';
 export interface CharacterCheckpoint {
   required: boolean; phase: string; name: string; revision: string; detail: string;
 }
-export interface CharacterSlot { label: string; key: string; }
+export interface CharacterSlot { label: string; key: string; name?: string; race?: string; level?: number; location?: string; playtime?: string; portrait?: string; }
 const emptyCheckpoint: CharacterCheckpoint = { required: false, phase: 'disabled', name: '', revision: '0', detail: '' };
 
 export interface SharedDialoguePanel {
@@ -168,6 +168,7 @@ export class ClientService implements OnDestroy {
       this.checkpointChange.next({ required, phase, name, revision, detail });
       if (phase === 'request-roster') this.requestCharacterRoster();
     }));
+    skyrimtogether.on('checkpointPreview', (key, encoded) => this.zone.run(() => this.onCheckpointPreview(key, encoded)));
     skyrimtogether.on('serverLobby', state => this.zone.run(() => {
       this.lobbyStateChange.next(state);
       if (state) this.isConnectionInProgressChange.next(false);
@@ -222,6 +223,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('openSettings');
     skyrimtogether.off('serverLobby');
     skyrimtogether.off('characterCheckpoint');
+    skyrimtogether.off('checkpointPreview');
     skyrimtogether.off('connect');
     skyrimtogether.off('disconnect');
     skyrimtogether.off('setName');
@@ -768,6 +770,62 @@ export class ClientService implements OnDestroy {
 
   public manageDialogue(panel: SharedDialoguePanel, action: number): void {
     skyrimtogether.manageDialogue(panel.actorId, panel.revision, action);
+  }
+
+  private onCheckpointPreview(key: string, encoded: string): void {
+    if (this.checkpointChange.value.phase !== 'choose' || encoded.length > 55000) return;
+    const slots = this.characterSlotsChange.value;
+    if (!slots.some(slot => slot.key === key)) return;
+    try {
+      const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+      if (bytes.length < 2) return;
+      const view = new DataView(bytes.buffer);
+      const headerLength = view.getUint16(0, true);
+      const end = 2 + headerLength;
+      if (headerLength > 4096 || end > bytes.length || (bytes.length !== end && bytes.length !== end + 96 * 96 * 4)) return;
+      const preview: Partial<CharacterSlot> = {};
+      if (headerLength >= 25) {
+        try {
+          const decoder = new TextDecoder();
+          if (decoder.decode(bytes.subarray(2, 15)) !== 'TESV_SAVEGAME') throw new Error('Invalid save header');
+          let pos = 27;
+          const readString = () => {
+            if (pos + 2 > end) throw new Error('Invalid save header');
+            const length = view.getUint16(pos, true); pos += 2;
+            if (pos + length > end) throw new Error('Invalid save header');
+            const value = decoder.decode(bytes.subarray(pos, pos + length)); pos += length;
+            return value;
+          };
+          const name = readString();
+          if (pos + 4 > end) throw new Error('Invalid save header');
+          const level = view.getUint32(pos, true); pos += 4;
+          const location = readString();
+          const playtime = readString();
+          const raceId = readString().replace(/Race$/i, '');
+          const races: Record<string, string> = { HighElf: 'High Elf', DarkElf: 'Dark Elf', WoodElf: 'Wood Elf', Orc: 'Orc', Nord: 'Nord', Breton: 'Breton', Imperial: 'Imperial', Redguard: 'Redguard', Argonian: 'Argonian', Khajiit: 'Khajiit' };
+          Object.assign(preview, { name, level, location, playtime, race: races[raceId] || raceId });
+        } catch { /* unsupported ESS header: retain the slot label */ }
+      }
+      if (bytes.length === end + 96 * 96 * 4) {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 96;
+        const context = canvas.getContext('2d');
+        if (context) {
+          const image = context.createImageData(96, 96);
+          const linear = (c: number) => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+          const srgb = (c: number) => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+          for (let i = 0; i < image.data.length; i += 4) {
+            const alpha = bytes[end + i + 3] / 255;
+            for (let c = 0; c < 3; ++c)
+              image.data[i + c] = alpha > 0 ? Math.round(srgb(Math.min(1, linear(bytes[end + i + c] / 255) / alpha)) * 255) : 0;
+            image.data[i + 3] = bytes[end + i + 3];
+          }
+          context.putImageData(image, 0, 0);
+          preview.portrait = canvas.toDataURL('image/png');
+        }
+      }
+      this.characterSlotsChange.next(this.characterSlotsChange.value.map(slot => slot.key === key ? { ...slot, ...preview } : slot));
+    } catch { /* previews must never block character selection */ }
   }
 
   private onCharacterPortrait(playerId: number, width: number, height: number, rgba: string): void {

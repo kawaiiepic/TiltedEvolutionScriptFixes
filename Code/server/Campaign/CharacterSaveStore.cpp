@@ -272,12 +272,55 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
 {
     aReply.Action = acRequest.Action;
     aReply.Status = P::Invalid;
-    if (acRequest.Status || acRequest.Action > P::CompressedUploadChunk || acRequest.Count > P::ChunkSize)
+    if (acRequest.Status || acRequest.Action > P::Preview || acRequest.Count > P::ChunkSize)
         return;
 
     if (acRequest.Action == P::Roster)
     {
         if (!aInWorld) ListCharacters(aSession, acRequest, aReply);
+        return;
+    }
+    if (acRequest.Action == P::Preview)
+    {
+        if (aInWorld || acRequest.Count || !m_owners.contains(aSession)) return;
+        aReply.Key = acRequest.Key;
+        Lease slot;
+        slot.Directory = m_root / Hex(acRequest.Key);
+        std::ifstream ownerFile(slot.Directory / "picker", std::ios::binary);
+        std::string owner;
+        if (!std::getline(ownerFile, owner) || !owner.starts_with(m_owners.at(aSession)) ||
+            !Discover(slot) || !slot.Latest.Number)
+        { aReply.Status = P::Missing; return; }
+        // Only the bounded ESS header from the committed revision, never the save body.
+        std::ifstream save(File(slot, slot.Latest.Number), std::ios::binary);
+        save.seekg(HeaderSize);
+        std::array<uint8_t, 17> prefix{};
+        size_t headerLength = 0;
+        if (slot.Latest.Ess >= prefix.size() && save.read(reinterpret_cast<char*>(prefix.data()), prefix.size()) &&
+            std::string_view(reinterpret_cast<const char*>(prefix.data()), 13) == "TESV_SAVEGAME")
+        {
+            uint32_t length = 0;
+            for (unsigned i = 0; i < 4; ++i) length |= uint32_t(prefix[13 + i]) << (8 * i);
+            if (length <= P::PreviewHeaderLimit - prefix.size() && prefix.size() + length <= slot.Latest.Ess)
+            {
+                std::copy(prefix.begin(), prefix.end(), aReply.Data.begin() + 2);
+                if (save.read(reinterpret_cast<char*>(aReply.Data.data() + 2 + prefix.size()), length))
+                    headerLength = prefix.size() + length;
+            }
+        }
+        aReply.Data[0] = static_cast<uint8_t>(headerLength);
+        aReply.Data[1] = static_cast<uint8_t>(headerLength >> 8);
+        size_t count = 2 + headerLength;
+        const auto portraitPath = slot.Directory / (std::to_string(slot.Latest.Number) + ".portrait");
+        std::ifstream portrait(portraitPath, std::ios::binary | std::ios::ate);
+        if (portrait && portrait.tellg() == static_cast<std::streamoff>(P::PortraitBytes))
+        {
+            portrait.seekg(0);
+            if (portrait.read(reinterpret_cast<char*>(aReply.Data.data() + count), P::PortraitBytes))
+                count += P::PortraitBytes;
+        }
+        aReply.Count = static_cast<uint16_t>(count);
+        aReply.Status = P::Ok;
         return;
     }
     if (acRequest.Action == P::Select || acRequest.Action == P::Create || acRequest.Action == P::SelectOwned)
@@ -476,6 +519,20 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             return;
         }
         lease.Latest = lease.Upload;
+        // A portrait is optional and is never allowed to invalidate a committed save.
+        if (acRequest.Count == P::PortraitBytes)
+        {
+            const auto temp = lease.Directory / "portrait.pending";
+            const auto final = lease.Directory / (std::to_string(lease.Latest.Number) + ".portrait");
+            std::ofstream portrait(temp, std::ios::binary | std::ios::trunc);
+            portrait.write(reinterpret_cast<const char*>(acRequest.Data.data()), acRequest.Count);
+            portrait.close();
+            if (!portrait || !Publish(temp, final))
+            {
+                std::error_code ignored;
+                std::filesystem::remove(temp, ignored);
+            }
+        }
         lease.Ready = true;
         Discard(lease);
         Describe(lease.Latest, aReply);
@@ -487,7 +544,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             std::error_code ec;
             for (std::filesystem::directory_iterator pos(lease.Directory, ec), end; !ec && pos != end; pos.increment(ec))
             {
-                if (pos->path().extension() != ".checkpoint") continue;
+                if (pos->path().extension() != ".checkpoint" && pos->path().extension() != ".portrait") continue;
                 const auto name = pos->path().stem().string();
                 uint64_t number{};
                 const auto parsed = std::from_chars(name.data(), name.data() + name.size(), number);

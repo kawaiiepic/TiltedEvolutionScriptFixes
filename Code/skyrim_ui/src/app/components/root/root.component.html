@@ -128,7 +128,16 @@
             <ng-container *ngIf="characterSlots$ | async as slots">
               <ul *ngIf="slots.length" class="character-slots">
                 <li *ngFor="let slot of slots">
-                  <button type="button" (click)="selectCharacter(slot)">{{ slot.label }}</button>
+                  <button type="button" (click)="selectCharacter(slot)" class="character-slot-card">
+                    <img *ngIf="slot.portrait; else portraitPlaceholder" [src]="slot.portrait" alt="" class="slot-portrait">
+                    <ng-template #portraitPlaceholder><span class="slot-portrait slot-portrait-placeholder" aria-hidden="true">◇</span></ng-template>
+                    <span class="slot-details">
+                      <strong>{{ slot.name || slot.label }}</strong>
+                      <small *ngIf="slot.race || slot.level">{{ slot.race }}<ng-container *ngIf="slot.race && slot.level"> · </ng-container><ng-container *ngIf="slot.level">Level {{ slot.level }}</ng-container></small>
+                      <small *ngIf="slot.location">{{ slot.location }}</small>
+                      <small *ngIf="slot.playtime">{{ slot.playtime }} played</small>
+                    </span>
+                  </button>
                 </li>
               </ul>
               <form class="character-create" *ngIf="slots.length < 32" (ngSubmit)="createCharacter()">

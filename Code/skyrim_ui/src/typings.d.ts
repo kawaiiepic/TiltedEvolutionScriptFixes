@@ -115,6 +115,8 @@ interface SkyrimTogether {
   requestCharacters(owner: string, legacy: string): void;
   on(event: 'characterCheckpoint', callback: (required: boolean, phase: string, name: string, revision: string, detail: string, roster: string) => void): void;
   off(event: 'characterCheckpoint', callback?: (required: boolean, phase: string, name: string, revision: string, detail: string, roster: string) => void): void;
+  on(event: 'checkpointPreview', callback: (key: string, encoded: string) => void): void;
+  off(event: 'checkpointPreview', callback?: (key: string, encoded: string) => void): void;
   on(event: 'characterPortrait', callback: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   off(event: 'characterPortrait', callback?: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;

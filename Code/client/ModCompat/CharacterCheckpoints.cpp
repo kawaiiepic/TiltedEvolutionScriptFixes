@@ -2,6 +2,8 @@
 #include "CharacterCheckpoints.h"
 #include "NativeCheckpointDriver.h"
 #include "MainMenuBridge.h"
+#include "Phantasm_API.h"
+#include <include/cef_parser.h>
 #include "../../checkpoint_bridge/CheckpointBridgeAPI.h"
 
 #include <Messages/CharacterSave.h>
@@ -69,7 +71,11 @@ struct State
     std::filesystem::path CacheFile;
     std::vector<std::array<uint8_t, 32>> BaseBlocks;
     std::array<uint8_t, 32> Digest{};
-    std::vector<uint8_t> Bytes;
+    std::vector<uint8_t> Bytes, Portrait;
+    std::vector<std::array<uint8_t, 32>> PreviewKeys;
+    size_t NextPreview{};
+    uint32_t PortraitRequest{};
+    Clock::time_point PortraitDeadline{};
     std::filesystem::path Directory;
     std::string Name, Detail, CharacterLabel, Roster;
     Clock::time_point NextNameAttempt{};
@@ -83,6 +89,52 @@ uint64_t s_nextNativeToken{};
 constexpr auto kAutosaveInterval = std::chrono::minutes(5);
 constexpr auto kNativeTimeout = std::chrono::minutes(2);
 constexpr char kHex[] = "0123456789abcdef";
+const PHANTASM_API::Interface1* s_portraitApi{};
+PHANTASM_API::ClientId s_portraitClient{};
+void PortraitEvent(const PHANTASM_API::Event*, void*) {}
+void PortraitStill(const PHANTASM_API::Still* still, void*)
+{
+    if (!still || still->size < offsetof(PHANTASM_API::Still, rgba) + sizeof(still->rgba) ||
+        !s.PortraitRequest || still->requestId != s.PortraitRequest) return;
+    s.PortraitRequest = 0;
+    if (!still->ok || !still->rgba || still->width != P::PortraitSize || still->height != P::PortraitSize) return;
+    try { s.Portrait.assign(still->rgba, still->rgba + P::PortraitBytes); }
+    catch (...) { s.Portrait.clear(); }
+}
+void CancelPortrait() noexcept
+{
+    const auto request = s.PortraitRequest;
+    s.PortraitRequest = 0;
+    if (request && s_portraitApi && s_portraitApi->CancelStill)
+        s_portraitApi->CancelStill(s_portraitClient, request);
+}
+void CapturePortrait() noexcept
+{
+    using namespace PHANTASM_API;
+    CancelPortrait();
+    s.Portrait.clear();
+    if (!s_portraitApi)
+    {
+        const auto module = GetModuleHandleW(L"Phantasm.dll");
+        if (!module) return;
+        const auto get = reinterpret_cast<RequestPluginAPIFn>(GetProcAddress(module, "RequestPluginAPI"));
+        const auto* api = get ? static_cast<const Interface1*>(get(kInterface1)) : nullptr;
+        if (!api || api->interfaceVersion != kInterface1 ||
+            api->size < offsetof(Interface1, RequestStillHinted) + sizeof(api->RequestStillHinted) ||
+            !api->RegisterClient || !api->RequestStillHinted) return;
+        ClientId client{};
+        if (api->RegisterClient("st-checkpoints", &PortraitEvent, nullptr, &client) != Result::Ok || !client) return;
+        s_portraitApi = api;
+        s_portraitClient = client;
+    }
+    uint32_t request{};
+    if (s_portraitApi->RequestStillHinted(s_portraitClient, 0x14, P::PortraitSize, P::PortraitSize,
+        Framing::Portrait, "lighting=studio;aim=face;zoom=1.6", &PortraitStill, nullptr, &request) == Result::Ok && request)
+    {
+        s.PortraitRequest = request;
+        s.PortraitDeadline = Clock::now() + std::chrono::seconds(10);
+    }
+}
 
 const char* PhaseName() noexcept
 {
@@ -131,6 +183,7 @@ void Change(Phase aPhase, const char* apDetail)
 }
 void AbandonNative() noexcept
 {
+    CancelPortrait();
     s.LobbySaveLoaded = false;
     MainMenuBridge::CancelNewGame();
     if (s.NativeToken && s_driver.Abandon)
@@ -409,6 +462,7 @@ NativeStart StartNative(NativeOperation aOperation)
         else
         {
             s.CaptureReady = false;
+            CapturePortrait();
             s.StableSince = {};
             s.Detail = "Creating a native checkpoint...";
             PublishState();
@@ -643,6 +697,20 @@ void Select(TransportService& aTransport, const std::string& acKey, const std::s
 void Receive(const NotifyCharacterSave& acReply) noexcept
 {
     if (!s.Required) return;
+    if (acReply.Action == P::Preview)
+    {
+        if (s.Step != Phase::Choose || acReply.Status != P::Ok || acReply.Count < 2) return;
+        if (std::find(s.PreviewKeys.begin(), s.PreviewKeys.end(), acReply.Key) == s.PreviewKeys.end()) return;
+        auto* overlay = World::Get().GetOverlayService().GetOverlayApp();
+        if (!overlay) return;
+        std::string key;
+        for (const auto byte : acReply.Key) { key += kHex[byte >> 4]; key += kHex[byte & 15]; }
+        auto args = CefListValue::Create();
+        args->SetString(0, key);
+        args->SetString(1, CefBase64Encode(acReply.Data.data(), acReply.Count));
+        overlay->ExecuteAsync("checkpointPreview", args);
+        return;
+    }
     Flight completed{};
     if (s.Pending)
     {
@@ -676,6 +744,17 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
         case P::Roster:
         {
             s.Roster.assign(reinterpret_cast<const char*>(acReply.Data.data()), acReply.Count);
+            s.PreviewKeys.clear();
+            s.NextPreview = 0;
+            std::string_view rows(s.Roster);
+            while (!rows.empty() && s.PreviewKeys.size() < 32)
+            {
+                const auto end = rows.find('\n');
+                if (end == rows.npos) break;
+                std::array<uint8_t, 32> key{};
+                if (end > 64 && DecodeKey(std::string(rows.substr(0, 64)), key)) s.PreviewKeys.push_back(key);
+                rows.remove_prefix(end + 1);
+            }
             s.HasRoster = true;
             Change(Phase::Choose, "Choose a character to enter the campaign.");
             return;
@@ -810,6 +889,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Baseline = s.Captured;
             spdlog::info("Checkpoint upload reused {} of {} bytes", s.ReusedBytes, s.Bytes.size());
             RememberCheckpoint();
+            s.Portrait.clear();
             s.Bytes.clear();
             s.CaptureReady = false;
             s.NextAutoSave = Clock::now() + kAutosaveInterval;
@@ -829,6 +909,14 @@ void Tick(TransportService& aTransport) noexcept
     try
     {
         const auto now = Clock::now();
+        if (s.PortraitRequest && now >= s.PortraitDeadline) CancelPortrait();
+        if (s.Step == Phase::Choose && s.HasRoster && !s.Pending && s.NextPreview < s.PreviewKeys.size())
+        {
+            RequestCharacterSave preview{};
+            preview.Action = P::Preview;
+            preview.Key = s.PreviewKeys[s.NextPreview++];
+            aTransport.Send(preview);
+        }
         if (s.Step == Phase::WaitingForNewGame)
         {
             const auto* ui = UI::Get();
@@ -1079,7 +1167,13 @@ void Tick(TransportService& aTransport) noexcept
             {
                 RequestCharacterSave request{};
                 request.Revision = s.Revision;
+                if (s.PortraitRequest) return;
                 request.Action = P::Commit;
+                if (s.Portrait.size() == P::PortraitBytes)
+                {
+                    request.Count = static_cast<uint16_t>(s.Portrait.size());
+                    std::copy(s.Portrait.begin(), s.Portrait.end(), request.Data.begin());
+                }
                 Send(aTransport, request);
             }
             return;
@@ -1129,6 +1223,7 @@ void Tick(TransportService& aTransport) noexcept
             Change(Phase::Ready, "The server already has this checkpoint.");
             return;
         }
+        if (!s.NativeEnabled) CapturePortrait();
         s.Captured = captured;
         s.Ess = captured.Ess.Size;
         s.Co = captured.Co.Size;

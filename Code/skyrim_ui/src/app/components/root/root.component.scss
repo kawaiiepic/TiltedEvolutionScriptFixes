@@ -270,3 +270,25 @@
   justify-items: start;
 }
 .server-lobby-info code { display: block; overflow-wrap: anywhere; color: #e1ce9e; }
+
+.character-slots {
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+}
+.character-slot-card {
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  text-align: left;
+}
+.slot-portrait {
+  width: 5rem;
+  height: 5rem;
+  flex: 0 0 5rem;
+  object-fit: contain;
+  border: 1px solid rgba(154, 137, 103, .5);
+  background: radial-gradient(ellipse at center, #514537, #191714);
+  border-radius: .25rem;
+}
+.slot-portrait-placeholder { display: grid; place-items: center; font-size: 2rem; color: #9a8967; }
+.slot-details { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.slot-details small { opacity: .75; overflow-wrap: anywhere; }

@@ -191,7 +191,8 @@ TEST_CASE("Character picker follows committed server slots across reconnects and
     std::copy(save.begin(), save.end(), req->Data.begin());
     send(1, P::UploadChunk);
     REQUIRE(reply->Status == P::Ok);
-    req->Count = 0;
+    req->Count = static_cast<uint16_t>(P::PortraitBytes);
+    std::fill_n(req->Data.begin(), P::PortraitBytes, uint8_t{42});
     send(1, P::Commit);
     REQUIRE(reply->Status == P::Ok);
     store.Release(1);
@@ -204,7 +205,18 @@ TEST_CASE("Character picker follows committed server slots across reconnects and
     std::array<uint8_t, 32> id{};
     for (size_t i = 0; i < id.size(); ++i)
         id[i] = static_cast<uint8_t>(std::stoul(listed.substr(2 * i, 2), nullptr, 16));
+    *req = {};
     req->Key = id;
+    send(4, P::Preview);
+    REQUIRE(reply->Status == P::Missing);
+    send(3, P::Preview);
+    REQUIRE(reply->Status == P::Ok);
+    REQUIRE(reply->Key == id);
+    REQUIRE(reply->Count == P::PortraitBytes + 2);
+    REQUIRE(reply->Data[0] == 0);
+    REQUIRE(reply->Data[1] == 0);
+    REQUIRE(reply->Data[2] == 42);
+    REQUIRE(reply->Data[reply->Count - 1] == 42);
     send(4, P::SelectOwned);
     REQUIRE(reply->Status == P::Missing);
     send(3, P::SelectOwned);

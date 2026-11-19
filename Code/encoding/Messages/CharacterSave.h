@@ -15,6 +15,9 @@ struct CharacterSavePayload
 {
     static constexpr size_t ChunkSize = 60 * 1024;
     static constexpr size_t WindowSize = 32;
+    static constexpr size_t PortraitSize = 96;
+    static constexpr size_t PortraitBytes = PortraitSize * PortraitSize * 4;
+    static constexpr size_t PreviewHeaderLimit = 4096;
     static constexpr uint32_t MaxRateKiB = 10240;
     static constexpr uint32_t MinRateKiB = 64;
     static constexpr int32_t SendBufferBytes = 8 * 1024 * 1024;
@@ -27,7 +30,7 @@ struct CharacterSavePayload
         const size_t count = bytes[HeaderSize - 2] | (size_t(bytes[HeaderSize - 1]) << 8);
         return aSize == HeaderSize + count;
     }
-    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort, UploadCopy, DownloadIfChanged, Roster, Create, SelectOwned, CompressedUploadChunk };
+    enum Operation : uint8_t { Select, BeginUpload, UploadChunk, Commit, DownloadChunk, Abort, UploadCopy, DownloadIfChanged, Roster, Create, SelectOwned, CompressedUploadChunk, Preview };
     enum Result : uint8_t { Ok, Disabled, Invalid, Busy, Stale, Missing, IoError, Incomplete, HashMismatch, Quota };
     uint8_t Action{};
     uint8_t Status{};
