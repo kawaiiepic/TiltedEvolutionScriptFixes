@@ -13,11 +13,35 @@
 #include <Services/ImguiService.h>
 #include <Services/DiscordService.h>
 #include <World.h>
+#include <atomic>
 
 #include "Games/Skyrim/Interface/MenuControls.h"
 
 static OverlayService* s_pOverlay = nullptr;
 static UINT s_currentACP = CP_ACP;
+static std::atomic_bool s_worldCursorSuppressed{false};
+
+static bool UsesSoftwareCursor(HWND aWindow) noexcept
+{
+    // Never suppress the desktop cursor or the frame's resize/title cursors.
+    return aWindow && s_pOverlay && GetForegroundWindow() == aWindow &&
+        (s_pOverlay->GetActive() || s_worldCursorSuppressed.load(std::memory_order_relaxed));
+}
+
+void InputService::SetWorldCursorSuppressed(bool aSuppressed) noexcept
+{
+    s_worldCursorSuppressed.store(aSuppressed, std::memory_order_relaxed);
+}
+
+void InputService::RefreshSystemCursor(HWND aWindow) noexcept
+{
+    if (!UsesSoftwareCursor(aWindow)) return;
+    POINT point{};
+    RECT rect{};
+    if (GetCursorPos(&point) && ScreenToClient(aWindow, &point) &&
+        GetClientRect(aWindow, &rect) && PtInRect(&rect, point))
+        SetCursor(nullptr);
+}
 
 void ForceKillAllInput()
 {
@@ -111,9 +135,10 @@ void SetUIActive(OverlayService& aOverlay, auto apRenderer, bool aActive)
     }
     aOverlay.SetActive(aActive);
 
-    // This is to disable the Windows cursor
-    while (aActive && ShowCursor(FALSE) >= 0)
-        ;
+    // Win32's ShowCursor counter is thread-local and shared with Skyrim's
+    // menu handling. Do not decrement it; suppress the hardware cursor on
+    // the actual game window instead.
+    InputService::RefreshSystemCursor(GetActiveWindow());
 }
 
 bool InputService::SetOverlayActive(OverlayService& aOverlay, bool aActive) noexcept
@@ -337,6 +362,11 @@ UINT GetRealACP()
 LRESULT CALLBACK InputService::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     if (!s_pOverlay) return 0;
+    if (uMsg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT && UsesSoftwareCursor(hwnd))
+    {
+        SetCursor(nullptr);
+        return TRUE;
+    }
     const auto pApp = s_pOverlay->GetOverlayApp();
     if (!pApp)
         return 0;
@@ -444,6 +474,11 @@ LRESULT CALLBACK InputService::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
         TiltedPhoques::DInputHook::Get().SetEnabled(true);
         s_pOverlay->SetActive(true);
         pRenderer->SetCursorVisible(true);
+        RefreshSystemCursor(hwnd);
+    }
+    else if (uMsg == WM_SETFOCUS)
+    {
+        RefreshSystemCursor(hwnd);
     }
     else if (uMsg == WM_INPUTLANGCHANGE)
     {
@@ -462,5 +497,6 @@ InputService::InputService(OverlayService& aOverlay) noexcept
 
 InputService::~InputService() noexcept
 {
+    s_worldCursorSuppressed.store(false, std::memory_order_relaxed);
     s_pOverlay = nullptr;
 }

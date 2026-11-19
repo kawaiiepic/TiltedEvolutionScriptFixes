@@ -451,6 +451,17 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
 void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 {
     DialoguePortraits::Reset();
+    InputService::SetWorldCursorSuppressed(true);
+    if (!m_pOverlay) return;
+    // World entry is complete: release lobby input and the overlay's cursor.
+    if (!InputService::SetOverlayActive(*this, false))
+    {
+        SetActive(false);
+        TiltedPhoques::DInputHook::Get().SetEnabled(false);
+        if (const auto client = m_pOverlay->GetClient())
+            if (const auto renderer = client->GetOverlayRenderHandler())
+                renderer->SetCursorVisible(false);
+    }
     m_pOverlay->ExecuteAsync("connect");
 
     auto pArguments = CefListValue::Create();
@@ -460,6 +471,7 @@ void OverlayService::OnConnectedEvent(const ConnectedEvent& acEvent) noexcept
 
 void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
 {
+    InputService::SetWorldCursorSuppressed(false);
     CloseDialogueSession();
     DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("disconnect");

@@ -35,7 +35,10 @@ static constexpr char kTogetherWindowName[]{"Skyrim Together"};
 void CALLBACK MenuPumpTimer(HWND aWindow, UINT, UINT_PTR aId, DWORD)
 {
     if (aWindow == s_menuPumpWindow.load(std::memory_order_acquire) && aId == s_menuPumpTimer)
+    {
         World::PumpMainMenu();
+        InputService::RefreshSystemCursor(aWindow);
+    }
 }
 
 } // namespace
@@ -89,8 +92,8 @@ LRESULT CALLBACK Hook_WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             s_menuPumpTimer = 0;
         }
     }
-    if (InputService::WndProc(hwnd, uMsg, wParam, lParam) != 0)
-        return 0;
+    if (const auto handled = InputService::WndProc(hwnd, uMsg, wParam, lParam); handled != 0)
+        return handled;
 
     return RealWndProc(hwnd, uMsg, wParam, lParam);
 }

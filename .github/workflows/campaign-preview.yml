@@ -17,6 +17,8 @@ on:
       - 'Code/server/Campaign/CharacterSaveStore.*'
       - 'Code/server/GameServer.cpp'
       - 'Code/client/Services/Generic/TransportService.cpp'
+      - 'Code/client/Services/Generic/InputService.cpp'
+      - 'Code/client/Services/InputService.h'
 
 permissions:
   contents: read
