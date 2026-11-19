@@ -64,7 +64,7 @@ struct State
     uint8_t Expected{};
     uint64_t Revision{}, Ess{}, Co{}, Offset{}, SentOffset{};
     std::vector<Flight> Flights;
-    Clock::time_point TransferStart{}, LastProgress{}, CreditTime{};
+    Clock::time_point TransferStart{}, LastProgress{}, CreditTime{}, LastNetworkLog{};
     double UploadCredit{};
     uint32_t UploadRateKiB{P::MaxRateKiB};
     size_t CachedSize{}, ReusedBytes{};
@@ -477,6 +477,7 @@ void ResetTransfer()
     s.Flights.clear();
     s.TransferStart = Clock::now();
     s.LastProgress = {};
+    s.LastNetworkLog = {};
 }
 void UpdateTransferProgress()
 {
@@ -488,6 +489,17 @@ void UpdateTransferProgress()
     s.Detail = std::string(s.Step == Phase::Upload ? "Uploading checkpoint: " : "Downloading checkpoint: ") +
         std::to_string(100 * s.Offset / s.Bytes.size()) + "% (" +
         std::to_string(static_cast<uint64_t>(s.Offset / seconds / 1024)) + " KiB/s effective)";
+    const auto network = World::Get().GetTransport().GetConnectionStatus();
+    if (s.LastNetworkLog == Clock::time_point{} || now - s.LastNetworkLog >= std::chrono::seconds(2) || s.Offset == s.Bytes.size())
+    {
+        s.LastNetworkLog = now;
+        spdlog::info("Checkpoint {}: {}/{} bytes acknowledged, {} KiB/s effective, socket out {:.0f} KiB/s, in {:.0f} KiB/s, estimate {} KiB/s, ping {} ms, pending reliable {} bytes, {} chunks in flight, configured upload {} KiB/s",
+            s.Step == Phase::Upload ? "upload" : "download", s.Offset, s.Bytes.size(),
+            static_cast<uint64_t>(s.Offset / seconds / 1024),
+            network.m_flOutBytesPerSec / 1024.0f, network.m_flInBytesPerSec / 1024.0f,
+            network.m_nSendRateBytesPerSecond / 1024, network.m_nPing, network.m_cbPendingReliable,
+            s.Flights.size(), s.UploadRateKiB);
+    }
     if (s.Step == Phase::Upload && s.Offset == s.Bytes.size()) s.Detail += "; verifying and committing...";
     PublishState();
 }

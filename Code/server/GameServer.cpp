@@ -166,10 +166,10 @@ GameServer::GameServer(Console::ConsoleRegistry& aConsole) noexcept
     const auto rateKiB = std::clamp(uCheckpointRateKiB.value_as<uint32_t>(), P::MinRateKiB, P::MaxRateKiB);
     auto* utils = SteamNetworkingUtils();
     const bool rate = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMax, rateKiB * 1024);
-    const bool floor = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, P::MinRateKiB * 1024);
+    const bool floor = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendRateMin, std::min(rateKiB, P::InitialRateKiB) * 1024);
     const bool buffer = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendBufferSize, P::SendBufferBytes);
     if (!rate || !floor || !buffer) spdlog::warn("Could not configure checkpoint network defaults");
-    spdlog::info("Checkpoint network ceiling: {} KiB/s per connection", rateKiB);
+    spdlog::info("Checkpoint network floor: {} KiB/s, ceiling: {} KiB/s per connection", std::min(rateKiB, P::InitialRateKiB), rateKiB);
 
     auto port = uServerPort.value_as<uint16_t>();
     while (!Host(port, GetUserTickRate()))
