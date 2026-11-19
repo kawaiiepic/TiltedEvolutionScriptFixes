@@ -117,6 +117,9 @@ export class SettingService {
       this.fontSizeValues,
       FontSize.M,
     ),
+    remoteDialogueNotices: new ToggleSetting(this.storeService, 'dialogue_remote_notices', true),
+    autoListenDialogue: new ToggleSetting(this.storeService, 'dialogue_auto_listen', false),
+    dialoguePortraits: new ToggleSetting(this.storeService, 'dialogue_portraits', true),
     isPartyShown: new ToggleSetting(this.storeService, 'party_isShown', true),
     autoHideParty: new ToggleSetting(
       this.storeService,

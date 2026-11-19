@@ -74,6 +74,25 @@
     </section>
 
     <section>
+      <h2>Shared conversations</h2>
+      <div class="setting">
+        <label for="remoteDialogueNotices">Show notices for public conversations</label>
+        <input type="checkbox" id="remoteDialogueNotices" [ngModel]="settings.remoteDialogueNotices | async"
+          (ngModelChange)="settings.remoteDialogueNotices.next($event)" />
+      </div>
+      <div class="setting">
+        <label for="autoListenDialogue">Automatically listen while the overlay is open</label>
+        <input type="checkbox" id="autoListenDialogue" [ngModel]="settings.autoListenDialogue | async"
+          (ngModelChange)="settings.autoListenDialogue.next($event)" />
+      </div>
+      <div class="setting">
+        <label for="dialoguePortraits">Show portraits beside suggestions</label>
+        <input type="checkbox" id="dialoguePortraits" [ngModel]="settings.dialoguePortraits | async"
+          (ngModelChange)="settings.dialoguePortraits.next($event)" />
+      </div>
+    </section>
+
+    <section>
       <h2>{{ 'COMPONENT.SETTINGS.PARTY' | transloco }}</h2>
       <div class="setting">
         <label for="showParty">{{

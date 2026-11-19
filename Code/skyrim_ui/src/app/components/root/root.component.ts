@@ -46,6 +46,12 @@ export class RootComponent implements OnInit {
     map(([panels, focus]) => focus.open ? panels.find(panel => panel.actorId === focus.actorId) : undefined),
   );
   portraits$ = this.client.characterPortraits.asObservable();
+  dialoguePortraits$ = this.settingService.settings.dialoguePortraits.asObservable();
+  remoteDialogueNotice$ = combineLatest([this.sharedDialogues$, this.settingService.settings.remoteDialogueNotices]).pipe(
+    map(([panels, enabled]) => enabled ? panels.find(panel => panel.remote && !panel.listening) : undefined),
+  );
+  private readonly autoListenAttempts = new Map<number, number>();
+  private readonly stoppedListening = new Set<number>();
 
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }
 
@@ -71,6 +77,8 @@ export class RootComponent implements OnInit {
   }
 
   setDialogueListening(panel: SharedDialoguePanel, listening: boolean): void {
+    if (listening) this.stoppedListening.delete(panel.actorId);
+    else this.stoppedListening.add(panel.actorId);
     this.client.manageDialogue(panel, listening ? 3 : 4);
   }
 
@@ -122,6 +130,23 @@ export class RootComponent implements OnInit {
     this.onActivationStateSubscription();
     this.onFontSizeSubscription();
     this.client.openSettings.pipe(takeUntil(this.destroy$)).subscribe(() => this.setView(View.SETTINGS));
+    combineLatest([this.sharedDialogues$, this.active$, this.menuOpen$, this.view$, this.settingService.settings.autoListenDialogue])
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(([panels, active, menuOpen, view, enabled]) => {
+        const actorIds = new Set(panels.map(panel => panel.actorId));
+        for (const id of this.autoListenAttempts.keys()) {
+          if (!actorIds.has(id)) this.autoListenAttempts.delete(id);
+        }
+        for (const id of this.stoppedListening) {
+          if (!actorIds.has(id)) this.stoppedListening.delete(id);
+        }
+        if (!enabled || !active || menuOpen || view || panels.some(panel => panel.listening)) return;
+        const offer = panels.find(panel => panel.remote && !panel.listening &&
+          !this.stoppedListening.has(panel.actorId));
+        if (!offer || this.autoListenAttempts.get(offer.actorId) === offer.revision) return;
+        this.autoListenAttempts.set(offer.actorId, offer.revision);
+        this.setDialogueListening(offer, true);
+      });
     this.client.uiReady();
   }
 
