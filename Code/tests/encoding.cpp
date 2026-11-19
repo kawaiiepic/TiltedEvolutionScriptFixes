@@ -1041,3 +1041,21 @@ TEST_CASE("Travel result messages preserve the dispatch and outcome", "[encoding
     CHECK(parsed->Id == sent.Id);
     CHECK(parsed->Outcome == sent.Outcome);
 }
+
+TEST_CASE("Map discovery batches round trip and bound the number of markers", "[encoding.map]")
+{
+    NotifyMapDiscoveries sent;
+    for (uint32_t id = 1; id <= NotifyMapDiscoveries::MaxMarkers + 1; ++id)
+        sent.Markers.emplace_back(4, id);
+
+    Buffer buffer(4096);
+    Buffer::Writer writer(&buffer);
+    sent.Serialize(writer);
+    Buffer::Reader reader(&buffer);
+    auto message = ServerMessageFactory{}.Extract(reader);
+    REQUIRE(message);
+    REQUIRE(message->GetOpcode() == NotifyMapDiscoveries::Opcode);
+    auto parsed = CastUnique<NotifyMapDiscoveries>(std::move(message));
+    REQUIRE(parsed->Markers.size() == NotifyMapDiscoveries::MaxMarkers);
+    CHECK(std::equal(parsed->Markers.begin(), parsed->Markers.end(), sent.Markers.begin()));
+}

@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="campaign-smoke-") as tmp:
     config = directory / "config"
     config.mkdir()
     (config / "STServer.ini").write_text(
-        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\nbRemoteDialogueSpectating=true\nbCarriageCatchUp=true\nbFastTravelCatchUp=true\n"
+        f"[GameServer]\nuPort={port}\nbRequireServerSaves=false\n[Gameplay]\nbAutoPartyJoin=false\nuPlayerRespawnDelay=1\nbRemoteDialogueSpectating=true\nbCarriageCatchUp=true\nbFastTravelCatchUp=true\nbSharedMapDiscoveries=true\n"
     )
     (directory / "shared-quest-policies.conf").write_text(
         'personal light "Quest Pack.esl" 0x8AC\n'
@@ -125,6 +125,13 @@ end)
         assert (directory / "shared-locks.log").read_text() == '1 1 "Quest Pack.esl" 1 2221 0 0\n'
         test_client("missing")
         test_client("live")
+        with subprocess.Popen([harness, "map-watch", version, f"127.0.0.1:{port}"],
+                              stdout=subprocess.PIPE, text=True) as watcher:
+            assert select.select([watcher.stdout], [], [], 12)[0]
+            assert watcher.stdout.readline().strip() == "MAP_WATCH_READY"
+            test_client("map-discover")
+            assert watcher.wait(timeout=8) == 0
+        assert (directory / "shared-discoveries.log").read_text() == '1 1 "Quest Pack.esl" 1 2328\n'
         runner.command("/campaign-status")
         runner.expect("23 committed records")
         runner.command("/campaign-backup")
@@ -134,6 +141,8 @@ end)
         restarted.expect("Loaded 23 shared quest records")
         restarted.expect("CAMPAIGN_SMOKE_RESTORED")
         test_client("restarted")
+        test_client("map-replay")
+        test_client("map-missing")
         with ExitStack() as rescuers:
             clients = []
             for role in ("death-helper", "death-distant"):

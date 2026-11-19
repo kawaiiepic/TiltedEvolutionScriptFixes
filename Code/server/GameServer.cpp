@@ -1,5 +1,6 @@
 ﻿#include <Components.h>
 #include <GameServer.h>
+#include <Services/MapService.h>
 #include <Packet.hpp>
 
 #include <Events/CharacterRemoveEvent.h>
@@ -150,6 +151,7 @@ ServerSettings GetSettings()
     settings.SyncPlayerCalendar = bSyncPlayerCalendar;
     settings.AutoPartyJoin = true;
     settings.ShareCombatExperience = bEnableXpSync;
+    settings.ShareMapDiscoveries = MapService::SharesDiscoveries();
     return settings;
 }
 

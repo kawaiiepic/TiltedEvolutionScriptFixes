@@ -116,10 +116,10 @@ public:
         request.Username = Mode.c_str();
         request.Level = 1;
         request.CellId = GameId(9, 0xA21);
-        if (Mode == "restarted")
+        if (Mode == "restarted" || Mode == "map-replay")
             request.UserMods.ModList.push_back({"Added First.esp", 0, false});
         request.UserMods.ModList.push_back({"Skyrim.esm", 9, false});
-        if (Mode != "missing")
+        if (Mode != "missing" && Mode != "map-missing")
             request.UserMods.ModList.push_back({"Quest Pack.esl", 0, true});
         Transmit(request);
     }
@@ -158,6 +158,27 @@ public:
                     QuestMod = mod.Id;
                 if (mod.Filename == "Skyrim.esm")
                     VanillaMod = mod.Id;
+            }
+            if (Mode.starts_with("map-"))
+            {
+                assert(reply->Settings.ShareMapDiscoveries);
+                if (Mode == "map-discover")
+                {
+                    AssignCharacterRequest character{};
+                    character.ReferenceId = GameId(0, 0x14);
+                    character.CellId = GameId(VanillaMod, 0xA21);
+                    Transmit(character);
+                }
+                if (Mode == "map-watch")
+                {
+                    std::puts("MAP_WATCH_READY");
+                    std::fflush(stdout);
+                }
+                if (Mode == "map-missing")
+                {
+                    OwnerReady = true;
+                    ReadyAt = std::chrono::steady_clock::now() - 2s;
+                }
             }
             if (Mode == "write")
             {
@@ -246,6 +267,17 @@ public:
                 }
                 Transmit(character);
             }
+            return;
+        }
+
+        if (Mode.starts_with("map-") && message->GetOpcode() == NotifyMapDiscoveries::Opcode)
+        {
+            assert(Mode == "map-watch" || Mode == "map-replay");
+            const auto discovery = CastUnique<NotifyMapDiscoveries>(std::move(message));
+            assert(discovery->Markers.size() == 1 && discovery->Markers.front() == GameId(QuestMod, 0x918));
+            assert(!OwnerReady);
+            OwnerReady = true;
+            ReadyAt = std::chrono::steady_clock::now() - 3s;
             return;
         }
 
@@ -451,6 +483,17 @@ public:
         if (message->GetOpcode() == AssignCharacterResponse::Opcode)
         {
             const auto assignment = CastUnique<AssignCharacterResponse>(std::move(message));
+            if (Mode == "map-discover")
+            {
+                RequestMapDiscovery request{};
+                request.Marker = GameId(QuestMod, 0x918);
+                Transmit(request);
+                Transmit(request);
+                OwnerReady = true;
+                ReadyAt = std::chrono::steady_clock::now() - 3s;
+                return;
+            }
+
             if (assignment->Cookie >= 0x899 && assignment->Cookie <= 0x89C)
             {
                 assert(assignment->Owner);
@@ -579,7 +622,7 @@ public:
 
         if (Mode.starts_with("stock-") || Mode == "resurrect" || Mode == "verify-npc" ||
             Mode.starts_with("weather") || Mode.starts_with("animation-") || Mode.starts_with("carriage-") ||
-            Mode.starts_with("death-") || Mode.starts_with("dialogue-"))
+            Mode.starts_with("death-") || Mode.starts_with("dialogue-") || Mode.starts_with("map-"))
         {
             if (message->GetOpcode() == NotifyQuestUpdate::Opcode)
             {

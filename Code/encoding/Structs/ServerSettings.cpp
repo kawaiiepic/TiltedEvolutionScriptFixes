@@ -6,7 +6,7 @@ using TiltedPhoques::Serialization;
 bool ServerSettings::operator==(const ServerSettings& acRhs) const noexcept
 {
     return Difficulty == acRhs.Difficulty && GreetingsEnabled == acRhs.GreetingsEnabled && PvpEnabled == acRhs.PvpEnabled && SyncPlayerHomes == acRhs.SyncPlayerHomes && DeathSystemEnabled == acRhs.DeathSystemEnabled && SyncPlayerCalendar == acRhs.SyncPlayerCalendar &&
-           AutoPartyJoin == acRhs.AutoPartyJoin && ShareCombatExperience == acRhs.ShareCombatExperience && PlayerRespawnDelay == acRhs.PlayerRespawnDelay;
+           AutoPartyJoin == acRhs.AutoPartyJoin && ShareCombatExperience == acRhs.ShareCombatExperience && PlayerRespawnDelay == acRhs.PlayerRespawnDelay && ShareMapDiscoveries == acRhs.ShareMapDiscoveries;
 }
 
 bool ServerSettings::operator!=(const ServerSettings& acRhs) const noexcept
@@ -25,6 +25,7 @@ void ServerSettings::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noe
     Serialization::WriteBool(aWriter, AutoPartyJoin);
     Serialization::WriteBool(aWriter, ShareCombatExperience);
     Serialization::WriteVarInt(aWriter, PlayerRespawnDelay);
+    Serialization::WriteBool(aWriter, ShareMapDiscoveries);
 }
 
 void ServerSettings::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -38,4 +39,5 @@ void ServerSettings::Deserialize(TiltedPhoques::Buffer::Reader& aReader) noexcep
     AutoPartyJoin = Serialization::ReadBool(aReader);
     ShareCombatExperience = Serialization::ReadBool(aReader);
     PlayerRespawnDelay = Serialization::ReadVarInt(aReader) & 0xFFFFFFFF;
+    ShareMapDiscoveries = Serialization::ReadBool(aReader);
 }

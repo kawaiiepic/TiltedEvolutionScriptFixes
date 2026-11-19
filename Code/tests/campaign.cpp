@@ -3,6 +3,7 @@
 #include "../server/Campaign/NpcLifeJournal.h"
 #include "../server/Campaign/FormSyncPolicies.h"
 #include "../server/Campaign/LockJournal.h"
+#include "../server/Campaign/DiscoveryJournal.h"
 
 #include <catch2/catch.hpp>
 #include <chrono>
@@ -271,4 +272,30 @@ TEST_CASE("Container stock retains explicit empty snapshots and plugin identity"
     REQUIRE(journal.Find(second));
     REQUIRE(journal.Find(second)->empty());
     REQUIRE_FALSE(journal.Find({"Adventure.esp", false, 0x194}));
+}
+
+TEST_CASE("Map discoveries are durable, deduplicated, and fail closed on torn writes", "[campaign.discoveries]")
+{
+    TestJournalFile file;
+    const auto path = file.Directory / "shared-discoveries.log";
+    const Campaign::PluginFormKey marker{"Quest Pack.esl", true, 0x918};
+    using Journal = Campaign::DiscoveryJournal;
+    {
+        Journal journal(path);
+        REQUIRE(journal.IsHealthy());
+        CHECK(journal.Discover(marker) == Journal::Result::Added);
+        CHECK(journal.Discover(marker) == Journal::Result::Known);
+        CHECK(journal.Discover({"Quest Pack.esl", true, 0x1000}) == Journal::Result::Rejected);
+    }
+    {
+        Journal journal(path);
+        REQUIRE(journal.IsHealthy());
+        REQUIRE(journal.GetDiscoveries().size() == 1);
+        CHECK(journal.GetDiscoveries().contains(marker));
+    }
+    std::ofstream(path, std::ios::app) << "1 2";
+    Journal damaged(path);
+    CHECK_FALSE(damaged.IsHealthy());
+    CHECK(damaged.GetDiscoveries().empty());
+    CHECK(damaged.Discover(marker) == Journal::Result::Rejected);
 }
