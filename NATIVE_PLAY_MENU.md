@@ -12,3 +12,11 @@ The CEF uiReady callback publishes an atomic signal; it is consumed by existing 
 Compatibility revision: removed Skyrim Together's MainLoop detour (Address Library ID 36564) completely, leaving other mods' trampoline chains alone. Removed menu pumping from the render and inactive-VM callbacks. Browser readiness and lobby actions post a registered Windows message to the game window; the existing timer remains responsible for ongoing transport polling. The normal gameplay VM update hook is unchanged. No engine address or ABI was added. The crash attribution and runtime compatibility remain unverified without a matching local Skyrim installation and debug symbols.
 
 The packaged SWF initializes Credits and Downloadable Content with their native action indices. Until the regular VM update observes a loaded character through the transport readiness check, it processes queued work, lobby transport and the menu without broadcasting gameplay updates. The window dispatch processes browser readiness before applying its transport polling interval.
+
+## Alternate Start character picker
+
+Set `ST_ALTERNATE_START_PICKER=1` in the environment of the Skyrim Together launcher to try the Abandoned Prison picker. It requires the loaded `Alternate Start - Live Another Life.esp`, a server that requires checkpoints, the SKSE checkpoint bridge, and a working native Play menu. Leaving the variable unset uses the title-screen picker.
+
+The prototype starts a local New Game and holds the Alternate Start quest at its RaceMenu step. It opens the picker only after the expected New Game reaches the Abandoned Prison. Selecting an existing slot loads its checkpoint. Creating a slot resumes the quest, opens RaceMenu, and runs the initial campaign save after character creation. A disconnect or staging error requires returning to the title screen before trying again.
+
+The uploaded plugin and scripts establish the quest and stage IDs. Whether the supported runtimes route the startup stage through the existing `TESQuest::SetStage` address, and whether resuming it from the game window dispatch works in game, still need testing.

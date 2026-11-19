@@ -30,6 +30,9 @@ struct NativeDriver
 };
 bool RegisterNativeDriver(const NativeDriver& acDriver) noexcept;
 bool FinishCharacter(TransportService& aTransport) noexcept;
+bool IsAlternateStartPickerEnabled() noexcept;
+bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept;
+bool CanReplaceStagingWorld() noexcept;
 
 void Begin(bool aRequired) noexcept;
 void Reset() noexcept;

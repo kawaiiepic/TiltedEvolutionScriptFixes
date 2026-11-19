@@ -8,6 +8,11 @@
 #include <Services/OverlayService.h>
 #include <Services/InputService.h>
 #include <Games/Skyrim/Interface/UI.h>
+#include <Games/TES.h>
+#include <Forms/TESQuest.h>
+#include <Forms/TESObjectCELL.h>
+#include <PlayerCharacter.h>
+#include <atomic>
 #include <ScriptExtender.h>
 #include <World.h>
 #include <OverlayApp.hpp>
@@ -26,7 +31,7 @@ namespace
 {
 using P = CharacterSavePayload;
 using Clock = std::chrono::steady_clock;
-enum class Phase { Disabled, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
+enum class Phase { Disabled, StartingStaging, Choose, Selecting, Download, NewCharacter, Staged, LoadingNative, Ready, Upload, Failed };
 enum class NativeOperation { None, Load, Save };
 struct Stamp
 {
@@ -46,6 +51,8 @@ struct State
     bool AwaitCharacterCreation{}, SawRaceMenu{}, RequestedNewGame{};
     Clock::time_point NewGameDeadline{};
     uint64_t InitialNewGame{}, InitialLoadGeneration{};
+    uint32_t StagingQuest{};
+    bool StagingWorld{};
     Clock::time_point CharacterReadySince{};
     NativeOperation Operation{NativeOperation::None};
     uint64_t NativeToken{};
@@ -62,6 +69,11 @@ struct State
     Clock::time_point StableSince{}, NextPoll{}, Deadline{};
 };
 State s;
+// The quest setter can run independently of the serialized world updates.
+constexpr uint64_t kStageHeld = uint64_t{1} << 32;
+constexpr uint32_t kAlternateStartQuest = 0xDAF;
+constexpr uint32_t kAbandonedPrison = 0x21594;
+std::atomic<uint64_t> s_stageGate{};
 NativeDriver s_driver{};
 uint64_t s_nextNativeToken{};
 constexpr auto kAutosaveInterval = std::chrono::minutes(5);
@@ -73,6 +85,7 @@ const char* PhaseName() noexcept
     switch (s.Step)
     {
     case Phase::Disabled: return "disabled";
+    case Phase::StartingStaging: return "starting-staging";
     case Phase::Choose: return "choose";
     case Phase::Selecting: return "selecting";
     case Phase::Download: return "downloading";
@@ -92,6 +105,8 @@ void Change(Phase aPhase, const char* apDetail)
 }
 void AbandonNative() noexcept
 {
+    s_stageGate.store(0);
+    s.StagingWorld = false;
     MainMenuBridge::CancelNewGame();
     if (s.NativeToken && s_driver.Abandon)
         s_driver.Abandon(s.NativeToken);
@@ -329,6 +344,36 @@ bool FinishCharacter(TransportService& aTransport) noexcept
     return true;
 }
 
+bool IsAlternateStartPickerEnabled() noexcept
+{
+    wchar_t value[2]{};
+    return GetEnvironmentVariableW(L"ST_ALTERNATE_START_PICKER", value, 2) == 1 && value[0] == L'1';
+}
+
+bool HoldAlternateStartStage(uint32_t aQuestId, uint16_t aStage) noexcept
+{
+    if (!aQuestId || (aStage != 5 && aStage != 10)) return false;
+    uint64_t expected = s_stageGate.load();
+    while (static_cast<uint32_t>(expected) == aQuestId)
+    {
+        const uint64_t next = aStage == 5 ? expected | kStageHeld : expected;
+        if (s_stageGate.compare_exchange_weak(expected, next)) return true;
+    }
+    return false;
+}
+
+bool CanReplaceStagingWorld() noexcept
+{
+    if (!s.StagingWorld || !(s_stageGate.load() & kStageHeld) ||
+        NativeCheckpointDriver::NewGameGeneration() - s.InitialNewGame != 1 ||
+        NativeCheckpointDriver::LoadGeneration() - s.InitialLoadGeneration != 1)
+        return false;
+    const auto* player = PlayerCharacter::Get();
+    const auto* ui = UI::Get();
+    return player && player->parentCell && player->parentCell->formID == kAbandonedPrison && ui &&
+        !ui->GetMenuOpen("RaceSex Menu") && !ui->GetMenuOpen("Loading Menu");
+}
+
 void Begin(bool aRequired) noexcept
 {
     AbandonNative();
@@ -336,6 +381,27 @@ void Begin(bool aRequired) noexcept
     if (aRequired) NativeCheckpointDriver::TryRegister();
     s.Required = aRequired;
     s.NativeEnabled = aRequired && s_driver.RequestLoad != nullptr;
+    if (s.NativeEnabled && IsAlternateStartPickerEnabled() && MainMenuBridge::IsReady())
+    {
+        const auto* mods = ModManager::Get();
+        const auto* mod = mods ? mods->GetByName("Alternate Start - Live Another Life.esp") : nullptr;
+        if (mod && mod->IsLoaded() && !mod->IsLite())
+        {
+            const uint32_t quest = mod->GetFormId(kAlternateStartQuest);
+            s.InitialNewGame = NativeCheckpointDriver::NewGameGeneration();
+            s.InitialLoadGeneration = NativeCheckpointDriver::LoadGeneration();
+            s_stageGate.store(quest);
+            if (MainMenuBridge::RequestNewGame())
+            {
+                s.StagingQuest = quest;
+                s.NewGameDeadline = Clock::now() + kNativeTimeout;
+                Change(Phase::StartingStaging, "Opening the Abandoned Prison character lobby...");
+                InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                return;
+            }
+            s_stageGate.store(0);
+        }
+    }
     Change(aRequired ? Phase::Choose : Phase::Disabled, aRequired ? (s.NativeEnabled ? "Choose a character slot." : "Choose a character slot. Native automation unavailable; manual save/load required.") : "");
 }
 void Reset() noexcept
@@ -352,6 +418,11 @@ bool CanEnter() noexcept
 void Select(TransportService& aTransport, const std::string& acKey, const std::string& acLabel) noexcept
 {
     if (!aTransport.IsInLobby() || s.Step != Phase::Choose || acKey.size() != 64) return;
+    if (s.StagingWorld && !CanReplaceStagingWorld())
+    {
+        Fail("The temporary character lobby was interrupted. Return to the main menu and reconnect.");
+        return;
+    }
     try
     {
         RequestCharacterSave request{};
@@ -396,6 +467,30 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             {
                 if (s.NativeEnabled)
                 {
+                    if (CanReplaceStagingWorld())
+                    {
+                        const uint32_t quest = s.StagingQuest;
+                        s.AwaitCharacterCreation = true;
+                        s.NewGameDeadline = Clock::now() + kNativeTimeout;
+                        Change(Phase::NewCharacter, "Starting character creation from the Abandoned Prison...");
+                        World::Get().QueueCheckpointTask([quest]()
+                        {
+                            if (s.Step != Phase::NewCharacter || quest != s.StagingQuest)
+                                return;
+                            if (!CanReplaceStagingWorld())
+                            {
+                                Fail("The temporary character lobby was interrupted.");
+                                return;
+                            }
+                            auto* pQuest = Cast<TESQuest>(TESForm::GetById(quest));
+                            s_stageGate.store(0);
+                            s.StagingWorld = false;
+                            InputService::SetOverlayActive(World::Get().GetOverlayService(), false);
+                            if (!pQuest || !pQuest->SetStage(5))
+                                Fail("Alternate Start could not resume character creation.");
+                        });
+                        return;
+                    }
                     auto* ui = UI::Get();
                     if (!ui || !ui->GetMenuOpen("Main Menu"))
                     {
@@ -485,6 +580,31 @@ void Tick(TransportService& aTransport) noexcept
     try
     {
         const auto now = Clock::now();
+        if (s.Step == Phase::StartingStaging)
+        {
+            if (MainMenuBridge::NewGameRequestFailed() || now >= s.NewGameDeadline)
+            {
+                Fail("The Alternate Start lobby did not open. Return to the main menu and disable ST_ALTERNATE_START_PICKER to use the title-screen picker.");
+                return;
+            }
+
+            s.StagingWorld = (s_stageGate.load() & kStageHeld) != 0;
+            auto& overlay = World::Get().GetOverlayService();
+            if (CanReplaceStagingWorld() && aTransport.CanEnterWorld() && overlay.GetInGame() &&
+                InputService::SetOverlayActive(overlay, true))
+            {
+                MainMenuBridge::CancelNewGame();
+                Change(Phase::Choose, "Choose a character to enter the campaign.");
+                spdlog::info("Alternate Start staging lobby opened");
+            }
+            return;
+        }
+        if (s.Step == Phase::NewCharacter && s.StagingQuest && !s.SawRaceMenu &&
+            now >= s.NewGameDeadline)
+        {
+            Fail("Alternate Start did not open RaceMenu. Return to the main menu and reconnect.");
+            return;
+        }
         if (s.Pending)
         {
             if (now >= s.Deadline) Fail("Checkpoint transfer timed out; reconnect to resume.");
@@ -508,6 +628,8 @@ void Tick(TransportService& aTransport) noexcept
             }
             if (completed == NativeOperation::Load)
             {
+                s_stageGate.store(0);
+                s.StagingWorld = false;
                 s.AutoEnter = true;
                 s.EnterDeadline = now + kNativeTimeout;
                 s.NextAutoSave = now + kAutosaveInterval;
