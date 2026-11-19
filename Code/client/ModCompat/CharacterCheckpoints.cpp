@@ -13,6 +13,7 @@
 #include <OverlayApp.hpp>
 #include <cryptopp/sha.h>
 #include <cryptopp/osrng.h>
+#include <zlib.h>
 #include <shlobj.h>
 #include <algorithm>
 #include <array>
@@ -38,6 +39,12 @@ struct PairStamp
     Stamp Ess, Co;
     bool operator==(const PairStamp&) const = default;
 };
+using BlockDigest = std::array<uint8_t, 32>;
+struct Flight
+{
+    uint8_t Action{};
+    uint64_t End{};
+};
 struct State
 {
     Phase Step{Phase::Disabled};
@@ -51,8 +58,10 @@ struct State
     uint64_t NativeToken{};
     Clock::time_point NativeDeadline{}, NextAutoSave{}, EnterDeadline{};
     uint8_t Expected{};
-    uint64_t Revision{}, Ess{}, Co{}, Offset{};
-    uint16_t LastCount{};
+    uint64_t Revision{}, Ess{}, Co{}, Offset{}, SentOffset{};
+    std::vector<Flight> Flights;
+    std::vector<BlockDigest> BaselineBlocks, UploadBlocks;
+    Clock::time_point TransferStart{}, LastProgress{};
     std::array<uint8_t, 32> Digest{};
     std::vector<uint8_t> Bytes;
     std::filesystem::path Directory;
@@ -103,6 +112,8 @@ void Fail(const char* apDetail)
 {
     AbandonNative();
     s.Pending = false;
+    s.Flights.clear();
+    s.UploadBlocks.clear();
     s.Bytes.clear();
     Change(Phase::Failed, apDetail);
     spdlog::warn("Character checkpoint: {}", apDetail);
@@ -215,6 +226,33 @@ bool WriteNew(const std::filesystem::path& acPath, const uint8_t* apData, uint64
     if (!ok) DeleteFileW(acPath.c_str());
     return ok;
 }
+BlockDigest HashBlock(const uint8_t* apData, size_t aLength)
+{
+    BlockDigest result{};
+    CryptoPP::SHA256().CalculateDigest(result.data(), apData, aLength);
+    return result;
+}
+void ResetTransfer()
+{
+    s.Offset = s.SentOffset = 0;
+    s.Flights.clear();
+    s.TransferStart = Clock::now();
+    s.LastProgress = {};
+}
+void UpdateTransferProgress()
+{
+    if (s.Bytes.empty()) return;
+    const auto now = Clock::now();
+    if (s.Offset != s.Bytes.size() && now - s.LastProgress < std::chrono::milliseconds(250)) return;
+    s.LastProgress = now;
+    const double seconds = (std::max)(0.001, std::chrono::duration<double>(now - s.TransferStart).count());
+    const auto percent = 100 * s.Offset / s.Bytes.size();
+    const auto rate = static_cast<uint64_t>(s.Offset / seconds / 1024);
+    s.Detail = std::string(s.Step == Phase::Upload ? "Uploading checkpoint: " : "Downloading checkpoint: ") +
+        std::to_string(percent) + "% (" + std::to_string(rate) + " KiB/s effective)";
+    if (s.Step == Phase::Upload && s.Offset == s.Bytes.size()) s.Detail += "; verifying and committing...";
+    PublishState();
+}
 bool StageDownload()
 {
     std::array<uint8_t, 32> digest{};
@@ -244,6 +282,9 @@ bool StageDownload()
     PairStamp baseline{};
     if (!Snapshot(baseline, false)) return false;
     s.Baseline = baseline;
+    s.BaselineBlocks.clear();
+    for (size_t offset = 0; offset < s.Bytes.size(); offset += P::ChunkSize)
+        s.BaselineBlocks.push_back(HashBlock(s.Bytes.data() + offset, (std::min)(P::ChunkSize, s.Bytes.size() - offset)));
     s.Bytes.clear();
     return true;
 }
@@ -286,6 +327,19 @@ bool Send(TransportService& aTransport, const RequestCharacterSave& acRequest)
     s.Deadline = Clock::now() + std::chrono::seconds(30);
     return true;
 }
+}
+
+bool SendFlight(TransportService& aTransport, const RequestCharacterSave& acRequest, uint64_t aEnd)
+{
+    if (!aTransport.Send(acRequest))
+    {
+        Fail("Connection unavailable; reconnect to resume.");
+        return false;
+    }
+    if (s.Flights.empty()) s.Deadline = Clock::now() + std::chrono::seconds(30);
+    s.Flights.push_back({acRequest.Action, aEnd});
+    s.SentOffset = aEnd;
+    return true;
 }
 
 void PublishState() noexcept
@@ -371,8 +425,20 @@ void Select(TransportService& aTransport, const std::string& acKey) noexcept
 
 void Receive(const NotifyCharacterSave& acReply) noexcept
 {
-    if (!s.Required || !s.Pending || acReply.Action != s.Expected) return;
-    s.Pending = false;
+    if (!s.Required) return;
+    Flight completed{};
+    if (s.Pending)
+    {
+        if (acReply.Action != s.Expected) return;
+        s.Pending = false;
+    }
+    else if (!s.Flights.empty() && acReply.Action == s.Flights.front().Action)
+    {
+        completed = s.Flights.front();
+        s.Flights.erase(s.Flights.begin());
+        s.Deadline = Clock::now() + std::chrono::seconds(30);
+    }
+    else return;
     try
     {
         if (acReply.Status != P::Ok)
@@ -431,7 +497,7 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             s.Ess = acReply.EssSize;
             s.Co = acReply.CoSaveSize;
             s.Digest = acReply.Digest;
-            s.Offset = 0;
+            ResetTransfer();
             s.Bytes.resize(static_cast<size_t>(s.Ess + s.Co));
             Change(Phase::Download, "Downloading the server's latest checkpoint...");
             return;
@@ -439,9 +505,11 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
             if (s.Step != Phase::Download || acReply.Revision != s.Revision ||
                 acReply.EssSize != s.Ess || acReply.CoSaveSize != s.Co || acReply.Digest != s.Digest ||
                 acReply.Offset != s.Offset || !acReply.Count || acReply.Count > P::ChunkSize ||
-                acReply.Count > s.Bytes.size() - s.Offset) { Fail("Invalid download response."); return; }
+                acReply.Count > s.Bytes.size() - s.Offset || s.Offset + acReply.Count != completed.End)
+                { Fail("Invalid download response."); return; }
             std::copy_n(acReply.Data.begin(), acReply.Count, s.Bytes.begin() + static_cast<size_t>(s.Offset));
             s.Offset += acReply.Count;
+            UpdateTransferProgress();
             if (s.Offset == s.Bytes.size())
             {
                 if (!StageDownload()) { Fail("Checkpoint failed integrity verification or could not be staged."); return; }
@@ -452,18 +520,25 @@ void Receive(const NotifyCharacterSave& acReply) noexcept
         case P::BeginUpload:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision) { Fail("Invalid upload response."); return; }
             s.NeedsBegin = false;
+            s.TransferStart = Clock::now();
             return;
         case P::UploadChunk:
+        case P::CompressedUploadChunk:
+        case P::ReuseChunk:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision ||
-                acReply.Offset != s.Offset + s.LastCount) { Fail("Invalid upload offset."); return; }
+                acReply.Offset != completed.End || acReply.Offset <= s.Offset || acReply.Offset > s.SentOffset)
+                { Fail("Invalid upload offset."); return; }
             s.Offset = acReply.Offset;
+            UpdateTransferProgress();
             return;
         case P::Commit:
             if (s.Step != Phase::Upload || acReply.Revision != s.Revision + 1 || acReply.Digest != s.Digest ||
                 acReply.EssSize != s.Ess || acReply.CoSaveSize != s.Co) { Fail("Invalid commit response."); return; }
             s.Revision = acReply.Revision;
             s.Baseline = s.Captured;
+            s.BaselineBlocks = std::move(s.UploadBlocks);
             s.Bytes.clear();
+            s.Flights.clear();
             s.CaptureReady = false;
             s.NextAutoSave = Clock::now() + kAutosaveInterval;
             if (s.AutoEnter) s.EnterDeadline = Clock::now() + kNativeTimeout;
@@ -485,6 +560,11 @@ void Tick(TransportService& aTransport) noexcept
         if (s.Pending)
         {
             if (now >= s.Deadline) Fail("Checkpoint transfer timed out; reconnect to resume.");
+            return;
+        }
+        if (!s.Flights.empty() && now >= s.Deadline)
+        {
+            Fail("Checkpoint transfer timed out; reconnect to resume.");
             return;
         }
         if (s.NativeEnabled && s.Operation != NativeOperation::None)
@@ -578,34 +658,65 @@ void Tick(TransportService& aTransport) noexcept
             return;
         }
 
-        RequestCharacterSave request{};
-        request.Revision = s.Revision;
-        if (s.Step == Phase::Download)
+        if (s.Step == Phase::Download || s.Step == Phase::Upload)
         {
-            request.Action = P::DownloadChunk;
-            request.Offset = s.Offset;
-            Send(aTransport, request);
-            return;
-        }
-        if (s.Step == Phase::Upload)
-        {
-            if (s.NeedsBegin)
+            const bool uploading = s.Step == Phase::Upload;
+            if (uploading && s.NeedsBegin)
             {
+                RequestCharacterSave request{};
+                request.Revision = s.Revision;
                 request.Action = P::BeginUpload;
                 request.EssSize = s.Ess;
                 request.CoSaveSize = s.Co;
                 request.Digest = s.Digest;
+                Send(aTransport, request);
+                return;
             }
-            else if (s.Offset < s.Bytes.size())
+            // Bound in-flight bytes and per-update work so online autosaves
+            // continue in the background without flooding gameplay traffic.
+            const size_t budget = aTransport.IsOnline() ? 2 : P::WindowSize;
+            for (size_t i = 0; i < budget && s.Flights.size() < P::WindowSize && s.SentOffset < s.Bytes.size(); ++i)
             {
-                request.Action = P::UploadChunk;
-                request.Offset = s.Offset;
-                request.Count = static_cast<uint16_t>(std::min<uint64_t>(P::ChunkSize, s.Bytes.size() - s.Offset));
-                s.LastCount = request.Count;
-                std::copy_n(s.Bytes.begin() + static_cast<size_t>(s.Offset), request.Count, request.Data.begin());
+                RequestCharacterSave request{};
+                request.Revision = s.Revision;
+                request.Offset = s.SentOffset;
+                const size_t count = std::min<uint64_t>(P::ChunkSize, s.Bytes.size() - s.SentOffset);
+                if (!uploading)
+                    request.Action = P::DownloadChunk;
+                else
+                {
+                    const auto* bytes = s.Bytes.data() + static_cast<size_t>(s.SentOffset);
+                    const auto block = HashBlock(bytes, count);
+                    const size_t index = s.UploadBlocks.size();
+                    s.UploadBlocks.push_back(block);
+                    request.Count = static_cast<uint16_t>(count);
+                    if (s.Revision && index < s.BaselineBlocks.size() && block == s.BaselineBlocks[index])
+                        request.Action = P::ReuseChunk;
+                    else
+                    {
+                        uLongf size = static_cast<uLongf>(request.Data.size());
+                        if (compress2(request.Data.data(), &size, bytes, static_cast<uLong>(count), Z_BEST_SPEED) == Z_OK && size + 64 < count)
+                        {
+                            request.Action = P::CompressedUploadChunk;
+                            request.EssSize = count;
+                            request.Count = static_cast<uint16_t>(size);
+                        }
+                        else
+                        {
+                            request.Action = P::UploadChunk;
+                            std::copy_n(bytes, count, request.Data.begin());
+                        }
+                    }
+                }
+                if (!SendFlight(aTransport, request, s.SentOffset + count)) return;
             }
-            else request.Action = P::Commit;
-            Send(aTransport, request);
+            if (uploading && s.Offset == s.Bytes.size() && s.Flights.empty())
+            {
+                RequestCharacterSave request{};
+                request.Revision = s.Revision;
+                request.Action = P::Commit;
+                Send(aTransport, request);
+            }
             return;
         }
         if (s.Step == Phase::Staged && aTransport.IsOnline())
@@ -643,7 +754,9 @@ void Tick(TransportService& aTransport) noexcept
         s.Captured = captured;
         s.Ess = captured.Ess.Size;
         s.Co = captured.Co.Size;
-        s.Offset = 0;
+        ResetTransfer();
+        s.UploadBlocks.clear();
+        s.UploadBlocks.reserve((s.Bytes.size() + P::ChunkSize - 1) / P::ChunkSize);
         s.NeedsBegin = true;
         CryptoPP::SHA256().CalculateDigest(s.Digest.data(), s.Bytes.data(), s.Bytes.size());
         Change(Phase::Upload, "Uploading the completed native save...");

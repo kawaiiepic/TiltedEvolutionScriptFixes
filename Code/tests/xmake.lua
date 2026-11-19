@@ -15,6 +15,7 @@ target("TPTests")
         "hopscotch-map",
         "catch2",
         "cryptopp",
+        "zlib",
         "mimalloc",
         "glm")
 

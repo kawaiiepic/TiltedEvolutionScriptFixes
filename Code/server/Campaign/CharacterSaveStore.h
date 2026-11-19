@@ -2,6 +2,7 @@
 
 #include <Messages/CharacterSave.h>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <string>
 
@@ -28,6 +29,8 @@ private:
     {
         std::filesystem::path Directory;
         Revision Latest, Upload;
+        std::ofstream Output;
+        std::ifstream Input;
         uint64_t Written{}, Downloaded{};
         bool Uploading{}, Ready{}, Broken{};
     };

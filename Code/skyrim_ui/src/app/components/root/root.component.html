@@ -150,7 +150,7 @@
       <app-window class="server-lobby-info" *ngIf="checkpoint$ | async as checkpoint" [hidden]="!checkpoint.required">
         <h4>Server checkpoint · revision {{ checkpoint.revision }}</h4>
         <p>{{ checkpoint.detail }}</p>
-        <small>Save the character with <code>save {{ checkpoint.name }}</code> to automatically upload the next revision.</small>
+        <small>Native checkpoints autosave in the background; manual named saves are supported when native automation is unavailable.</small>
       </app-window>
     </ng-container>
     <app-window *ngIf="inGame$ | async" class="app-root-chat">

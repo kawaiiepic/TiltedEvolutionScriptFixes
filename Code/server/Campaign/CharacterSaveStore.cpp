@@ -2,6 +2,7 @@
 #include "DurableAppend.h"
 
 #include <cryptopp/sha.h>
+#include <zlib.h>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -153,6 +154,10 @@ void CharacterSaveStore::Describe(const Revision& acRevision, CharacterSavePaylo
 
 void CharacterSaveStore::Discard(Lease& aLease) noexcept
 {
+    if (aLease.Output.is_open()) aLease.Output.close();
+    if (aLease.Input.is_open()) aLease.Input.close();
+    aLease.Output.clear();
+    aLease.Input.clear();
     std::error_code ec;
     std::filesystem::remove(aLease.Directory / "upload.pending", ec);
     aLease.Uploading = false;
@@ -182,7 +187,7 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
 {
     aReply.Action = acRequest.Action;
     aReply.Status = P::Invalid;
-    if (acRequest.Status || acRequest.Action > P::Abort || acRequest.Count > P::ChunkSize)
+    if (acRequest.Status || acRequest.Action > P::ReuseChunk || acRequest.Count > P::ChunkSize)
         return;
 
     if (acRequest.Action == P::Select)
@@ -259,25 +264,50 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
         Put64(header.data() + 8, lease.Upload.Ess);
         Put64(header.data() + 16, lease.Upload.CoSave);
         std::copy(lease.Upload.Digest.begin(), lease.Upload.Digest.end(), header.begin() + 24);
-        std::ofstream output(pending, std::ios::binary | std::ios::trunc);
-        output.write(reinterpret_cast<const char*>(header.data()), header.size());
-        output.close();
-        if (!output) { Discard(lease); aReply.Status = P::IoError; return; }
+        lease.Output.open(pending, std::ios::binary | std::ios::trunc);
+        lease.Output.write(reinterpret_cast<const char*>(header.data()), header.size());
+        if (!lease.Output) { Discard(lease); aReply.Status = P::IoError; return; }
         lease.Written = 0;
         lease.Uploading = true;
         aReply.Status = P::Ok;
         return;
     }
     case P::UploadChunk:
+    case P::CompressedUploadChunk:
+    case P::ReuseChunk:
     {
-        if (!lease.Uploading || !acRequest.Count || acRequest.Offset != lease.Written ||
-            acRequest.Count > lease.Upload.Ess + lease.Upload.CoSave - lease.Written)
+        // Compressed chunks declare their bounded decoded length in EssSize.
+        // Reuse is restricted to the same offset of this lease's latest revision.
+        const uint64_t length = acRequest.Action == P::CompressedUploadChunk ? acRequest.EssSize : acRequest.Count;
+        if (!lease.Uploading || !acRequest.Count || !length || length > P::ChunkSize ||
+            acRequest.Offset != lease.Written || length > lease.Upload.Ess + lease.Upload.CoSave - lease.Written)
             return;
-        std::ofstream output(pending, std::ios::binary | std::ios::app);
-        output.write(reinterpret_cast<const char*>(acRequest.Data.data()), acRequest.Count);
-        output.close();
-        if (!output) { Discard(lease); aReply.Status = P::IoError; return; }
-        lease.Written += acRequest.Count;
+        std::array<uint8_t, P::ChunkSize> decoded{};
+        const uint8_t* bytes = acRequest.Data.data();
+        if (acRequest.Action == P::CompressedUploadChunk)
+        {
+            uLongf actual = static_cast<uLongf>(length);
+            if (uncompress(decoded.data(), &actual, bytes, acRequest.Count) != Z_OK || actual != length)
+                return;
+            bytes = decoded.data();
+        }
+        else if (acRequest.Action == P::ReuseChunk)
+        {
+            const uint64_t previousSize = lease.Latest.Ess + lease.Latest.CoSave;
+            if (!lease.Latest.Number || lease.Written > previousSize || length > previousSize - lease.Written)
+                return;
+            if (!lease.Input.is_open())
+                lease.Input.open(File(lease, lease.Latest.Number), std::ios::binary);
+            lease.Input.seekg(static_cast<std::streamoff>(HeaderSize + lease.Written));
+            if (!lease.Input.read(reinterpret_cast<char*>(decoded.data()), static_cast<std::streamsize>(length)))
+            {
+                Discard(lease); aReply.Status = P::IoError; return;
+            }
+            bytes = decoded.data();
+        }
+        lease.Output.write(reinterpret_cast<const char*>(bytes), static_cast<std::streamsize>(length));
+        if (!lease.Output) { Discard(lease); aReply.Status = P::IoError; return; }
+        lease.Written += length;
         aReply.Offset = lease.Written;
         aReply.Status = P::Ok;
         return;
@@ -289,6 +319,9 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
             aReply.Status = P::Incomplete;
             return;
         }
+        lease.Output.close();
+        if (!lease.Output) { Discard(lease); aReply.Status = P::IoError; return; }
+        if (lease.Input.is_open()) lease.Input.close();
         Revision header{};
         if (!ReadHeader(pending, header))
         {
@@ -371,15 +404,17 @@ void CharacterSaveStore::Handle(uint64_t aSession, bool aInWorld, const Characte
         if (acRequest.Offset != lease.Downloaded || acRequest.Offset >= total)
             return;
         aReply.Count = static_cast<uint16_t>(std::min<uint64_t>(P::ChunkSize, total - acRequest.Offset));
-        std::ifstream input(File(lease, lease.Latest.Number), std::ios::binary);
-        input.seekg(HeaderSize + acRequest.Offset);
-        if (!input.read(reinterpret_cast<char*>(aReply.Data.data()), aReply.Count))
+        if (!lease.Input.is_open())
+            lease.Input.open(File(lease, lease.Latest.Number), std::ios::binary);
+        lease.Input.seekg(static_cast<std::streamoff>(HeaderSize + acRequest.Offset));
+        if (!lease.Input.read(reinterpret_cast<char*>(aReply.Data.data()), aReply.Count))
         {
             aReply.Count = 0; aReply.Status = P::IoError; return;
         }
         aReply.Offset = acRequest.Offset;
         lease.Downloaded += aReply.Count;
         lease.Ready = lease.Downloaded == total;
+        if (lease.Ready) lease.Input.close();
         aReply.Status = P::Ok;
         return;
     }
