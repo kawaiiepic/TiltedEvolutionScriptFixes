@@ -292,3 +292,42 @@
 .slot-portrait-placeholder { display: grid; place-items: center; font-size: 2rem; color: #9a8967; }
 .slot-details { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
 .slot-details small { opacity: .75; overflow-wrap: anywhere; }
+
+/* Compact suggestion annotations beside the vanilla right-side dialogue list.
+ * Native Scaleform owns the actual list; no mouse events are captured here. */
+.native-dialogue-suggestions {
+  position: absolute;
+  right: 44vw;
+  top: 48%;
+  transform: translateY(-50%);
+  width: min(25vw, 24rem);
+  max-height: 48vh;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 4;
+  color: #eee9db;
+  text-shadow: 0 1px 3px #000, 0 1px 6px #000;
+}
+.native-suggestion-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .45rem;
+  min-height: 2rem;
+  margin: .25rem 0;
+}
+.native-suggestion-option {
+  font-size: .9rem;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .85;
+}
+.native-suggestion-voters { display: flex; align-items: center; gap: .15rem; flex-shrink: 0; }
+.native-suggestion-voters img, .voter-initial {
+  width: 1.6rem; height: 1.6rem; border-radius: 50%; object-fit: cover;
+  border: 1px solid #a59b80; background: rgba(24, 23, 20, .7);
+}
+.voter-initial { display: grid; place-items: center; font-size: .8rem; }
+.native-suggestion-count { color: #d1c4a1; font-size: .85rem; padding-inline: .15rem; }

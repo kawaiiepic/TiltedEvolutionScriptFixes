@@ -1,7 +1,7 @@
 import { Overlay } from '@angular/cdk/overlay';
 import { Component, OnInit, ViewChild } from '@angular/core';
 import { TranslocoService } from '@ngneat/transloco';
-import { takeUntil } from 'rxjs';
+import { combineLatest, takeUntil } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { fadeInOutActiveAnimation } from '../../animations/fade-in-out-active.animation';
 import { View } from '../../models/view.enum';
@@ -40,7 +40,11 @@ export class RootComponent implements OnInit {
 
   view$ = this.uiRepository.view$;
 
+  dialogueFocus$ = this.client.dialogueFocus.asObservable();
   sharedDialogues$ = this.client.sharedDialogueChange.asObservable();
+  focusedDialogue$ = combineLatest([this.sharedDialogues$, this.dialogueFocus$]).pipe(
+    map(([panels, focus]) => focus.open ? panels.find(panel => panel.actorId === focus.actorId) : undefined),
+  );
   portraits$ = this.client.characterPortraits.asObservable();
 
   trackDialogue(_index: number, panel: SharedDialoguePanel): number { return panel.actorId; }

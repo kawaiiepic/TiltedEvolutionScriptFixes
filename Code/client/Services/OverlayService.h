@@ -101,6 +101,7 @@ private:
     void RefreshDialogueSession() noexcept;
     void CloseDialogueSession() noexcept;
     void PublishDialogueOptions() noexcept;
+    void PublishDialogueFocus(bool aForce = false) noexcept;
     bool SendDialogueAction(uint8_t aAction, const char* apText = nullptr) noexcept;
     void RunDebugDataUpdates() noexcept;
     void RunPlayerHealthUpdates() noexcept;
@@ -126,6 +127,8 @@ private:
     uint32_t m_nextDialogueToken{};
     uint32_t m_dialogueSpeakerHandle{};
     uint32_t m_dialoguePanelRevision{};
+    uint32_t m_dialogueFocusActor{};
+    bool m_dialogueFocusOpen{};
     bool m_dialogueYielded{};
     bool m_dialogueGranted{};
     bool m_dialogueCanChoose{};

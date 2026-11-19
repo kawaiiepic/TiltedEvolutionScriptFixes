@@ -119,6 +119,8 @@ interface SkyrimTogether {
   off(event: 'checkpointPreview', callback?: (key: string, encoded: string) => void): void;
   on(event: 'characterPortrait', callback: SkyrimTogetherTypes.CharacterPortraitCallback): void;
   off(event: 'characterPortrait', callback?: SkyrimTogetherTypes.CharacterPortraitCallback): void;
+  on(event: 'dialogueFocus', callback: (open: boolean, actorId: number) => void): void;
+  off(event: 'dialogueFocus', callback?: (open: boolean, actorId: number) => void): void;
   on(event: 'sharedDialogue', callback: SkyrimTogetherTypes.SharedDialogueCallback): void;
   off(event: 'sharedDialogue', callback?: SkyrimTogetherTypes.SharedDialogueCallback): void;
   /** Add listener to when the UI is first initialized. */

@@ -38,6 +38,7 @@ export interface SharedDialoguePanel {
 export class ClientService implements OnDestroy {
   /** Initialization done. */
   public sharedDialogueChange = new BehaviorSubject<SharedDialoguePanel[]>([]);
+  public readonly dialogueFocus = new BehaviorSubject<{ open: boolean; actorId: number }>({ open: false, actorId: 0 });
   public readonly characterPortraits = new BehaviorSubject<ReadonlyMap<number, string>>(new Map());
 
   public initDone = new AsyncSubject<undefined>();
@@ -205,6 +206,7 @@ export class ClientService implements OnDestroy {
       this.onPartyInviteReceived.bind(this),
     );
     skyrimtogether.on('sharedDialogue', this.onSharedDialogue.bind(this));
+    skyrimtogether.on('dialogueFocus', (open, actorId) => this.zone.run(() => this.dialogueFocus.next({ open, actorId })));
     skyrimtogether.on('characterPortrait', this.onCharacterPortrait.bind(this));
     skyrimtogether.on('questUpdated', this.onQuestUpdated.bind(this));
   }
@@ -246,6 +248,7 @@ export class ClientService implements OnDestroy {
     skyrimtogether.off('partyLeft');
     skyrimtogether.off('partyInviteReceived');
     skyrimtogether.off('sharedDialogue');
+    skyrimtogether.off('dialogueFocus');
     skyrimtogether.off('characterPortrait');
     skyrimtogether.off('questUpdated');
   }
@@ -443,6 +446,7 @@ export class ClientService implements OnDestroy {
   private onExitGame(): void {
     this.zone.run(() => {
       this.sharedDialogueChange.next([]);
+      this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.inGameStateChange.next(false);
     });
@@ -481,6 +485,7 @@ export class ClientService implements OnDestroy {
       this.checkpointChange.next(emptyCheckpoint);
       this.characterSlotsChange.next([]);
       this.sharedDialogueChange.next([]);
+      this.dialogueFocus.next({ open: false, actorId: 0 });
       this.characterPortraits.next(new Map());
       this.lobbyStateChange.next(false);
       this.connectionStateChange.next(false);

@@ -16,7 +16,24 @@
     <app-group></app-group>
   </ng-container>
 
-  <div class="shared-dialogues" [class.interactive]="active$ | async">
+  <!-- Native dialogue retains keyboard/mouse input. Only display suggestions, not a second choice menu. -->
+  <ng-container *ngIf="focusedDialogue$ | async as panel">
+    <aside class="native-dialogue-suggestions" *ngIf="!(active$ | async) && !panel.isPrivate" aria-label="Player dialogue suggestions">
+      <ng-container *ngFor="let option of panel.options; let i = index">
+        <div class="native-suggestion-row" *ngIf="option && panel.votes[i]">
+          <span class="native-suggestion-option">{{ option }}</span>
+          <span class="native-suggestion-voters" *ngIf="portraits$ | async as portraits">
+            <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
+              <img *ngIf="portraits.get(voter) as portrait; else voterInitial" [src]="portrait" [alt]="dialogueVoterName(voter)" [attr.title]="dialogueVoterName(voter)">
+              <ng-template #voterInitial><span class="voter-initial" [attr.title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0, 1) }}</span></ng-template>
+            </ng-container>
+            <span class="native-suggestion-count">{{ panel.votes[i] }}</span>
+          </span>
+        </div>
+      </ng-container>
+    </aside>
+  </ng-container>
+  <div class="shared-dialogues interactive" *ngIf="active$ | async">
     <section class="shared-dialogue" *ngFor="let panel of sharedDialogues$ | async; trackBy: trackDialogue">
       <header>{{ panel.npc }} <small>{{ panel.canChoose ? 'You control dialogue' : panel.owner + ' controls dialogue' }}</small></header>
       <p *ngIf="!panel.options.length">Waiting for dialogue options...</p>
@@ -40,7 +57,7 @@
           Pass control
         </button>
       </ng-container>
-      <footer *ngIf="panel.canVote">Open the Together overlay to vote.</footer>
+      <footer *ngIf="panel.canVote">Select a response to suggest it.</footer>
     </section>
   </div>
   <app-notification-popup-container

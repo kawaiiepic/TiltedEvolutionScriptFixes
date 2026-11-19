@@ -353,6 +353,7 @@ void OverlayService::OnBrowserReady() noexcept
         m_pOverlay->ExecuteAsync("setLocalPlayerId", player);
     }
     m_pOverlay->ExecuteAsync(m_active ? "activate" : "deactivate");
+    PublishDialogueFocus(true);
 }
 
 void OverlayService::RefreshMenuPresentation() noexcept
@@ -441,6 +442,7 @@ void OverlayService::OnUpdate(const UpdateEvent&) noexcept
     UpdateMainMenu();
     if (m_mainMenu && !m_transport.IsOnline()) return;
     RefreshDialogueSession();
+    PublishDialogueFocus();
     PublishDialogueOptions();
     if (m_transport.IsOnline())
         DialoguePortraits::Update(m_world, m_pOverlay.get(), m_transport.GetLocalPlayerId());
@@ -473,6 +475,7 @@ void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
 {
     InputService::SetWorldCursorSuppressed(false);
     CloseDialogueSession();
+    PublishDialogueFocus(true);
     DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("disconnect");
 }
@@ -608,6 +611,22 @@ void OverlayService::RefreshDialogueSession() noexcept
             CloseDialogueSession();
         return;
     }
+}
+
+void OverlayService::PublishDialogueFocus(bool aForce) noexcept
+{
+    const auto* manager = MenuTopicManager::Get();
+    const bool open = m_transport.IsOnline() && manager && manager->menuOpen;
+    const uint32_t actor = open && m_dialogueToken ? m_dialogueActorId : 0;
+    if (!aForce && open == m_dialogueFocusOpen && actor == m_dialogueFocusActor) return;
+    m_dialogueFocusOpen = open;
+    m_dialogueFocusActor = actor;
+    if (!m_pOverlay) return;
+    // Passive UI only; the native menu retains all input and topic selection.
+    auto args = CefListValue::Create();
+    args->SetBool(0, open);
+    args->SetDouble(1, actor);
+    m_pOverlay->ExecuteAsync("dialogueFocus", args);
 }
 
 void OverlayService::PublishDialogueOptions() noexcept
@@ -806,11 +825,7 @@ void OverlayService::OnPlayerDialogue(const NotifyPlayerDialogue& acMessage) noe
         return;
     }
 
-    if (acMessage.Kind == NotifyPlayerDialogue::Suggestion && m_dialogueCanChoose)
-    {
-        const String message = acMessage.Name + " suggests: " + acMessage.Text;
-        Utils::ShowHudMessage(message);
-    }
+    // Suggestions are displayed alongside the dialogue choices instead of duplicating them as HUD toasts.
 
     if (!m_pOverlay || (acMessage.Kind != NotifyPlayerDialogue::Choice && acMessage.Kind != NotifyPlayerDialogue::Suggestion))
         return;
