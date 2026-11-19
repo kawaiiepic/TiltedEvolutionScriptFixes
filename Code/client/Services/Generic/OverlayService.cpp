@@ -502,6 +502,7 @@ void OverlayService::OnDisconnectedEvent(const DisconnectedEvent&) noexcept
     CloseDialogueSession();
     m_conversationPanels.clear();
     m_dismissedConversations.clear();
+    m_world.QueueCheckpointTask([this]() { UpdateSharedConversation(); });
     PublishDialogueFocus(true);
     DialoguePortraits::Reset();
     m_pOverlay->ExecuteAsync("disconnect");
@@ -723,10 +724,11 @@ void OverlayService::PublishSharedConversation() noexcept
 
 void OverlayService::EndSharedConversation() noexcept
 {
-    if (m_sharedConversationActor)
+    if (m_sharedConversationActor && m_conversationPanels.contains(m_sharedConversationActor))
         m_dismissedConversations.insert(m_sharedConversationActor);
     m_sharedConversationActor = 0;
     m_sharedConversationNative = false;
+    m_sharedChoiceRevision = 0;
     if (m_world.IsGameThread())
         MainMenuBridge::RestoreDialogueMovie(m_hiddenDialogueMovie);
     else
@@ -762,7 +764,7 @@ void OverlayService::UpdateSharedConversation() noexcept
         if (!ready || !m_active || it == m_conversationPanels.end() || it->second.Private ||
             it->second.Remote || (m_sharedConversationNative ?
                 (!native || !m_dialogueGranted || m_dialogueActorId != m_sharedConversationActor ||
-                 !MainMenuBridge::HideDialogueMovie(m_hiddenDialogueMovie)) : native))
+                 m_dialogueYielded || !MainMenuBridge::HideDialogueMovie(m_hiddenDialogueMovie)) : native))
             close();
         return;
     }
@@ -819,11 +821,13 @@ void OverlayService::ChooseSharedDialogue(uint32_t aActorId, uint32_t aRevision,
         auto* manager = MenuTopicManager::Get();
         if (!m_active || m_sharedConversationActor != aActorId || !m_sharedConversationNative ||
             !m_dialogueGranted || !m_dialogueCanChoose || m_dialogueYielded ||
-            m_dialogueActorId != aActorId || m_dialoguePanelRevision != aRevision ||
+            m_dialogueActorId != aActorId || m_dialoguePanelRevision != aRevision || m_sharedChoiceRevision == aRevision ||
             !m_dialogueOptionsPublished || m_lastDialogueOptions != panel.Options ||
             !manager || !manager->menuOpen || manager->speaker.handle.iBits != m_dialogueSpeakerHandle ||
             std::chrono::steady_clock::now() < m_dialoguePublishAfter)
             return;
+        // A double click cannot execute the same server revision twice.
+        m_sharedChoiceRevision = aRevision;
         manager->ChooseSharedOption(aIndex, panel.Options[aIndex].c_str());
         return;
     }

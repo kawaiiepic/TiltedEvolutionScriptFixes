@@ -204,7 +204,7 @@ export class RootComponent implements OnInit {
           state &&
           !this.uiRepository.isViewOpen() && !this.client.conversationMode.value
         ) {
-          setTimeout(() => this.chatComp?.focus(), 100);
+          setTimeout(() => { if (!this.client.conversationMode.value) this.chatComp?.focus(); }, 100);
         }
         if (state && this.client.mainMenuChange.getValue() &&
             !this.client.lobbyStateChange.getValue() && !this.client.connectionStateChange.getValue() &&

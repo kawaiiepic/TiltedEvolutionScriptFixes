@@ -13,12 +13,14 @@
         (click)="selectConversationOption(panel, i)">
         <span class="conversation-option-text">{{ option }}</span>
         <span class="conversation-votes" *ngIf="panel.votes[i]">
-          <ng-container *ngIf="(dialoguePortraits$ | async) && (portraits$ | async) as portraits">
+          <ng-container *ngIf="dialoguePortraits$ | async">
+          <ng-container *ngIf="portraits$ | async as portraits">
             <ng-container *ngFor="let voter of dialogueVoterIds(panel, i)">
               <img *ngIf="portraits.get(voter) as portrait; else conversationInitial"
                 [src]="portrait" [alt]="dialogueVoterName(voter)" [title]="dialogueVoterName(voter)" class="character-avatar">
               <ng-template #conversationInitial><span class="character-avatar" [title]="dialogueVoterName(voter)">{{ dialogueVoterName(voter).slice(0,1) }}</span></ng-template>
             </ng-container>
+          </ng-container>
           </ng-container>
           <span>{{ panel.votes[i] }}</span>
         </span>
@@ -33,7 +35,7 @@
     <p class="conversation-subtitle" *ngIf="panel.subtitle" aria-live="polite">{{ panel.subtitle }}</p>
   </section>
 </ng-container>
-<div [hidden]="!!(conversation$ | async)">
+<div class="normal-overlay" [hidden]="!!(conversation$ | async)">
 <ng-container *ngIf="(inGame$ | async) || (mainMenu$ | async)">
   <aside *ngIf="(mainMenu$ | async) && !(active$ | async)" class="multiplayer-menu-hint">
     SKYRIM TOGETHER · F2 / RIGHT CTRL TO PLAY

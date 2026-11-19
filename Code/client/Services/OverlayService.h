@@ -143,6 +143,7 @@ private:
     std::map<uint32_t, NotifyPlayerDialogue> m_conversationPanels;
     std::set<uint32_t> m_dismissedConversations;
     uint32_t m_sharedConversationActor{};
+    uint32_t m_sharedChoiceRevision{};
     bool m_sharedConversationNative{};
     void* m_hiddenDialogueMovie{};
     std::atomic_bool m_conversationTickQueued{false};

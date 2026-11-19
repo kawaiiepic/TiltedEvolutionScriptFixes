@@ -61,7 +61,7 @@
     }
   }
 
-  > app-notifications {
+  > .normal-overlay > app-notifications {
     width: 32vw;
     left: $-size-gap;
     bottom: $-size-gap;
@@ -483,3 +483,6 @@
     text-shadow: 0 2px 4px #000, 0 1px 7px #000;
   }
 }
+
+.normal-overlay { display: contents; }
+.normal-overlay[hidden] { display: none; }
